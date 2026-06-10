@@ -2,6 +2,7 @@ package main
 
 import (
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
@@ -19,9 +20,9 @@ type FilamentBridge struct {
 	config           *Config
 	spoolman         *SpoolmanClient
 	db               *sql.DB
-	wasPrinting      map[string]bool
-	currentJobFile   map[string]string     // Store current job filename per printer
-	processingPrints map[string]bool       // Track prints being processed
+	// In-flight print state is persisted in the active_jobs table (survives
+	// restarts); only the concurrency guard for the billing path is kept in memory.
+	processingPrints map[string]bool       // Guard against overlapping monitor cycles billing the same printer
 	printErrors      map[string]PrintError // Store print processing errors
 	errorMutex       sync.RWMutex
 	mutex            sync.RWMutex
@@ -76,8 +77,6 @@ func NewFilamentBridge(config *Config) (*FilamentBridge, error) {
 	bridge := &FilamentBridge{
 		config:           config,
 		spoolman:         NewSpoolmanClient(DefaultSpoolmanURL, SpoolmanTimeout, "", ""), // Default URL and timeout, will be updated
-		wasPrinting:      make(map[string]bool),
-		currentJobFile:   make(map[string]string),
 		processingPrints: make(map[string]bool),
 		printErrors:      make(map[string]PrintError),
 	}
@@ -163,6 +162,28 @@ func (b *FilamentBridge) initDatabase() error {
 			toolhead_id INTEGER,
 			display_name TEXT NOT NULL,
 			PRIMARY KEY (printer_id, toolhead_id)
+		)`,
+		// active_jobs persists the in-flight print per printer so that print
+		// detection survives a restart of the bridge mid-print.
+		`CREATE TABLE IF NOT EXISTS active_jobs (
+			printer_id TEXT PRIMARY KEY,
+			job_id INTEGER NOT NULL DEFAULT 0,
+			filename TEXT NOT NULL DEFAULT '',
+			last_progress REAL NOT NULL DEFAULT 0,
+			started_at TIMESTAMP NOT NULL,
+			usage_json TEXT NOT NULL DEFAULT '',
+			updated_at TIMESTAMP NOT NULL
+		)`,
+		// billed_jobs is an idempotency ledger: a (printer_id, job_id) pair is
+		// recorded once its filament has been billed to Spoolman, so the same
+		// job can never be double-counted (on double-detect or restart).
+		`CREATE TABLE IF NOT EXISTS billed_jobs (
+			printer_id TEXT NOT NULL,
+			job_id INTEGER NOT NULL,
+			filename TEXT NOT NULL DEFAULT '',
+			scale REAL NOT NULL DEFAULT 1,
+			billed_at TIMESTAMP NOT NULL,
+			PRIMARY KEY (printer_id, job_id)
 		)`,
 	}
 
@@ -912,17 +933,15 @@ func (b *FilamentBridge) UnmapToolhead(printerName string, toolheadID int) error
 	return nil
 }
 
-// LogPrintUsage logs filament usage for a print job
-func (b *FilamentBridge) LogPrintUsage(printerName string, toolheadID int, spoolID int, filamentUsed float64, jobName string) error {
+// LogPrintUsage logs filament usage for a print job. printStarted is the time
+// the print actually began (captured when the job was first seen printing); a
+// zero value falls back to now.
+func (b *FilamentBridge) LogPrintUsage(printerName string, toolheadID int, spoolID int, filamentUsed float64, jobName string, printStarted time.Time) error {
 	b.mutex.Lock()
 	defer b.mutex.Unlock()
 
-	// Get print start time from current job file tracking
-	printStarted := time.Now() // Default to now if we can't determine start time
-	if storedJobFile, exists := b.currentJobFile[printerName]; exists && storedJobFile != "" {
-		// If we have a stored job file, the print likely started when we first stored it
-		// This is a rough approximation - ideally we'd track this more precisely
-		printStarted = time.Now().Add(-time.Hour) // Assume 1 hour ago as rough estimate
+	if printStarted.IsZero() {
+		printStarted = time.Now()
 	}
 
 	_, err := b.db.Exec(
@@ -960,6 +979,96 @@ func (b *FilamentBridge) MonitorPrinters() {
 	}
 }
 
+// activeJob is the persisted in-flight print for a single printer.
+type activeJob struct {
+	PrinterID    string
+	JobID        int
+	Filename     string
+	LastProgress float64         // highest progress fraction (0..1) seen while printing
+	StartedAt    time.Time       // when the job was first seen printing
+	Usage        map[int]float64 // full slicer filament estimate (g) per toolhead, from file.meta
+}
+
+// getActiveJob returns the persisted in-flight job for a printer, or nil if none.
+func (b *FilamentBridge) getActiveJob(printerID string) (*activeJob, error) {
+	var (
+		aj        activeJob
+		usageJSON string
+	)
+	err := b.db.QueryRow(
+		`SELECT printer_id, job_id, filename, last_progress, started_at, usage_json FROM active_jobs WHERE printer_id = ?`,
+		printerID,
+	).Scan(&aj.PrinterID, &aj.JobID, &aj.Filename, &aj.LastProgress, &aj.StartedAt, &usageJSON)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	if usageJSON != "" {
+		if err := json.Unmarshal([]byte(usageJSON), &aj.Usage); err != nil {
+			log.Printf("Warning: failed to decode stored usage for %s: %v", printerID, err)
+		}
+	}
+	return &aj, nil
+}
+
+// upsertActiveJob writes (creates or replaces) the in-flight job for a printer.
+func (b *FilamentBridge) upsertActiveJob(aj *activeJob) error {
+	usageJSON := ""
+	if len(aj.Usage) > 0 {
+		if data, err := json.Marshal(aj.Usage); err == nil {
+			usageJSON = string(data)
+		}
+	}
+	_, err := b.db.Exec(
+		`INSERT INTO active_jobs (printer_id, job_id, filename, last_progress, started_at, usage_json, updated_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?)
+		 ON CONFLICT(printer_id) DO UPDATE SET
+		     job_id=excluded.job_id, filename=excluded.filename, last_progress=excluded.last_progress,
+		     started_at=excluded.started_at, usage_json=excluded.usage_json, updated_at=excluded.updated_at`,
+		aj.PrinterID, aj.JobID, aj.Filename, aj.LastProgress, aj.StartedAt, usageJSON, time.Now(),
+	)
+	return err
+}
+
+// clearActiveJob removes the in-flight job record for a printer.
+func (b *FilamentBridge) clearActiveJob(printerID string) error {
+	_, err := b.db.Exec(`DELETE FROM active_jobs WHERE printer_id = ?`, printerID)
+	return err
+}
+
+// isJobBilled reports whether a (printer, job) pair has already been billed.
+// Jobs without a real id (jobID == 0) can't be deduped and are treated as unbilled.
+func (b *FilamentBridge) isJobBilled(printerID string, jobID int) (bool, error) {
+	if jobID == 0 {
+		return false, nil
+	}
+	var one int
+	err := b.db.QueryRow(
+		`SELECT 1 FROM billed_jobs WHERE printer_id = ? AND job_id = ?`, printerID, jobID,
+	).Scan(&one)
+	if err == sql.ErrNoRows {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+// recordBilledJob marks a (printer, job) pair as billed so it is never counted again.
+func (b *FilamentBridge) recordBilledJob(printerID string, jobID int, filename string, scale float64) error {
+	if jobID == 0 {
+		return nil // no stable id to dedupe on; nothing to record
+	}
+	_, err := b.db.Exec(
+		`INSERT OR IGNORE INTO billed_jobs (printer_id, job_id, filename, scale, billed_at) VALUES (?, ?, ?, ?, ?)`,
+		printerID, jobID, filename, scale, time.Now(),
+	)
+	return err
+}
+
 // monitorPrusaLink monitors a single printer using PrusaLink API
 func (b *FilamentBridge) monitorPrusaLink(printerID string, config PrinterConfig) error {
 	log.Printf("Starting monitoring for printer %s (%s) at %s", printerID, config.IPAddress, config.Name)
@@ -993,118 +1102,219 @@ func (b *FilamentBridge) monitorPrusaLink(printerID string, config PrinterConfig
 		}
 	}
 
-	// Check if print just finished - minimize lock scope
-	b.mutex.RLock()
-	wasPrinting := b.wasPrinting[printerID]
-	storedJobFile := b.currentJobFile[printerID]
-	b.mutex.RUnlock()
+	// Load the persisted in-flight job (source of truth; survives restarts).
+	active, err := b.getActiveJob(printerID)
+	if err != nil {
+		log.Printf("Warning: failed to read active job for %s: %v", printerID, err)
+	}
 
-	// Debug logging for all printers
-	log.Printf("Printer %s (%s): state=%s, wasPrinting=%v, job=%s, stored_file=%s",
-		config.IPAddress, printerID, currentState, wasPrinting, jobName, storedJobFile)
+	isPrinting := currentState == StatePrinting || currentState == StatePaused
+	// A job has ended if the printer is now in any terminal state: a clean finish
+	// (FINISHED/IDLE) or a cancel/failure (STOPPED/ERROR). Catching STOPPED/ERROR
+	// here is what lets us bill a cancelled print for what it actually used.
+	isTerminal := currentState == StateIdle || currentState == StateFinished ||
+		currentState == StateStopped || currentState == StateError
 
-	// Check if print just finished
-	if (currentState == StateIdle || currentState == StateFinished) && wasPrinting {
-		// Use stored filename (should be available since we stored it when printing started)
-		filenameToUse := storedJobFile
-		if filenameToUse == "" {
-			log.Printf("Warning: No stored filename for %s (%s), using current job filename: %s",
-				config.IPAddress, printerID, currentJobFilename)
-			filenameToUse = currentJobFilename
+	log.Printf("Printer %s (%s): state=%s, job=%s, tracking=%v",
+		config.IPAddress, printerID, currentState, jobName, active != nil)
+
+	switch {
+	case isPrinting:
+		// Build/refresh the persisted in-flight record.
+		aj := &activeJob{PrinterID: printerID, StartedAt: time.Now()}
+		// Treat this as a continuation of the tracked job when paused, when the job
+		// id matches, or when the printer doesn't report an id at all.
+		if active != nil && (currentState == StatePaused || active.JobID == jobInfo.ID || jobInfo.ID == 0) {
+			aj.JobID = active.JobID
+			aj.Filename = active.Filename
+			aj.StartedAt = active.StartedAt
+			aj.LastProgress = active.LastProgress
+			aj.Usage = active.Usage
+		}
+		if jobInfo.ID != 0 {
+			aj.JobID = jobInfo.ID
+		}
+		if currentJobFilename != "" {
+			aj.Filename = currentJobFilename
+		}
+		// Track monotonic max progress so a late/stale low reading can't shrink it.
+		if currentState == StatePrinting {
+			if p := normalizeProgress(jobInfo.Progress); p > aj.LastProgress {
+				aj.LastProgress = p
+			}
+		}
+		// Capture the slicer filament estimate from job metadata while the job is
+		// loaded (it's typically gone once the printer returns to a terminal state).
+		// This is what lets both completion and cancellation bill without a download.
+		if len(aj.Usage) == 0 {
+			if usage := filamentUsageFromMeta(jobInfo.File.Meta); len(usage) > 0 {
+				aj.Usage = usage
+			}
+		}
+		if aj.Filename != "" {
+			if err := b.upsertActiveJob(aj); err != nil {
+				log.Printf("Warning: failed to persist active job for %s: %v", printerID, err)
+			}
 		}
 
-		log.Printf("🎉 Print finished detected for %s (%s): %s (state: %s, file: %s)",
-			config.IPAddress, printerID, jobName, currentState, filenameToUse)
+	case isTerminal && active != nil && active.Filename != "":
+		// A tracked job has ended. Classify how it ended to decide how much to bill:
+		//   FINISHED        -> completed, full estimate
+		//   STOPPED / ERROR -> cancelled/failed, estimate * last-seen progress
+		//   IDLE            -> ambiguous (some firmware skips FINISHED): completed only
+		//                      if we last saw it near 100%, otherwise partial
+		completed := currentState == StateFinished ||
+			(currentState == StateIdle && active.LastProgress >= PrintCompletionProgressThreshold)
+		usageScale := 1.0
+		if !completed {
+			usageScale = active.LastProgress
+		}
 
-		// Mark as processing to prevent filename from being cleared
+		// Idempotency: never bill the same job twice (survives restart/double-detect).
+		if billed, err := b.isJobBilled(printerID, active.JobID); err != nil {
+			log.Printf("Warning: failed to check billed ledger for %s job %d: %v", printerID, active.JobID, err)
+		} else if billed {
+			log.Printf("Job %d on %s already billed; clearing tracking", active.JobID, printerID)
+			b.clearActiveJob(printerID)
+			return nil
+		}
+
+		// Guard against two overlapping monitor cycles billing the same printer.
 		b.mutex.Lock()
-		b.wasPrinting[printerID] = false
+		if b.processingPrints[printerID] {
+			b.mutex.Unlock()
+			return nil
+		}
 		b.processingPrints[printerID] = true
 		b.mutex.Unlock()
+		defer func() {
+			b.mutex.Lock()
+			b.processingPrints[printerID] = false
+			b.mutex.Unlock()
+		}()
 
-		// Now process the print (this takes a long time)
-		err := b.handlePrusaLinkPrintFinished(config, filenameToUse)
-
-		// Clear processing flag and filename after completion
-		b.mutex.Lock()
-		b.processingPrints[printerID] = false
-		if err == nil {
-			b.currentJobFile[printerID] = ""
-		}
-		b.mutex.Unlock()
-
-		if err != nil {
-			log.Printf("Error handling PrusaLink print finished: %v", err)
-		}
-	} else {
-		// Update state tracking - minimize lock scope
-		b.mutex.Lock()
-		defer b.mutex.Unlock()
-
-		// Store the current job filename when printing starts (only if not already stored)
-		if currentState == StatePrinting && currentJobFilename != "" && storedJobFile == "" {
-			b.currentJobFile[printerID] = currentJobFilename
-			log.Printf("📁 Stored job filename for %s (%s): %s", config.IPAddress, printerID, currentJobFilename)
+		if completed {
+			log.Printf("🎉 Print finished for %s (%s): %s (state: %s, file: %s)",
+				config.IPAddress, printerID, jobName, currentState, active.Filename)
+		} else {
+			log.Printf("🛑 Print cancelled/failed for %s (%s): %s (state: %s, ~%.0f%% printed, file: %s)",
+				config.IPAddress, printerID, jobName, currentState, usageScale*100, active.Filename)
 		}
 
-		// Update wasPrinting flag for NEXT cycle
-		b.wasPrinting[printerID] = currentState == StatePrinting
-
-		// Clear stored filename when print finishes (but only if not currently processing)
-		if (currentState == StateIdle || currentState == StateFinished) && !b.processingPrints[printerID] {
-			b.currentJobFile[printerID] = ""
+		if err := b.handlePrintEnded(config, client, active, usageScale); err != nil {
+			// Whole-job failure (download/parse/no-data) before any spool was written.
+			// A print error was already logged; clear tracking so we don't reprocess
+			// it every poll while the printer sits idle.
+			log.Printf("Error handling print end for %s: %v", printerID, err)
+			b.clearActiveJob(printerID)
+			return nil
 		}
+
+		// Success: record in the idempotency ledger, then clear tracking.
+		if err := b.recordBilledJob(printerID, active.JobID, active.Filename, usageScale); err != nil {
+			log.Printf("Warning: failed to record billed job %d for %s: %v", active.JobID, printerID, err)
+		}
+		b.clearActiveJob(printerID)
+
+	case isTerminal && active != nil && active.Filename == "":
+		// Stale tracking row with no filename - drop it.
+		b.clearActiveJob(printerID)
 	}
 
 	return nil
 }
 
-// handlePrusaLinkPrintFinished handles when a print job finishes via PrusaLink
-func (b *FilamentBridge) handlePrusaLinkPrintFinished(config PrinterConfig, filename string) error {
-	log.Printf("Print finished via PrusaLink (%s): %s", config.IPAddress, filename)
+// normalizeProgress converts a PrusaLink progress value to a fraction in [0,1].
+// The PrusaLink v1 API reports job progress as a percentage (0..100), but we
+// defensively accept an already-normalized 0..1 fraction as well.
+func normalizeProgress(p float64) float64 {
+	if p > 1.0 {
+		p = p / 100.0 // value was a 0..100 percentage
+	}
+	if p < 0 {
+		return 0
+	}
+	if p > 1.0 {
+		return 1.0
+	}
+	return p
+}
 
+// handlePrintEnded bills filament for a print that has ended. usageScale is the
+// fraction (0..1) of the slicer's estimate to bill: 1.0 for a completed print, or
+// the last-seen progress for one cancelled/failed partway through. It prefers the
+// filament estimate captured from job metadata while printing, and only downloads
+// and parses the G-code file as a fallback when that metadata was unavailable.
+func (b *FilamentBridge) handlePrintEnded(config PrinterConfig, prusaClient *PrusaLinkClient, active *activeJob, usageScale float64) error {
 	printerName := resolvePrinterName(config)
+	filename := active.Filename
 
-	// Create PrusaLink client for this printer
-	prusaClient := NewPrusaLinkClient(config.IPAddress, config.APIKey, b.config.PrusaLinkTimeout, b.config.PrusaLinkFileDownloadTimeout)
+	log.Printf("Print ended on %s: %s (billing %.0f%% of estimate)", printerName, filename, usageScale*100)
 
-	// Use the filename parameter (stored when print started)
 	if filename == "" {
 		errorMsg := "no filename available for print processing"
 		b.addPrintError(printerName, "unknown", errorMsg)
 		return fmt.Errorf("%s", errorMsg)
 	}
+	if usageScale < 0 {
+		usageScale = 0
+	}
 
-	// Download and parse the G-code file (.gcode or .bgcode) for filament usage
-	log.Printf("Analyzing G-code file for filament usage: %s", filename)
+	// Determine the full per-toolhead slicer estimate. Prefer metadata captured
+	// while printing; fall back to downloading and parsing the G-code file.
+	usage := active.Usage
+	source := "job metadata"
+	if len(usage) == 0 {
+		// Nothing printed and no metadata: skip the expensive download, bill nothing.
+		if usageScale == 0 {
+			log.Printf("Print %s on %s ended at ~0%% with no metadata; nothing to bill", filename, printerName)
+			return nil
+		}
 
-	// Download with retry logic
-	gcodeContent, err := prusaClient.GetGcodeFileWithRetry(filename, b.config.PrusaLinkFileDownloadTimeout)
-	if err != nil {
-		errorMsg := fmt.Sprintf("failed to download G-code file after retries: %v", err)
+		log.Printf("No captured metadata for %s; downloading G-code to determine filament usage: %s", printerName, filename)
+		gcodeContent, err := prusaClient.GetGcodeFileWithRetry(filename, b.config.PrusaLinkFileDownloadTimeout)
+		if err != nil {
+			errorMsg := fmt.Sprintf("failed to download G-code file after retries: %v", err)
+			b.addPrintError(printerName, filename, errorMsg)
+			return fmt.Errorf("%s", errorMsg)
+		}
+		parsed, err := prusaClient.ParseGcodeFilamentUsage(gcodeContent)
+		if err != nil {
+			errorMsg := fmt.Sprintf("failed to parse G-code for filament usage: %v", err)
+			b.addPrintError(printerName, filename, errorMsg)
+			return fmt.Errorf("%s", errorMsg)
+		}
+		usage = parsed
+		source = "G-code file"
+	}
+
+	if len(usage) == 0 {
+		errorMsg := "no filament usage data found (metadata or G-code)"
 		b.addPrintError(printerName, filename, errorMsg)
 		return fmt.Errorf("%s", errorMsg)
 	}
 
-	// Parse the downloaded file
-	filamentUsage, err := prusaClient.ParseGcodeFilamentUsage(gcodeContent)
-	if err != nil {
-		errorMsg := fmt.Sprintf("failed to parse G-code for filament usage: %v", err)
-		b.addPrintError(printerName, filename, errorMsg)
-		return fmt.Errorf("%s", errorMsg)
+	// For a cancelled/failed print, scale the full slicer estimate down to the
+	// fraction that was actually printed. PrusaLink progress is time-based, not
+	// extrusion-based, so this is an approximation - but far closer than 0% or 100%.
+	if usageScale < 1.0 {
+		scaled := make(map[int]float64, len(usage))
+		for toolheadID, weight := range usage {
+			scaled[toolheadID] = weight * usageScale
+		}
+		usage = scaled
+		log.Printf("Scaled filament usage to ~%.0f%% for partial print: %s", usageScale*100, filename)
 	}
 
-	// Check if we got any filament usage data
-	if len(filamentUsage) == 0 {
-		errorMsg := "no filament usage data found in G-code file"
-		b.addPrintError(printerName, filename, errorMsg)
-		return fmt.Errorf("%s", errorMsg)
-	}
+	log.Printf("Filament usage for %s (source: %s): %+v", filename, source, usage)
 
-	log.Printf("Successfully parsed G-code file for filament usage: %+v", filamentUsage)
+	printStarted := active.StartedAt
+	if printStarted.IsZero() {
+		printStarted = time.Now()
+	}
 
 	// Process filament usage using helper function
-	if err := b.processFilamentUsage(printerName, filamentUsage, filename); err != nil {
+	if err := b.processFilamentUsage(printerName, usage, filename, printStarted); err != nil {
 		log.Printf("Error processing filament usage: %v", err)
 		return err
 	}
@@ -1281,8 +1491,9 @@ func (b *FilamentBridge) GetStatus() (*PrinterStatus, error) {
 	return status, nil
 }
 
-// processFilamentUsage processes filament usage updates for all toolheads
-func (b *FilamentBridge) processFilamentUsage(printerName string, filamentUsage map[int]float64, jobName string) error {
+// processFilamentUsage processes filament usage updates for all toolheads.
+// printStarted is recorded in the print history for each toolhead entry.
+func (b *FilamentBridge) processFilamentUsage(printerName string, filamentUsage map[int]float64, jobName string, printStarted time.Time) error {
 	// Update Spoolman with filament usage for each toolhead
 	for toolheadID, usedWeight := range filamentUsage {
 		if usedWeight <= 0 {
@@ -1310,7 +1521,7 @@ func (b *FilamentBridge) processFilamentUsage(printerName string, filamentUsage 
 		}
 
 		// Log the usage in our database
-		if err := b.LogPrintUsage(printerName, toolheadID, spoolID, usedWeight, jobName); err != nil {
+		if err := b.LogPrintUsage(printerName, toolheadID, spoolID, usedWeight, jobName, printStarted); err != nil {
 			log.Printf("Error logging print usage: %v", err)
 		}
 

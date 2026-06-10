@@ -4,10 +4,19 @@ package main
 const (
 	StateIdle          = "IDLE"
 	StatePrinting      = "PRINTING"
+	StatePaused        = "PAUSED"
 	StateFinished      = "FINISHED"
+	StateStopped       = "STOPPED" // PrusaLink reports a user-cancelled print as STOPPED
+	StateError         = "ERROR"   // PrusaLink reports a failed/aborted print as ERROR
 	StateOffline       = "offline"
 	StateNotConfigured = "not_configured"
 )
+
+// PrintCompletionProgressThreshold is the minimum last-seen progress fraction
+// (0..1) for a print that ends in a bare IDLE state (no explicit FINISHED) to be
+// treated as completed rather than cancelled. Below this, the print is billed
+// proportionally to how far it got.
+const PrintCompletionProgressThreshold = 0.95
 
 // Default configuration values
 const (

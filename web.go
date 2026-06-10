@@ -1102,7 +1102,7 @@ func (ws *WebServer) testPrintCompleteHandler(c *gin.Context) {
 	printerName := resolvePrinterName(config)
 
 	// Process filament usage using helper function
-	if err := ws.bridge.processFilamentUsage(printerName, request.FilamentUsage, request.JobName); err != nil {
+	if err := ws.bridge.processFilamentUsage(printerName, request.FilamentUsage, request.JobName, time.Now()); err != nil {
 		log.Printf("Error processing filament usage: %v", err)
 	}
 
