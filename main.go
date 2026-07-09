@@ -20,6 +20,10 @@ func main() {
 	)
 	flag.Parse()
 
+	// Route informational log output to stdout and warnings/errors to stderr
+	// (the log package otherwise sends everything to stderr).
+	installLogSplitter()
+
 	// Create bridge instance first (with default config)
 	bridge, err := NewFilamentBridge(nil)
 	if err != nil {

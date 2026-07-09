@@ -24,6 +24,8 @@ type FilamentBridge struct {
 	// restarts); only the concurrency guard for the billing path is kept in memory.
 	processingPrints map[string]bool       // Guard against overlapping monitor cycles billing the same printer
 	printErrors      map[string]PrintError // Store print processing errors
+	offlinePrinters  map[string]bool       // Printers currently logged as offline (edge-triggered reachability logging)
+	offlineMutex     sync.Mutex
 	errorMutex       sync.RWMutex
 	mutex            sync.RWMutex
 }
@@ -79,6 +81,7 @@ func NewFilamentBridge(config *Config) (*FilamentBridge, error) {
 		spoolman:         NewSpoolmanClient(DefaultSpoolmanURL, SpoolmanTimeout, "", ""), // Default URL and timeout, will be updated
 		processingPrints: make(map[string]bool),
 		printErrors:      make(map[string]PrintError),
+		offlinePrinters:  make(map[string]bool),
 	}
 
 	// Initialize database
@@ -1069,16 +1072,42 @@ func (b *FilamentBridge) recordBilledJob(printerID string, jobID int, filename s
 	return err
 }
 
+// noteConnectivity performs edge-triggered logging of a printer's reachability.
+// It logs once when a printer first becomes unreachable and once when it later
+// recovers, suppressing the repeated warnings that an offline printer would
+// otherwise emit on every poll cycle and every dashboard/API request. err is the
+// result of the reachability check (nil means reachable). State is shared across
+// all callers (monitor loop, broadcasts, web handlers) so the offline/online
+// transition is logged exactly once regardless of which path observes it.
+func (b *FilamentBridge) noteConnectivity(printerID, ipAddress, name string, err error) {
+	b.offlineMutex.Lock()
+	defer b.offlineMutex.Unlock()
+
+	wasOffline := b.offlinePrinters[printerID]
+	if err != nil {
+		if !wasOffline {
+			log.Printf("Printer %s (%s - %s) is offline, suppressing further offline warnings until it returns: %v",
+				ipAddress, printerID, name, err)
+			b.offlinePrinters[printerID] = true
+		}
+		return
+	}
+	if wasOffline {
+		log.Printf("Printer %s (%s - %s) is back online", ipAddress, printerID, name)
+		delete(b.offlinePrinters, printerID)
+	}
+}
+
 // monitorPrusaLink monitors a single printer using PrusaLink API
 func (b *FilamentBridge) monitorPrusaLink(printerID string, config PrinterConfig) error {
-	log.Printf("Starting monitoring for printer %s (%s) at %s", printerID, config.IPAddress, config.Name)
 	client := NewPrusaLinkClient(config.IPAddress, config.APIKey, b.config.PrusaLinkTimeout, b.config.PrusaLinkFileDownloadTimeout)
 
 	status, err := client.GetStatus()
 	if err != nil {
-		log.Printf("Warning: Failed to get printer status from %s (%s): %v", config.IPAddress, printerID, err)
+		b.noteConnectivity(printerID, config.IPAddress, config.Name, err)
 		return nil // Don't fail the entire monitoring cycle for one printer
 	}
+	b.noteConnectivity(printerID, config.IPAddress, config.Name, nil)
 
 	jobInfo, err := client.GetJobInfo()
 	if err != nil {
@@ -1416,16 +1445,16 @@ func (b *FilamentBridge) GetStatus() (*PrinterStatus, error) {
 			// Get current status
 			printerStatus, err := client.GetStatus()
 			if err != nil {
-				// Enhanced error logging to help diagnose connection issues
-				// This is especially useful for DNS resolution problems with hostnames
-				log.Printf("Warning: Failed to get printer status from %s (%s - %s): %v",
-					printerConfig.IPAddress, printerID, printerName, err)
+				// Edge-triggered: logs once on the transition to offline and once
+				// on recovery, rather than on every broadcast/web request.
+				b.noteConnectivity(printerID, printerConfig.IPAddress, printerName, err)
 				status.Printers[printerID] = PrinterData{
 					Name:  printerName,
 					State: StateOffline,
 				}
 				continue
 			}
+			b.noteConnectivity(printerID, printerConfig.IPAddress, printerName, nil)
 
 			status.Printers[printerID] = PrinterData{
 				Name:  printerName,
