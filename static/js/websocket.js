@@ -102,7 +102,6 @@ function updateConnectionStatus(status) {
 }
 
 function updateDashboard(data) {
-    console.log('Updating dashboard with new data:', data);
     
     // Update printer statuses
     if (data.printers) {
@@ -294,7 +293,6 @@ function updateToolheadMappings(mappings) {
                     // Update edit button
                     updateEditButton(toolheadRow, spoolId, selectedColor);
                     
-                    console.log(`Updated mapping for printer ${printerId}, toolhead ${toolheadId}: spool ${spoolId}`);
                 }
             }
         } else {
@@ -319,7 +317,6 @@ function updateToolheadMappings(mappings) {
             // Update edit button for empty state
             updateEditButton(toolheadRow, '', '');
             
-            console.log(`Cleared mapping for printer ${printerId}, toolhead ${toolheadId}`);
         }
     });
 }

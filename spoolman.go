@@ -197,10 +197,10 @@ func (c *SpoolmanClient) GetAllSpools() ([]SpoolmanSpool, error) {
 		spools[i] = c.normalizeSpoolData(spools[i])
 	}
 
-	// Filter out spools with 0g remaining weight
+	// Filter out archived spools and spools with 0g remaining weight
 	filteredSpools := make([]SpoolmanSpool, 0, len(spools))
 	for _, spool := range spools {
-		if spool.RemainingWeight > 0 {
+		if !spool.Archived && spool.RemainingWeight > 0 {
 			filteredSpools = append(filteredSpools, spool)
 		}
 	}
@@ -333,7 +333,7 @@ func (c *SpoolmanClient) UpdateSpoolUsage(spoolID int, filamentUsed float64) err
 		return fmt.Errorf("failed to update spool %d: %w", spoolID, err)
 	}
 
-	fmt.Printf("Updated spool %d: used_weight %.2fg -> %.2fg (added %.2fg)\n",
+	log.Printf("Updated spool %d: used_weight %.2fg -> %.2fg (added %.2fg)",
 		spoolID, spool.UsedWeight, newUsedWeight, filamentUsed)
 
 	return nil
@@ -651,26 +651,21 @@ func (c *SpoolmanClient) updateSpoolLocationText(spoolID int, locationName strin
 
 // UpdateSpoolmanLocationReferences renames the location in Spoolman using the location rename API
 func (c *SpoolmanClient) UpdateSpoolmanLocationReferences(oldName, newName string) error {
-	log.Printf("UpdateSpoolmanLocationReferences: Renaming location from '%s' to '%s' in Spoolman", oldName, newName)
-
 	// Check if the old location exists in Spoolman
 	exists, err := c.LocationExistsInSpoolman(oldName)
 	if err != nil {
-		log.Printf("UpdateSpoolmanLocationReferences: Failed to check if location exists: %v", err)
 		return fmt.Errorf("failed to check if location exists in Spoolman: %w", err)
 	}
 
 	if !exists {
-		log.Printf("UpdateSpoolmanLocationReferences: Location '%s' does not exist in Spoolman, skipping rename", oldName)
+		log.Printf("Location '%s' does not exist in Spoolman, skipping rename", oldName)
 		return nil
 	}
 
-	// Use the location rename API to rename the location directly
+	// RenameLocation logs the rename on success
 	if err := c.RenameLocation(oldName, newName); err != nil {
-		log.Printf("UpdateSpoolmanLocationReferences: Failed to rename location in Spoolman: %v", err)
 		return fmt.Errorf("failed to rename location in Spoolman: %w", err)
 	}
 
-	log.Printf("UpdateSpoolmanLocationReferences: Successfully renamed location from '%s' to '%s' in Spoolman", oldName, newName)
 	return nil
 }

@@ -33,14 +33,18 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      # Version tags come from the pushed git tag: v0.3.0 publishes image tag
+      # 0.3.0 plus :latest. Pre-release semver (v0.4.0-rc1) publishes its version
+      # tag but leaves :latest untouched. Manual workflow_dispatch runs from a
+      # branch publish the branch name (e.g. :main) as a dev image instead.
       - name: Extract metadata
         id: meta
         uses: docker/metadata-action@v5
         with:
           images: ghcr.io/${{ github.repository }}
           tags: |
-            type=ref,event=tag
-            type=raw,value=latest,enable={{is_default_branch}}
+            type=semver,pattern={{version}}
+            type=ref,event=branch
 
       - name: Build and push Docker image
         uses: docker/build-push-action@v5
@@ -48,6 +52,8 @@ jobs:
           context: .
           platforms: linux/amd64,linux/arm64
           push: true
+          build-args: |
+            VERSION=${{ steps.get_version.outputs.VERSION }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: |

@@ -66,8 +66,14 @@ func NewWebServer(bridge *FilamentBridge) *WebServer {
 	gin.SetMode(gin.ReleaseMode)
 	router := gin.New()
 
-	// Add middleware
-	router.Use(gin.Logger())
+	// Add middleware. Request logging skips the healthcheck endpoint (hit every
+	// 30s by Docker) and static assets, which would otherwise dominate the log.
+	router.Use(gin.LoggerWithConfig(gin.LoggerConfig{
+		SkipPaths: []string{"/healthz"},
+		Skip: func(c *gin.Context) bool {
+			return strings.HasPrefix(c.Request.URL.Path, "/static/")
+		},
+	}))
 	router.Use(gin.Recovery())
 
 	// Add custom recovery middleware for API routes to ensure JSON responses
@@ -136,6 +142,9 @@ func (ws *WebServer) setupRoutes() {
 	// Main dashboard
 	ws.router.GET("/", ws.dashboardHandler)
 
+	// Liveness probe for Docker/compose healthchecks and monitoring
+	ws.router.GET("/healthz", ws.healthzHandler)
+
 	// API routes
 	api := ws.router.Group("/api")
 	{
@@ -160,6 +169,7 @@ func (ws *WebServer) setupRoutes() {
 		api.POST("/detect_printer", ws.detectPrinterHandler)
 		api.GET("/print-errors", ws.getPrintErrorsHandler)
 		api.POST("/print-errors/:id/acknowledge", ws.acknowledgePrintErrorHandler)
+		api.GET("/print-history", ws.getPrintHistoryHandler)
 		api.GET("/nfc/assign", ws.nfcAssignHandler)
 		api.GET("/nfc/urls", ws.nfcUrlsHandler)
 		api.GET("/nfc/session/status", ws.nfcSessionStatusHandler)
@@ -183,8 +193,9 @@ func (h *WebSocketHub) run() {
 		case client := <-h.register:
 			h.mutex.Lock()
 			h.clients[client] = true
+			total := len(h.clients)
 			h.mutex.Unlock()
-			log.Printf("WebSocket client connected. Total clients: %d", len(h.clients))
+			log.Printf("WebSocket client connected. Total clients: %d", total)
 
 		case client := <-h.unregister:
 			h.mutex.Lock()
@@ -192,11 +203,14 @@ func (h *WebSocketHub) run() {
 				delete(h.clients, client)
 				close(client.send)
 			}
+			total := len(h.clients)
 			h.mutex.Unlock()
-			log.Printf("WebSocket client disconnected. Total clients: %d", len(h.clients))
+			log.Printf("WebSocket client disconnected. Total clients: %d", total)
 
 		case message := <-h.broadcast:
-			h.mutex.RLock()
+			// Write lock: a client with a full send buffer is dropped here,
+			// which mutates the map (delete under RLock is a data race).
+			h.mutex.Lock()
 			for client := range h.clients {
 				select {
 				case client.send <- message:
@@ -205,7 +219,7 @@ func (h *WebSocketHub) run() {
 					delete(h.clients, client)
 				}
 			}
-			h.mutex.RUnlock()
+			h.mutex.Unlock()
 		}
 	}
 }
@@ -246,12 +260,10 @@ func (ws *WebServer) BroadcastStatus() {
 		return
 	}
 
-	// Broadcast to all clients
+	// Broadcast to all clients (non-blocking; dropped if nobody is listening)
 	select {
 	case ws.wsHub.broadcast <- jsonData:
-		log.Printf("Broadcasted status update to %d clients", len(ws.wsHub.clients))
 	default:
-		log.Printf("No clients connected to receive broadcast")
 	}
 }
 
@@ -354,6 +366,13 @@ func (c *WebSocketClient) writePump() {
 
 // dashboardHandler serves the main dashboard
 func (ws *WebServer) dashboardHandler(c *gin.Context) {
+	// Snapshot the config: direct ws.bridge.config field reads race with
+	// ReloadConfig swapping the pointer.
+	cfg := ws.bridge.GetConfigSnapshot()
+	if cfg == nil {
+		cfg = &Config{Printers: make(map[string]PrinterConfig)}
+	}
+
 	status, err := ws.bridge.GetStatus()
 	if err != nil {
 		c.HTML(http.StatusInternalServerError, "error.html", gin.H{
@@ -385,17 +404,29 @@ func (ws *WebServer) dashboardHandler(c *gin.Context) {
 	hasPrintErrors := len(printErrors) > 0
 
 	c.HTML(http.StatusOK, "index.html", gin.H{
+		"Version":           version,
 		"Status":            status,
 		"Spools":            spools,
 		"HasErrors":         hasErrors,
 		"HasPrintErrors":    hasPrintErrors,
 		"PrintErrors":       printErrors,
 		"IsFirstRun":        isFirstRun,
-		"Printers":          ws.bridge.config.Printers,
+		"Printers":          cfg.Printers,
 		"SpoolmanConnected": spoolmanConnected,
 		"SpoolmanError":     spoolmanError,
-		"SpoolmanBaseURL":   ws.bridge.config.SpoolmanURL,
+		"SpoolmanBaseURL":   cfg.SpoolmanURL,
 	})
+}
+
+// healthzHandler reports process health: 200 when the service and its database
+// are usable, 503 if the database is unreachable. Printer/Spoolman connectivity
+// is intentionally excluded - an offline printer shouldn't restart the container.
+func (ws *WebServer) healthzHandler(c *gin.Context) {
+	if err := ws.bridge.db.Ping(); err != nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"status": "degraded", "error": "database unreachable", "version": version})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"status": "ok", "version": version})
 }
 
 // hasConnectionErrors checks if there are connection errors
@@ -641,13 +672,15 @@ func (ws *WebServer) getAutoAssignPreviousSpoolHandler(c *gin.Context) {
 
 // updateAutoAssignPreviousSpoolHandler updates auto-assign previous spool settings
 func (ws *WebServer) updateAutoAssignPreviousSpoolHandler(c *gin.Context) {
+	// Note: no binding:"required" on Enabled - the validator treats false as a
+	// missing value, which would make it impossible to ever disable the feature.
 	var req struct {
-		Enabled  bool   `json:"enabled" binding:"required"`
+		Enabled  bool   `json:"enabled"`
 		Location string `json:"location"`
 	}
 
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid JSON or missing 'enabled' field"})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid JSON"})
 		return
 	}
 
@@ -776,28 +809,17 @@ func (ws *WebServer) updatePrinterHandler(c *gin.Context) {
 
 	// Auto-detect model if address or API key changed, or if model is currently "Unknown"
 	if printerConfig.Model == "" || printerConfig.Model == ModelUnknown {
-		log.Printf("🔍 [Auto-Detection] Detecting model for printer %s (IP: %s)", printerID, printerConfig.IPAddress)
-
 		// Create PrusaLink client for detection
 		client := NewPrusaLinkClient(printerConfig.IPAddress, printerConfig.APIKey, 10, 60) // Use default timeouts for detection
 
-		// Try to get printer info
 		printerInfo, err := client.GetPrinterInfo()
 		if err != nil {
-			log.Printf("⚠️ [Auto-Detection] Failed to detect model for %s: %v (keeping current model: %s)",
+			log.Printf("Warning: could not auto-detect model for %s: %v (keeping model: %s)",
 				printerConfig.IPAddress, err, printerConfig.Model)
-		} else {
-			// Use shared model detection function
-			detectedModel := detectPrinterModel(printerInfo.Hostname)
-
-			if detectedModel != ModelUnknown {
-				log.Printf("✅ [Auto-Detection] Detected model for %s: '%s' -> %s",
-					printerConfig.IPAddress, printerInfo.Hostname, detectedModel)
-				printerConfig.Model = detectedModel
-			} else {
-				log.Printf("❌ [Auto-Detection] No pattern matched for hostname '%s' from %s",
-					printerInfo.Hostname, printerConfig.IPAddress)
-			}
+		} else if detectedModel := detectPrinterModel(printerInfo.Hostname); detectedModel != ModelUnknown {
+			log.Printf("Detected printer model for %s: %s (hostname '%s')",
+				printerConfig.IPAddress, detectedModel, printerInfo.Hostname)
+			printerConfig.Model = detectedModel
 		}
 	}
 
@@ -927,34 +949,21 @@ func (ws *WebServer) updateToolheadNameHandler(c *gin.Context) {
 
 // detectPrinterModel detects printer model from hostname
 func detectPrinterModel(hostname string) string {
-	model := ModelUnknown
-	hostnameLower := strings.ToLower(hostname)
-	hostnameLower = strings.TrimSpace(hostnameLower) // Clean up any whitespace
+	hostnameLower := strings.TrimSpace(strings.ToLower(hostname))
 
-	log.Printf("🔍 [Detection] Checking hostname '%s' against patterns:", hostnameLower)
-
-	if strings.Contains(hostnameLower, ModelCorePattern) {
-		model = ModelCoreOne
-		log.Printf("✅ [Detection] Matched pattern '%s' -> %s", ModelCorePattern, model)
-	} else if strings.Contains(hostnameLower, ModelXLPattern) {
-		model = ModelXL
-		log.Printf("✅ [Detection] Matched pattern '%s' -> %s", ModelXLPattern, model)
-	} else if strings.Contains(hostnameLower, ModelMK4Pattern) {
-		model = ModelMK4
-		log.Printf("✅ [Detection] Matched pattern '%s' -> %s", ModelMK4Pattern, model)
-	} else if strings.Contains(hostnameLower, ModelMK3Pattern) {
-		model = ModelMK35
-		log.Printf("✅ [Detection] Matched pattern '%s' -> %s", ModelMK3Pattern, model)
-	} else if strings.Contains(hostnameLower, ModelMiniPattern) {
-		model = ModelMiniPlus
-		log.Printf("✅ [Detection] Matched pattern '%s' -> %s", ModelMiniPattern, model)
-	} else {
-		log.Printf("❌ [Detection] No pattern matched for hostname '%s'. Available patterns: %s, %s, %s, %s, %s",
-			hostnameLower, ModelCorePattern, ModelXLPattern, ModelMK4Pattern, ModelMK3Pattern, ModelMiniPattern)
+	switch {
+	case strings.Contains(hostnameLower, ModelCorePattern):
+		return ModelCoreOne
+	case strings.Contains(hostnameLower, ModelXLPattern):
+		return ModelXL
+	case strings.Contains(hostnameLower, ModelMK4Pattern):
+		return ModelMK4
+	case strings.Contains(hostnameLower, ModelMK3Pattern):
+		return ModelMK35
+	case strings.Contains(hostnameLower, ModelMiniPattern):
+		return ModelMiniPlus
 	}
-
-	log.Printf("🎯 [Detection] Final result: hostname='%s' -> model='%s'", hostname, model)
-	return model
+	return ModelUnknown
 }
 
 // detectPrinterHandler detects printer model from PrusaLink API
@@ -975,15 +984,13 @@ func (ws *WebServer) detectPrinterHandler(c *gin.Context) {
 		return
 	}
 
-	log.Printf("🔍 [Detection] Starting printer model detection for IP: %s", req.IPAddress)
-
 	// Create PrusaLink client
 	client := NewPrusaLinkClient(req.IPAddress, req.APIKey, 10, 60) // Use default timeouts for detection
 
 	// Try to get printer info, but don't fail if it times out
 	printerInfo, err := client.GetPrinterInfo()
 	if err != nil {
-		log.Printf("❌ [Detection] Failed to get printer info from %s: %v", req.IPAddress, err)
+		log.Printf("Warning: printer detection failed for %s: %v", req.IPAddress, err)
 		// If API call fails, return default values instead of error
 		// This allows users to add printers even if they're offline
 		c.JSON(http.StatusOK, gin.H{
@@ -995,10 +1002,9 @@ func (ws *WebServer) detectPrinterHandler(c *gin.Context) {
 		return
 	}
 
-	log.Printf("📥 [Detection] Received printer info: hostname='%s'", printerInfo.Hostname)
-
 	// Use shared model detection function
 	model := detectPrinterModel(printerInfo.Hostname)
+	log.Printf("Detected printer at %s: hostname '%s', model %s", req.IPAddress, printerInfo.Hostname, model)
 
 	// Return detected information (toolheads will be provided by user)
 	c.JSON(http.StatusOK, gin.H{
@@ -1034,17 +1040,21 @@ func (ws *WebServer) debugSpoolmanHandler(c *gin.Context) {
 
 	// Add raw field analysis
 	for i, spool := range spools {
+		colorHex := ""
+		if spool.Filament != nil {
+			colorHex = spool.Filament.ColorHex
+		}
 		debugInfo["raw_data"].([]gin.H)[i] = gin.H{
 			"id":               spool.ID,
 			"name":             spool.Name,
 			"brand":            spool.Brand,
 			"material":         spool.Material,
-			"color":            spool.Filament.ColorHex,
+			"color":            colorHex,
 			"remaining_length": spool.RemainingLength,
 			"name_empty":       spool.Name == "",
 			"brand_empty":      spool.Brand == "",
 			"material_empty":   spool.Material == "",
-			"color_empty":      spool.Filament.ColorHex == "",
+			"color_empty":      colorHex == "",
 		}
 	}
 
@@ -1075,12 +1085,18 @@ func (ws *WebServer) testPrintCompleteHandler(c *gin.Context) {
 		}
 	}
 
+	cfg := ws.bridge.GetConfigSnapshot()
+	if cfg == nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "No printers configured"})
+		return
+	}
+
 	// Get printer config - first try by name, then by ID
 	var config PrinterConfig
 	var found bool
 
 	// Try to find by name first
-	for _, printerConfig := range ws.bridge.config.Printers {
+	for _, printerConfig := range cfg.Printers {
 		if printerConfig.Name == request.PrinterName {
 			config = printerConfig
 			found = true
@@ -1090,7 +1106,7 @@ func (ws *WebServer) testPrintCompleteHandler(c *gin.Context) {
 
 	// If not found by name, try by ID
 	if !found {
-		config, found = ws.bridge.config.Printers[request.PrinterName]
+		config, found = cfg.Printers[request.PrinterName]
 	}
 
 	if !found {
@@ -1102,7 +1118,7 @@ func (ws *WebServer) testPrintCompleteHandler(c *gin.Context) {
 	printerName := resolvePrinterName(config)
 
 	// Process filament usage using helper function
-	if err := ws.bridge.processFilamentUsage(printerName, request.FilamentUsage, request.JobName, time.Now()); err != nil {
+	if err := ws.bridge.processFilamentUsage(printerName, request.FilamentUsage, request.JobName, time.Now(), "completed"); err != nil {
 		log.Printf("Error processing filament usage: %v", err)
 	}
 
@@ -1120,6 +1136,24 @@ func (ws *WebServer) getPrintErrorsHandler(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{
 		"errors": errors,
 	})
+}
+
+// getPrintHistoryHandler returns recent print history entries, newest first
+func (ws *WebServer) getPrintHistoryHandler(c *gin.Context) {
+	limit := 100
+	if limitStr := c.Query("limit"); limitStr != "" {
+		if parsed, err := strconv.Atoi(limitStr); err == nil && parsed > 0 && parsed <= 1000 {
+			limit = parsed
+		}
+	}
+
+	history, err := ws.bridge.GetPrintHistory(limit)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"history": history})
 }
 
 // acknowledgePrintErrorHandler acknowledges a print error
@@ -1261,6 +1295,22 @@ func (ws *WebServer) nfcAssignHandler(c *gin.Context) {
 func (ws *WebServer) nfcUrlsHandler(c *gin.Context) {
 	var urls []gin.H
 
+	// When exactly one printer with a single toolhead is configured, each spool
+	// also gets a quick-assign URL that carries that toolhead as the location,
+	// so a single scan assigns the spool without needing a second location tag.
+	quickAssignLocation := ""
+	if configs, err := ws.bridge.GetAllPrinterConfigs(); err == nil && len(configs) == 1 {
+		for printerID, printerConfig := range configs {
+			if printerConfig.Toolheads == 1 {
+				displayName, err := ws.bridge.GetToolheadName(printerID, 0)
+				if err != nil {
+					displayName = "Toolhead 0"
+				}
+				quickAssignLocation = fmt.Sprintf("%s - %s", printerConfig.Name, displayName)
+			}
+		}
+	}
+
 	// Get all spools
 	spools, err := ws.bridge.spoolman.GetAllSpools()
 	if err != nil {
@@ -1271,6 +1321,19 @@ func (ws *WebServer) nfcUrlsHandler(c *gin.Context) {
 	// Generate spool URLs
 	for _, spool := range spools {
 		url := fmt.Sprintf("http://%s/api/nfc/assign?spool=%d", c.Request.Host, spool.ID)
+
+		// Optional single-scan quick-assign variant (see quickAssignLocation above)
+		comboURL := ""
+		comboQRBase64 := ""
+		if quickAssignLocation != "" {
+			comboURL = fmt.Sprintf("http://%s/api/nfc/assign?spool=%d&location=%s",
+				c.Request.Host, spool.ID, neturl.QueryEscape(quickAssignLocation))
+			if qrCode, err := qrcode.Encode(comboURL, qrcode.Medium, 256); err != nil {
+				log.Printf("Error generating quick-assign QR code for spool %d: %v", spool.ID, err)
+			} else {
+				comboQRBase64 = base64.StdEncoding.EncodeToString(qrCode)
+			}
+		}
 
 		// Safely get color hex
 		colorHex := ""
@@ -1288,30 +1351,36 @@ func (ws *WebServer) nfcUrlsHandler(c *gin.Context) {
 			log.Printf("Error generating QR code for spool %d: %v", spool.ID, err)
 			// Continue without QR code if generation fails
 			urls = append(urls, gin.H{
-				"type":             "spool",
-				"spool_id":         spool.ID,
-				"spool_name":       spool.Name,
-				"material":         spool.Material,
-				"brand":            spool.Brand,
-				"color_hex":        colorHex,
-				"remaining_weight": spool.RemainingWeight,
-				"url":              url,
-				"qr_code_base64":   "",
+				"type":                 "spool",
+				"spool_id":             spool.ID,
+				"spool_name":           spool.Name,
+				"material":             spool.Material,
+				"brand":                spool.Brand,
+				"color_hex":            colorHex,
+				"remaining_weight":     spool.RemainingWeight,
+				"url":                  url,
+				"qr_code_base64":       "",
+				"combo_url":            comboURL,
+				"combo_qr_code_base64": comboQRBase64,
+				"combo_location":       quickAssignLocation,
 			})
 			continue
 		}
 
 		qrCodeBase64 := base64.StdEncoding.EncodeToString(qrCode)
 		urls = append(urls, gin.H{
-			"type":             "spool",
-			"spool_id":         spool.ID,
-			"spool_name":       spool.Name,
-			"material":         spool.Material,
-			"brand":            spool.Brand,
-			"color_hex":        colorHex,
-			"remaining_weight": spool.RemainingWeight,
-			"url":              url,
-			"qr_code_base64":   qrCodeBase64,
+			"type":                 "spool",
+			"spool_id":             spool.ID,
+			"spool_name":           spool.Name,
+			"material":             spool.Material,
+			"brand":                spool.Brand,
+			"color_hex":            colorHex,
+			"remaining_weight":     spool.RemainingWeight,
+			"url":                  url,
+			"qr_code_base64":       qrCodeBase64,
+			"combo_url":            comboURL,
+			"combo_qr_code_base64": comboQRBase64,
+			"combo_location":       quickAssignLocation,
 		})
 	}
 
@@ -1324,7 +1393,7 @@ func (ws *WebServer) nfcUrlsHandler(c *gin.Context) {
 
 	// Generate filament URLs
 	for _, filament := range filaments {
-		url := fmt.Sprintf("%s/filament/show/%d", ws.bridge.config.SpoolmanURL, filament.ID)
+		url := fmt.Sprintf("%s/filament/show/%d", ws.bridge.spoolman.GetBaseURL(), filament.ID)
 
 		// Safely get color hex
 		colorHex := ""
@@ -1636,15 +1705,13 @@ func (ws *WebServer) createLocationHandler(c *gin.Context) {
 	}
 
 	if err := c.ShouldBindJSON(&req); err != nil {
-		log.Printf("createLocationHandler: bad request: %v", err)
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
 
-	log.Printf("createLocationHandler: creating location name='%s' in Spoolman", req.Name)
 	location, err := ws.bridge.spoolman.GetOrCreateLocation(req.Name)
 	if err != nil {
-		log.Printf("createLocationHandler: failed: %v", err)
+		log.Printf("Error creating location '%s': %v", req.Name, err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
@@ -1661,7 +1728,6 @@ func (ws *WebServer) createLocationHandler(c *gin.Context) {
 func (ws *WebServer) updateLocationHandler(c *gin.Context) {
 	oldName := c.Param("name")
 	if oldName == "" {
-		log.Printf("updateLocationHandler: missing location name")
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Location name is required"})
 		return
 	}
@@ -1671,14 +1737,12 @@ func (ws *WebServer) updateLocationHandler(c *gin.Context) {
 	}
 
 	if err := c.ShouldBindJSON(&req); err != nil {
-		log.Printf("updateLocationHandler: bad request for name='%s': %v", oldName, err)
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
 
-	log.Printf("updateLocationHandler: renaming '%s' to '%s' in Spoolman", oldName, req.Name)
 	if err := ws.bridge.spoolman.UpdateLocationByName(oldName, req.Name); err != nil {
-		log.Printf("updateLocationHandler: failed for name='%s': %v", oldName, err)
+		log.Printf("Error renaming location '%s' to '%s': %v", oldName, req.Name, err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
@@ -1706,7 +1770,6 @@ func (ws *WebServer) updateLocationHandler(c *gin.Context) {
 func (ws *WebServer) deleteLocationHandler(c *gin.Context) {
 	name := c.Param("name")
 	if name == "" {
-		log.Printf("deleteLocationHandler: missing location name")
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Location name is required"})
 		return
 	}
@@ -1714,7 +1777,7 @@ func (ws *WebServer) deleteLocationHandler(c *gin.Context) {
 	// Find location by name
 	location, err := ws.bridge.spoolman.FindLocationByName(name)
 	if err != nil {
-		log.Printf("deleteLocationHandler: error finding location '%s': %v", name, err)
+		log.Printf("Error finding location '%s': %v", name, err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
@@ -1725,9 +1788,8 @@ func (ws *WebServer) deleteLocationHandler(c *gin.Context) {
 	}
 
 	// Archive the location (Spoolman doesn't support deletion, only archiving)
-	log.Printf("deleteLocationHandler: archiving location '%s' (ID: %d)", name, location.ID)
 	if err := ws.bridge.spoolman.ArchiveLocation(location.ID); err != nil {
-		log.Printf("deleteLocationHandler: failed to archive location '%s': %v", name, err)
+		log.Printf("Error archiving location '%s': %v", name, err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to archive location"})
 		return
 	}

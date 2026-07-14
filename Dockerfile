@@ -23,10 +23,13 @@ COPY static/ ./static/
 # Copy source code
 COPY *.go ./
 
+# Release version injected by CI (see docker-build.yml); defaults to "dev" for local builds
+ARG VERSION=dev
+
 # Build the application with cache mounts
 RUN --mount=type=cache,target=/go/pkg/mod \
     --mount=type=cache,target=/root/.cache/go-build \
-    CGO_ENABLED=1 GOOS=linux go build -a -installsuffix cgo -o main .
+    CGO_ENABLED=1 GOOS=linux go build -ldflags "-X main.version=${VERSION}" -a -installsuffix cgo -o main .
 
 # Final stage
 FROM alpine:latest
@@ -53,6 +56,10 @@ EXPOSE 5000
 # Set environment variables
 ENV GIN_MODE=release
 ENV FILABRIDGE_DB_PATH=/app/data
+
+# Liveness check against the built-in health endpoint (busybox wget ships with Alpine)
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
+    CMD wget -qO- http://127.0.0.1:5000/healthz || exit 1
 
 # Run the application
 CMD ["./main"]

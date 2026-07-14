@@ -1,10 +1,14 @@
-version: '3.8'
-
 services:
   filabridge:
-    image: ghcr.io/needo37/filabridge:latest
+    image: ghcr.io/sargonas/filabridge:latest
     ports:
       - "5000:5000"
     volumes:
       - ./data:/app/data
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:5000/healthz"]
+      interval: 30s
+      timeout: 5s
+      start_period: 10s
+      retries: 3

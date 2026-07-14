@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -107,7 +108,7 @@ func LoadConfig(bridge *FilamentBridge) (*Config, error) {
 	// Load individual printer configurations from database
 	printerConfigs, err := bridge.GetAllPrinterConfigs()
 	if err != nil {
-		fmt.Printf("Error loading printer configs: %v\n", err)
+		log.Printf("Error loading printer configs: %v", err)
 		// Fallback to empty config
 		config.Printers["no_printers"] = PrinterConfig{
 			Name:      "No Printers Configured",

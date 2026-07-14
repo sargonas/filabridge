@@ -2,7 +2,6 @@
 
 // NFC Management Functions
 function switchNfcTab(tabName, clickedElement) {
-    console.log('Switching to NFC tab:', tabName);
     // Hide all NFC tab contents
     document.querySelectorAll('.nfc-tab-content').forEach(tab => {
         tab.classList.remove('active');
@@ -31,13 +30,10 @@ function switchNfcTab(tabName, clickedElement) {
     
     // Load data for specific tabs
     if (tabName === 'spool-tags') {
-        console.log('Loading spool tags...');
         loadSpoolTags();
     } else if (tabName === 'filament-tags') {
-        console.log('Loading filament tags...');
         loadFilamentTags();
     } else if (tabName === 'location-tags') {
-        console.log('Loading location tags...');
         loadLocationTags();
     }
 }
@@ -50,14 +46,11 @@ async function loadNfcData() {
 
 async function loadSpoolTags() {
     try {
-        console.log('Loading spool tags...');
         const response = await fetch('/api/nfc/urls');
         const data = await response.json();
-        console.log('NFC URLs data:', data);
         
         const container = document.getElementById('spool-list-container');
         const spoolUrls = data.urls.filter(url => url.type === 'spool');
-        console.log('Spool URLs:', spoolUrls);
         
         if (spoolUrls.length === 0) {
             container.innerHTML = '<p>No spools available</p>';
@@ -107,14 +100,11 @@ async function loadSpoolTags() {
 
 async function loadFilamentTags() {
     try {
-        console.log('Loading filament tags...');
         const response = await fetch('/api/nfc/urls');
         const data = await response.json();
-        console.log('NFC URLs data:', data);
         
         const container = document.getElementById('filament-list-container');
         const filamentUrls = data.urls.filter(url => url.type === 'filament');
-        console.log('Filament URLs:', filamentUrls);
         
         if (filamentUrls.length === 0) {
             container.innerHTML = '<p>No filaments available</p>';
@@ -164,14 +154,11 @@ async function loadFilamentTags() {
 
 async function loadLocationTags() {
     try {
-        console.log('Loading location tags...');
         const response = await fetch('/api/nfc/urls');
         const data = await response.json();
-        console.log('NFC URLs data:', data);
         
         const container = document.getElementById('location-list-container');
         const locationUrls = data.urls.filter(url => url.type === 'location');
-        console.log('Location URLs:', locationUrls);
         
         // Clear container and add informational message
         container.innerHTML = '';
@@ -342,7 +329,6 @@ async function copyUrlToClipboard(urlElementId, buttonElement) {
 
 // Display QR code for selected spool
 function displaySpoolQR(spoolData) {
-    console.log('Displaying spool QR:', spoolData);
     
     // Hide no-selection message
     document.getElementById('spool-no-selection').style.display = 'none';
@@ -356,11 +342,23 @@ function displaySpoolQR(spoolData) {
     document.getElementById('spool-selected-details').innerHTML = ``;
     document.getElementById('spool-qr-large').src = `data:image/png;base64,${spoolData.qr_code_base64}`;
     document.getElementById('spool-url-text').textContent = spoolData.url;
+
+    // Quick-assign variant: only present when a single printer with a single
+    // toolhead is configured, so one scan can assign the spool directly
+    const comboSection = document.getElementById('spool-combo-section');
+    if (spoolData.combo_url) {
+        document.getElementById('spool-combo-details').innerHTML =
+            `Assigns this spool to <strong>${spoolData.combo_location}</strong> in a single scan, no location tag needed.`;
+        document.getElementById('spool-combo-qr-large').src = `data:image/png;base64,${spoolData.combo_qr_code_base64}`;
+        document.getElementById('spool-combo-url-text').textContent = spoolData.combo_url;
+        comboSection.style.display = 'block';
+    } else {
+        comboSection.style.display = 'none';
+    }
 }
 
 // Display QR code for selected filament
 function displayFilamentQR(filamentData) {
-    console.log('Displaying filament QR:', filamentData);
     
     // Hide no-selection message
     document.getElementById('filament-no-selection').style.display = 'none';
@@ -378,7 +376,6 @@ function displayFilamentQR(filamentData) {
 
 // Display QR code for selected location
 function displayLocationQR(locationData) {
-    console.log('Displaying location QR:', locationData);
     
     // Hide no-selection message
     document.getElementById('location-no-selection').style.display = 'none';
@@ -470,7 +467,6 @@ async function addLocation() {
     if (!name) { alert('Please enter a location name'); return; }
     try {
         const url = apiUrl('/api/locations');
-        console.log('POST', url, { name });
         const res = await fetch(url, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
@@ -488,7 +484,6 @@ async function renameLocation(currentName) {
     if (!newName || newName.trim() === '' || newName === currentName) return;
     try {
         const url = apiUrl(`/api/locations/${encodeURIComponent(currentName)}`);
-        console.log('PUT', url, { name: newName.trim() });
         const res = await fetch(url, {
             method: 'PUT',
             headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
@@ -500,7 +495,6 @@ async function renameLocation(currentName) {
             throw new Error(errorText);
         }
         const result = await res.json();
-        console.log('Rename result:', result);
         await loadLocationTags();
         if (result.message) {
             alert(result.message);
@@ -513,9 +507,7 @@ async function renameLocation(currentName) {
 
 async function deleteLocation(name) {
     try {
-        console.log('deleteLocation called with name:', name);
         const url = apiUrl(`/api/locations/${encodeURIComponent(name)}`);
-        console.log('DELETE', url);
         const res = await fetch(url, {
             method: 'DELETE',
             headers: { 'Accept': 'application/json' },
@@ -526,7 +518,6 @@ async function deleteLocation(name) {
             throw new Error(errorText);
         }
         const result = await res.json();
-        console.log('Delete result:', result);
         await loadLocationTags();
     } catch (e) { 
         console.error('Delete error:', e); 
