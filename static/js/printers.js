@@ -46,7 +46,7 @@ function loadPrinters() {
                     printerCard.innerHTML = `
                         <h3>${printer.name || 'Unknown Printer'}</h3>
                         <div class="printer-info">
-                            <div><strong>Model:</strong> ${printer.model || 'Unknown'} (${printer.toolheads || 1} toolhead${printer.toolheads > 1 ? 's' : ''})</div>
+                            <div><strong>Toolheads:</strong> ${printer.toolheads || 1}</div>
                             <div><strong>Address:</strong> ${printer.ip_address || 'Not configured'}</div>
                             <div><strong>API Key:</strong> ${printer.api_key ? '••••••••' : 'Not configured'}</div>
                         </div>
@@ -159,10 +159,25 @@ document.getElementById('addPrinterForm').addEventListener('submit', function(e)
     const submitButton = this.querySelector('button[type="submit"]');
     const originalText = submitButton.textContent;
     submitButton.disabled = true;
-    submitButton.textContent = 'Detecting model...';
+    submitButton.textContent = 'Adding...';
     
-    // First detect printer model, then add printer
-    detectModelAndAddPrinter(name, ipAddress, apiKey, toolheads, submitButton, originalText);
+    addPrinter({
+        name: name,
+        ip_address: ipAddress,
+        api_key: apiKey,
+        toolheads: toolheads
+    })
+    .then(() => {
+        // Success - close modal and refresh
+        closeAddPrinterModal();
+        loadPrinters();
+    })
+    .catch(error => {
+        // Reset button state
+        submitButton.disabled = false;
+        submitButton.textContent = originalText;
+        alert('Error adding printer: ' + error.message);
+    });
 });
 
 // Handle edit form submission
@@ -172,7 +187,6 @@ document.getElementById('editPrinterForm').addEventListener('submit', function(e
     const formData = new FormData(this);
     const printerId = formData.get('printerId');
     const name = formData.get('name');
-    const model = formData.get('model');
     const ipAddress = formData.get('ip_address');
     const apiKey = formData.get('api_key');
     const toolheads = parseInt(formData.get('toolheads'));
@@ -197,7 +211,6 @@ document.getElementById('editPrinterForm').addEventListener('submit', function(e
     // Create printer config
     const printerConfig = {
         name: name,
-        model: model,
         ip_address: ipAddress,
         api_key: apiKey,
         toolheads: toolheads
@@ -229,53 +242,6 @@ document.getElementById('editPrinterForm').addEventListener('submit', function(e
     });
 });
 
-function detectModelAndAddPrinter(name, ipAddress, apiKey, toolheads, submitButton, originalText) {
-    // Detect printer model only
-    fetch('/api/detect_printer', {
-        method: 'POST',
-        headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({
-            ip_address: ipAddress,
-            api_key: apiKey
-        })
-    })
-    .then(response => response.json())
-    .then(data => {
-        // Check if there was an error (but still proceed if detection failed)
-        if (data.error) {
-            throw new Error(data.error);
-        }
-        
-        // Show warning if detection failed but still proceed
-        if (!data.detected && data.warning) {
-            console.warn('Printer detection failed:', data.warning);
-        }
-        
-        // Create printer config with detected model (or "Unknown" if detection failed)
-        const printerConfig = {
-            name: name,
-            model: data.model || "Unknown",
-            ip_address: ipAddress,
-            api_key: apiKey,
-            toolheads: toolheads
-        };
-        
-        // Add the printer
-        return addPrinter(printerConfig);
-    })
-    .then(() => {
-        // Success - close modal and refresh
-        closeAddPrinterModal();
-        loadPrinters();
-    })
-    .catch(error => {
-        // Reset button state
-        submitButton.disabled = false;
-        submitButton.textContent = originalText;
-        alert('Error adding printer: ' + error.message);
-    });
-}
-
 function editPrinter(printerId) {
     // Get the current printer data
     fetch('/api/printers')
@@ -290,7 +256,6 @@ function editPrinter(printerId) {
             // Populate the edit form with current data
             document.getElementById('editPrinterId').value = printerId;
             document.getElementById('editPrinterName').value = printer.name || '';
-            document.getElementById('editPrinterModel').value = printer.model || '';
             document.getElementById('editPrinterIP').value = printer.ip_address || '';
             document.getElementById('editPrinterAPIKey').value = printer.api_key || '';
             document.getElementById('editPrinterToolheads').value = printer.toolheads || 1;

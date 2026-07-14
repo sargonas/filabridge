@@ -166,7 +166,6 @@ func (ws *WebServer) setupRoutes() {
 		api.DELETE("/printers/:id", ws.deletePrinterHandler)
 		api.GET("/printers/:id/toolheads", ws.getToolheadNamesHandler)
 		api.PUT("/printers/:id/toolheads/:toolhead_id", ws.updateToolheadNameHandler)
-		api.POST("/detect_printer", ws.detectPrinterHandler)
 		api.GET("/print-errors", ws.getPrintErrorsHandler)
 		api.POST("/print-errors/:id/acknowledge", ws.acknowledgePrintErrorHandler)
 		api.GET("/print-history", ws.getPrintHistoryHandler)
@@ -712,7 +711,6 @@ func (ws *WebServer) getPrintersHandler(c *gin.Context) {
 	for printerID, printerConfig := range printerConfigs {
 		printerData := map[string]interface{}{
 			"name":       printerConfig.Name,
-			"model":      printerConfig.Model,
 			"ip_address": printerConfig.IPAddress,
 			"api_key":    printerConfig.APIKey,
 			"toolheads":  printerConfig.Toolheads,
@@ -805,22 +803,6 @@ func (ws *WebServer) updatePrinterHandler(c *gin.Context) {
 	if err := validateAddress(printerConfig.IPAddress); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
-	}
-
-	// Auto-detect model if address or API key changed, or if model is currently "Unknown"
-	if printerConfig.Model == "" || printerConfig.Model == ModelUnknown {
-		// Create PrusaLink client for detection
-		client := NewPrusaLinkClient(printerConfig.IPAddress, printerConfig.APIKey, 10, 60) // Use default timeouts for detection
-
-		printerInfo, err := client.GetPrinterInfo()
-		if err != nil {
-			log.Printf("Warning: could not auto-detect model for %s: %v (keeping model: %s)",
-				printerConfig.IPAddress, err, printerConfig.Model)
-		} else if detectedModel := detectPrinterModel(printerInfo.Hostname); detectedModel != ModelUnknown {
-			log.Printf("Detected printer model for %s: %s (hostname '%s')",
-				printerConfig.IPAddress, detectedModel, printerInfo.Hostname)
-			printerConfig.Model = detectedModel
-		}
 	}
 
 	// Save the updated printer configuration
@@ -945,73 +927,6 @@ func (ws *WebServer) updateToolheadNameHandler(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{"message": "Toolhead name updated successfully"})
-}
-
-// detectPrinterModel detects printer model from hostname
-func detectPrinterModel(hostname string) string {
-	hostnameLower := strings.TrimSpace(strings.ToLower(hostname))
-
-	switch {
-	case strings.Contains(hostnameLower, ModelCorePattern):
-		return ModelCoreOne
-	case strings.Contains(hostnameLower, ModelXLPattern):
-		return ModelXL
-	case strings.Contains(hostnameLower, ModelMK4Pattern):
-		return ModelMK4
-	case strings.Contains(hostnameLower, ModelMK3Pattern):
-		return ModelMK35
-	case strings.Contains(hostnameLower, ModelMiniPattern):
-		return ModelMiniPlus
-	}
-	return ModelUnknown
-}
-
-// detectPrinterHandler detects printer model from PrusaLink API
-func (ws *WebServer) detectPrinterHandler(c *gin.Context) {
-	var req struct {
-		IPAddress string `json:"ip_address" binding:"required"`
-		APIKey    string `json:"api_key" binding:"required"`
-	}
-
-	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid JSON"})
-		return
-	}
-
-	// Validate address
-	if err := validateAddress(req.IPAddress); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-		return
-	}
-
-	// Create PrusaLink client
-	client := NewPrusaLinkClient(req.IPAddress, req.APIKey, 10, 60) // Use default timeouts for detection
-
-	// Try to get printer info, but don't fail if it times out
-	printerInfo, err := client.GetPrinterInfo()
-	if err != nil {
-		log.Printf("Warning: printer detection failed for %s: %v", req.IPAddress, err)
-		// If API call fails, return default values instead of error
-		// This allows users to add printers even if they're offline
-		c.JSON(http.StatusOK, gin.H{
-			"model":    ModelUnknown,
-			"hostname": "Unknown",
-			"detected": false,
-			"warning":  "Could not connect to printer. You can still add it manually.",
-		})
-		return
-	}
-
-	// Use shared model detection function
-	model := detectPrinterModel(printerInfo.Hostname)
-	log.Printf("Detected printer at %s: hostname '%s', model %s", req.IPAddress, printerInfo.Hostname, model)
-
-	// Return detected information (toolheads will be provided by user)
-	c.JSON(http.StatusOK, gin.H{
-		"model":    model,
-		"hostname": printerInfo.Hostname,
-		"detected": true,
-	})
 }
 
 // testSpoolmanConnectionHandler tests the connection to Spoolman
