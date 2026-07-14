@@ -51,21 +51,3 @@ const (
 	SpoolmanTimeout              = 10  // seconds
 )
 
-// Printer model detection patterns
-const (
-	ModelCorePattern = "core"
-	ModelXLPattern   = "xl"
-	ModelMK4Pattern  = "mk4"
-	ModelMK3Pattern  = "mk3"
-	ModelMiniPattern = "mini"
-)
-
-// Printer model names
-const (
-	ModelCoreOne  = "CORE One"
-	ModelXL       = "XL"
-	ModelMK4      = "MK4"
-	ModelMK35     = "MK3.5"
-	ModelMiniPlus = "MINI+"
-	ModelUnknown  = "Unknown"
-)

@@ -12,7 +12,6 @@ import (
 // PrinterConfig represents configuration for a single printer
 type PrinterConfig struct {
 	Name      string `json:"name"`
-	Model     string `json:"model"`
 	IPAddress string `json:"ip_address"`
 	APIKey    string `json:"api_key,omitempty"`
 	Toolheads int    `json:"toolheads"`
@@ -112,7 +111,6 @@ func LoadConfig(bridge *FilamentBridge) (*Config, error) {
 		// Fallback to empty config
 		config.Printers["no_printers"] = PrinterConfig{
 			Name:      "No Printers Configured",
-			Model:     "Unknown",
 			IPAddress: "",
 			APIKey:    "",
 			Toolheads: 0,
@@ -127,7 +125,6 @@ func LoadConfig(bridge *FilamentBridge) (*Config, error) {
 		// Live printer status will be handled by the monitoring cycle
 		config.Printers[printerID] = PrinterConfig{
 			Name:      printerConfig.Name,
-			Model:     printerConfig.Model,
 			IPAddress: printerConfig.IPAddress,
 			APIKey:    printerConfig.APIKey,
 			Toolheads: printerConfig.Toolheads,
@@ -138,7 +135,6 @@ func LoadConfig(bridge *FilamentBridge) (*Config, error) {
 	if len(config.Printers) == 0 {
 		config.Printers["no_printers"] = PrinterConfig{
 			Name:      "No Printers Configured",
-			Model:     "Unknown",
 			IPAddress: "",
 			APIKey:    "",
 			Toolheads: 0,

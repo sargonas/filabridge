@@ -134,7 +134,6 @@ func (b *FilamentBridge) initDatabase() error {
 		`CREATE TABLE IF NOT EXISTS printer_configs (
 			printer_id TEXT PRIMARY KEY,
 			name TEXT NOT NULL,
-			model TEXT,
 			ip_address TEXT NOT NULL,
 			api_key TEXT,
 			toolheads INTEGER DEFAULT 1,
@@ -197,6 +196,15 @@ func (b *FilamentBridge) initDatabase() error {
 			recorded_at TIMESTAMP NOT NULL,
 			PRIMARY KEY (printer_id, job_id)
 		)`,
+	}
+
+	// Pre-release builds stored a cosmetic printer model; drop the leftover
+	// column from existing databases (it was display-only, nothing reads it).
+	var modelCol string
+	if err := b.db.QueryRow(`SELECT name FROM pragma_table_info('printer_configs') WHERE name='model'`).Scan(&modelCol); err == nil {
+		if _, err := b.db.Exec(`ALTER TABLE printer_configs DROP COLUMN model`); err != nil {
+			return fmt.Errorf("failed to drop model column: %w", err)
+		}
 	}
 
 	// Pre-release builds named the recorded_jobs table billed_jobs; rename it
@@ -380,7 +388,7 @@ func (b *FilamentBridge) SetAutoAssignPreviousSpoolLocation(location string) err
 
 // GetAllPrinterConfigs gets all printer configurations
 func (b *FilamentBridge) GetAllPrinterConfigs() (map[string]PrinterConfig, error) {
-	rows, err := b.db.Query("SELECT printer_id, name, model, ip_address, api_key, toolheads FROM printer_configs")
+	rows, err := b.db.Query("SELECT printer_id, name, ip_address, api_key, toolheads FROM printer_configs")
 	if err != nil {
 		return nil, fmt.Errorf("failed to get printer configs: %w", err)
 	}
@@ -388,14 +396,13 @@ func (b *FilamentBridge) GetAllPrinterConfigs() (map[string]PrinterConfig, error
 
 	configs := make(map[string]PrinterConfig)
 	for rows.Next() {
-		var printerID, name, model, ipAddress, apiKey string
+		var printerID, name, ipAddress, apiKey string
 		var toolheads int
-		if err := rows.Scan(&printerID, &name, &model, &ipAddress, &apiKey, &toolheads); err != nil {
+		if err := rows.Scan(&printerID, &name, &ipAddress, &apiKey, &toolheads); err != nil {
 			return nil, fmt.Errorf("failed to scan printer config row: %w", err)
 		}
 		configs[printerID] = PrinterConfig{
 			Name:      name,
-			Model:     model,
 			IPAddress: ipAddress,
 			APIKey:    apiKey,
 			Toolheads: toolheads,
@@ -411,9 +418,9 @@ func (b *FilamentBridge) SavePrinterConfig(printerID string, config PrinterConfi
 	defer b.mutex.Unlock()
 
 	_, err := b.db.Exec(`
-		INSERT OR REPLACE INTO printer_configs (printer_id, name, model, ip_address, api_key, toolheads)
-		VALUES (?, ?, ?, ?, ?, ?)
-	`, printerID, config.Name, config.Model, config.IPAddress, config.APIKey, config.Toolheads)
+		INSERT OR REPLACE INTO printer_configs (printer_id, name, ip_address, api_key, toolheads)
+		VALUES (?, ?, ?, ?, ?)
+	`, printerID, config.Name, config.IPAddress, config.APIKey, config.Toolheads)
 	if err != nil {
 		return fmt.Errorf("failed to save printer config: %w", err)
 	}

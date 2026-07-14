@@ -236,7 +236,6 @@ The web interface also provides REST API endpoints:
 - `GET /api/print-errors` - Get all unacknowledged print errors
 - `POST /api/print-errors/{id}/acknowledge` - Acknowledge a print error
 - `GET/POST /api/printers`, `PUT/DELETE /api/printers/{id}` - Manage printer configurations
-- `POST /api/detect_printer` - Detect a printer's model via PrusaLink
 - `GET/POST /api/config` - Read and update configuration
 - `GET /api/nfc/assign` - Handle NFC tag scans (spool, location, or both in one URL)
 - `GET /api/nfc/urls` - Get all NFC URLs with QR codes

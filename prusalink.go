@@ -86,15 +86,6 @@ type PrusaLinkJob struct {
 	} `json:"filament,omitempty"`
 }
 
-// PrusaLinkInfo represents the printer info response from PrusaLink
-type PrusaLinkInfo struct {
-	Hostname         string  `json:"hostname"`
-	Serial           string  `json:"serial"`
-	NozzleDiameter   float64 `json:"nozzle_diameter"`
-	MMU              bool    `json:"mmu"`
-	MinExtrusionTemp int     `json:"min_extrusion_temp"`
-}
-
 // NewPrusaLinkClient creates a new PrusaLink client
 func NewPrusaLinkClient(ipAddress, apiKey string, timeout, fileDownloadTimeout int) *PrusaLinkClient {
 	// Create a custom dialer with timeout for DNS resolution
@@ -189,35 +180,6 @@ func (c *PrusaLinkClient) GetJobInfo() (*PrusaLinkJob, error) {
 	}
 
 	return &job, nil
-}
-
-// GetPrinterInfo retrieves the printer information. Failures are reported via
-// the returned error; callers decide what to log.
-func (c *PrusaLinkClient) GetPrinterInfo() (*PrusaLinkInfo, error) {
-	req, err := http.NewRequest("GET", c.baseURL+"/api/v1/info", nil)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create printer info request: %w", err)
-	}
-
-	c.addAPIKey(req)
-
-	resp, err := c.httpClient.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get printer info from PrusaLink: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("PrusaLink API error: %d - %s", resp.StatusCode, string(body))
-	}
-
-	var info PrusaLinkInfo
-	if err := json.NewDecoder(resp.Body).Decode(&info); err != nil {
-		return nil, fmt.Errorf("failed to decode printer info response: %w", err)
-	}
-
-	return &info, nil
 }
 
 // GetGcodeFile downloads the G-code file for a completed print job
