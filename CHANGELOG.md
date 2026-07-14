@@ -5,6 +5,21 @@ All notable changes to FilaBridge will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v0.9.2] - 2026-07-14
+
+### Fixed
+
+- shutdown race, websocket hub race, auto-assign toggle, cancelled-print overbilling, missing error page
+
+### Other
+
+- Merge pull request #3 from sargonas/QoL-improvements
+- release versions are properly tagged fro docker with pre release in mind
+- removed old code that self writes release notes, to manage them manually better.
+- heavy logging clean up
+- QoL pass 2:
+- QoL Pass for docker mode only, and project take-over housekeeping
+
 ## [v0.9.1] - 2026-07-14
 
 ### Added
