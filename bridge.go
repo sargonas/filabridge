@@ -12,7 +12,7 @@ import (
 	"sync"
 	"time"
 
-	_ "github.com/mattn/go-sqlite3"
+	_ "modernc.org/sqlite"
 )
 
 // FilamentBridge manages the connection between PrusaLink and Spoolman
@@ -116,7 +116,7 @@ func (b *FilamentBridge) initDatabase() error {
 	// reads while writing. The busy timeout makes concurrent writers wait
 	// instead of failing with SQLITE_BUSY. Note: WAL is unsuitable on network
 	// filesystems (NFS/SMB); keep the database on local disk or a Docker volume.
-	db, err := sql.Open("sqlite3", fmt.Sprintf("file:%s?_journal_mode=WAL&_busy_timeout=5000", dbFile))
+	db, err := sql.Open("sqlite", fmt.Sprintf("file:%s?_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)", dbFile))
 	if err != nil {
 		return fmt.Errorf("failed to open database: %w", err)
 	}

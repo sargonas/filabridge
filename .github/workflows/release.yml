@@ -6,14 +6,16 @@ on:
       - 'v*'
   workflow_dispatch:
 
-permissions:
-  contents: write
-
 jobs:
-  build:
-    name: Build and Release
+  # Build the release binaries and attach them to the GitHub release.
+  # CGO is disabled (the sqlite driver is pure Go), so both architectures
+  # cross-compile natively with no extra toolchains.
+  binaries:
+    name: Build and Release Binaries
     runs-on: ubuntu-latest
-    
+    permissions:
+      contents: write
+
     steps:
       - name: Checkout code
         uses: actions/checkout@v7
@@ -23,31 +25,16 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v6
         with:
-          go-version: '1.23'
+          go-version: '1.25'
 
-      - name: Install cross-compilation tools
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y gcc-aarch64-linux-gnu
-
-      - name: Build for Linux AMD64
+      - name: Build binaries
         env:
-          CGO_ENABLED: 1
+          CGO_ENABLED: 0
           GOOS: linux
-          GOARCH: amd64
         run: |
-          go build -ldflags "-X main.version=${GITHUB_REF_NAME}" -o filabridge-linux-amd64 .
-          chmod +x filabridge-linux-amd64
-
-      - name: Build for Linux ARM64
-        env:
-          CGO_ENABLED: 1
-          GOOS: linux
-          GOARCH: arm64
-          CC: aarch64-linux-gnu-gcc
-        run: |
-          go build -ldflags "-X main.version=${GITHUB_REF_NAME}" -o filabridge-linux-arm64 .
-          chmod +x filabridge-linux-arm64
+          GOARCH=amd64 go build -ldflags "-X main.version=${GITHUB_REF_NAME}" -o filabridge-linux-amd64 .
+          GOARCH=arm64 go build -ldflags "-X main.version=${GITHUB_REF_NAME}" -o filabridge-linux-arm64 .
+          chmod +x filabridge-linux-amd64 filabridge-linux-arm64
 
       - name: Create checksums
         run: |
@@ -58,7 +45,7 @@ jobs:
         run: |
           VERSION=${GITHUB_REF#refs/tags/}
           echo "Generating changelog for version: $VERSION"
-          
+
           # Get commits since last tag, excluding release commits
           # Get all tags sorted by version, then find the one before current tag
           CURRENT_TAG=${GITHUB_REF#refs/tags/}
@@ -69,21 +56,21 @@ jobs:
           else
             COMMITS=$(git log --pretty=format:"%s" $LAST_TAG..HEAD)
           fi
-          
+
           # Initialize arrays for different commit types
           declare -a FEATURES=()
           declare -a FIXES=()
           declare -a CHANGES=()
           declare -a DOCS=()
           declare -a OTHER=()
-          
+
           # Process each commit
           while IFS= read -r commit; do
             # Skip automated changelog update commits
             if [[ "$commit" =~ ^chore\(release\):\ update\ changelog\ for ]]; then
               continue
             fi
-            
+
             # Categorize commits by conventional commit prefixes and strip prefixes properly
             if [[ "$commit" =~ ^feat(\(.+\))?:\ (.+) ]]; then
               # Extract message after "feat: " or "feat(scope): "
@@ -116,7 +103,7 @@ jobs:
               OTHER+=("- $commit")
             fi
           done <<< "$COMMITS"
-          
+
           # Read existing CHANGELOG.md if it exists
           if [ -f "CHANGELOG.md" ]; then
             # Find the first version entry line (starts with ## [)
@@ -135,14 +122,14 @@ jobs:
             printf '# Changelog\n\nAll notable changes to FilaBridge will be documented in this file.\n\nThe format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),\nand this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).\n\n' > /tmp/header.txt
             touch /tmp/body.txt
           fi
-          
+
           # Build the new version entry
           printf '## [VERSION_PLACEHOLDER] - DATE_PLACEHOLDER\n\n' > /tmp/new_entry.txt
-          
+
           # Replace placeholders in new entry
           sed -i "s/VERSION_PLACEHOLDER/$VERSION/g" /tmp/new_entry.txt
           sed -i "s/DATE_PLACEHOLDER/$(date +%Y-%m-%d)/g" /tmp/new_entry.txt
-          
+
           # Add categorized sections
           if [ ${#FEATURES[@]} -gt 0 ]; then
             echo "### Added" >> /tmp/new_entry.txt
@@ -150,41 +137,41 @@ jobs:
             printf '%s\n' "${FEATURES[@]}" >> /tmp/new_entry.txt
             echo "" >> /tmp/new_entry.txt
           fi
-          
+
           if [ ${#FIXES[@]} -gt 0 ]; then
             echo "### Fixed" >> /tmp/new_entry.txt
             echo "" >> /tmp/new_entry.txt
             printf '%s\n' "${FIXES[@]}" >> /tmp/new_entry.txt
             echo "" >> /tmp/new_entry.txt
           fi
-          
+
           if [ ${#CHANGES[@]} -gt 0 ]; then
             echo "### Changed" >> /tmp/new_entry.txt
             echo "" >> /tmp/new_entry.txt
             printf '%s\n' "${CHANGES[@]}" >> /tmp/new_entry.txt
             echo "" >> /tmp/new_entry.txt
           fi
-          
+
           if [ ${#DOCS[@]} -gt 0 ]; then
             echo "### Documentation" >> /tmp/new_entry.txt
             echo "" >> /tmp/new_entry.txt
             printf '%s\n' "${DOCS[@]}" >> /tmp/new_entry.txt
             echo "" >> /tmp/new_entry.txt
           fi
-          
+
           if [ ${#OTHER[@]} -gt 0 ]; then
             echo "### Other" >> /tmp/new_entry.txt
             echo "" >> /tmp/new_entry.txt
             printf '%s\n' "${OTHER[@]}" >> /tmp/new_entry.txt
             echo "" >> /tmp/new_entry.txt
           fi
-          
+
           # Combine header + new entry + existing body
           cat /tmp/header.txt /tmp/new_entry.txt /tmp/body.txt > CHANGELOG.md
-          
+
           # Clean up temp files
           rm -f /tmp/header.txt /tmp/body.txt /tmp/new_entry.txt
-          
+
           # Show what was generated
           echo "Generated changelog:"
           cat CHANGELOG.md
@@ -193,13 +180,13 @@ jobs:
         run: |
           git config --local user.email "action@github.com"
           git config --local user.name "GitHub Action"
-          
+
           # Check if we're in detached HEAD and checkout main branch
           if [ "$(git rev-parse --abbrev-ref HEAD)" = "HEAD" ]; then
             echo "In detached HEAD state, checking out main branch"
             git checkout main
           fi
-          
+
           git add CHANGELOG.md
           if git diff --staged --quiet; then
             echo "No changes to commit"
@@ -222,3 +209,59 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+  # Build and push the multi-arch Docker image. The Dockerfile cross-compiles
+  # natively via BUILDPLATFORM, so nothing heavy runs under QEMU emulation.
+  docker:
+    name: Build and Push Docker Image
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Extract version
+        id: get_version
+        run: echo "VERSION=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Version tags come from the pushed git tag: v0.3.0 publishes image tag
+      # 0.3.0 plus :latest. Pre-release semver (v0.4.0-rc1) publishes its version
+      # tag but leaves :latest untouched. Manual workflow_dispatch runs from a
+      # branch publish the branch name (e.g. :main) as a dev image instead.
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@v6
+        with:
+          images: ghcr.io/${{ github.repository }}
+          tags: |
+            type=semver,pattern={{version}}
+            type=ref,event=branch
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          build-args: |
+            VERSION=${{ steps.get_version.outputs.VERSION }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: |
+            type=gha
+            type=registry,ref=ghcr.io/${{ github.repository }}:buildcache
+          cache-to: |
+            type=gha,mode=max
+            type=registry,ref=ghcr.io/${{ github.repository }}:buildcache,mode=max
