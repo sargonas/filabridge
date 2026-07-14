@@ -25,7 +25,8 @@ type FilamentBridge struct {
 	processingPrints map[string]bool       // Guard against overlapping monitor cycles billing the same printer
 	printErrors      map[string]PrintError // Store print processing errors
 	offlinePrinters  map[string]bool       // Printers currently logged as offline (edge-triggered reachability logging)
-	offlineMutex     sync.Mutex
+	printerStates    map[string]string     // Last logged state per printer (edge-triggered state logging)
+	offlineMutex     sync.Mutex            // Guards offlinePrinters and printerStates
 	errorMutex       sync.RWMutex
 	mutex            sync.RWMutex
 }
@@ -83,6 +84,7 @@ func NewFilamentBridge(config *Config) (*FilamentBridge, error) {
 		processingPrints: make(map[string]bool),
 		printErrors:      make(map[string]PrintError),
 		offlinePrinters:  make(map[string]bool),
+		printerStates:    make(map[string]string),
 	}
 
 	// Initialize database
@@ -214,148 +216,6 @@ func (b *FilamentBridge) initDatabase() error {
 	// Initialize default configuration
 	if err := b.initializeDefaultConfig(); err != nil {
 		return fmt.Errorf("failed to initialize default configuration: %w", err)
-	}
-
-	// Migrate existing FilaBridge locations to Spoolman
-	if err := b.migrateLocationsToSpoolman(); err != nil {
-		log.Printf("Warning: Failed to migrate locations to Spoolman: %v", err)
-		// Don't fail initialization if migration fails
-	}
-
-	// Create Spoolman locations for existing toolhead mappings
-	if err := b.migrateToolheadMappingsToSpoolman(); err != nil {
-		log.Printf("Warning: Failed to migrate toolhead mappings to Spoolman: %v", err)
-		// Don't fail initialization if migration fails
-	}
-
-	return nil
-}
-
-// migrateLocationsToSpoolman migrates existing FilaBridge locations to Spoolman
-func (b *FilamentBridge) migrateLocationsToSpoolman() error {
-	// Check if fb_locations table exists by trying to query it
-	rows, err := b.db.Query("SELECT name, type, printer_name, toolhead_id FROM fb_locations")
-	if err != nil {
-		// Table doesn't exist or is empty, nothing to migrate
-		return nil
-	}
-	defer rows.Close()
-
-	migratedCount := 0
-	for rows.Next() {
-		var name, locationType, printerName sql.NullString
-		var toolheadID sql.NullInt64
-
-		if err := rows.Scan(&name, &locationType, &printerName, &toolheadID); err != nil {
-			log.Printf("Warning: Failed to scan location row during migration: %v", err)
-			continue
-		}
-
-		if !name.Valid || name.String == "" {
-			continue
-		}
-
-		locationName := name.String
-
-		// Skip if this is a virtual printer toolhead location (will be created on-demand)
-		if b.isVirtualPrinterToolheadLocation(locationName) {
-			log.Printf("Migration: Skipping virtual printer toolhead location '%s'", locationName)
-			continue
-		}
-
-		// Check if location exists in Spoolman
-		// Note: Spoolman API doesn't support creating locations via POST.
-		// Locations must be created manually in Spoolman UI or are auto-created when referenced in spools.
-		existingLocation, err := b.spoolman.FindLocationByName(locationName)
-		if err != nil {
-			log.Printf("Warning: Failed to check if location '%s' exists in Spoolman: %v", locationName, err)
-			continue
-		}
-
-		if existingLocation == nil {
-			log.Printf("Migration: Location '%s' does not exist in Spoolman. It will be created when referenced in a spool, or can be created manually in Spoolman UI.", locationName)
-		} else {
-			migratedCount++
-			log.Printf("Migration: Location '%s' already exists in Spoolman", locationName)
-		}
-	}
-
-	if migratedCount > 0 {
-		log.Printf("Migration: Successfully migrated %d location(s) from FilaBridge to Spoolman", migratedCount)
-	}
-
-	return nil
-}
-
-// migrateToolheadMappingsToSpoolman creates Spoolman locations for existing toolhead mappings
-func (b *FilamentBridge) migrateToolheadMappingsToSpoolman() error {
-	// Get all printer configs
-	printerConfigs, err := b.GetAllPrinterConfigs()
-	if err != nil {
-		return fmt.Errorf("failed to get printer configs: %w", err)
-	}
-
-	// Get all toolhead mappings
-	allMappings, err := b.GetAllToolheadMappings()
-	if err != nil {
-		return fmt.Errorf("failed to get toolhead mappings: %w", err)
-	}
-
-	createdCount := 0
-	for printerName, printerMappings := range allMappings {
-		// Find the printer ID for this printer name
-		var printerID string
-		for pid, config := range printerConfigs {
-			if config.Name == printerName {
-				printerID = pid
-				break
-			}
-		}
-
-		if printerID == "" {
-			log.Printf("Migration: Could not find printer ID for printer name '%s', skipping", printerName)
-			continue
-		}
-
-		// Get toolhead names for this printer
-		toolheadNames, err := b.GetAllToolheadNames(printerID)
-		if err != nil {
-			log.Printf("Warning: Failed to get toolhead names for printer %s: %v", printerID, err)
-			toolheadNames = make(map[int]string)
-		}
-
-		// Create locations for each toolhead mapping
-		for toolheadID := range printerMappings {
-			// Get display name (custom or default)
-			var displayName string
-			if name, exists := toolheadNames[toolheadID]; exists {
-				displayName = name
-			} else {
-				displayName = fmt.Sprintf("Toolhead %d", toolheadID)
-			}
-
-			locationName := fmt.Sprintf("%s - %s", printerName, displayName)
-
-			// Check if location exists in Spoolman
-			// Note: Spoolman API doesn't support creating locations via POST.
-			// Locations will be auto-created when spools are assigned to toolheads.
-			existingLocation, err := b.spoolman.FindLocationByName(locationName)
-			if err != nil {
-				log.Printf("Warning: Failed to check if toolhead location '%s' exists in Spoolman: %v", locationName, err)
-				continue
-			}
-
-			if existingLocation == nil {
-				log.Printf("Migration: Toolhead location '%s' does not exist in Spoolman. It will be created when a spool is assigned to this toolhead.", locationName)
-			} else {
-				createdCount++
-				log.Printf("Migration: Toolhead location '%s' already exists in Spoolman", locationName)
-			}
-		}
-	}
-
-	if createdCount > 0 {
-		log.Printf("Migration: Successfully created %d toolhead location(s) in Spoolman", createdCount)
 	}
 
 	return nil
@@ -999,12 +859,9 @@ func (b *FilamentBridge) GetPrintHistory(limit int) ([]PrintHistory, error) {
 
 // MonitorPrinters monitors all printers for print status changes
 func (b *FilamentBridge) MonitorPrinters() {
-	log.Printf("Monitoring printers at %s", time.Now().Format(time.RFC3339))
-
 	// Get a safe snapshot of the config to prevent iteration issues
 	configSnapshot := b.GetConfigSnapshot()
 	if configSnapshot == nil || len(configSnapshot.Printers) == 0 {
-		log.Printf("No printers configured - skipping monitoring")
 		return
 	}
 
@@ -1137,6 +994,30 @@ func (b *FilamentBridge) noteConnectivity(printerID, ipAddress, name string, err
 	}
 }
 
+// noteStateChange performs edge-triggered logging of a printer's state: one log
+// line per transition (IDLE -> PRINTING, PRINTING -> FINISHED, ...) instead of
+// one per poll cycle.
+func (b *FilamentBridge) noteStateChange(printerID, name, state, jobName string) {
+	b.offlineMutex.Lock()
+	defer b.offlineMutex.Unlock()
+
+	previous, seen := b.printerStates[printerID]
+	if state == previous {
+		return
+	}
+	b.printerStates[printerID] = state
+
+	jobSuffix := ""
+	if jobName != "" && jobName != "No active job" {
+		jobSuffix = fmt.Sprintf(" (job: %s)", jobName)
+	}
+	if !seen {
+		log.Printf("Printer %s: state %s%s", name, state, jobSuffix)
+		return
+	}
+	log.Printf("Printer %s: %s -> %s%s", name, previous, state, jobSuffix)
+}
+
 // monitorPrusaLink monitors a single printer using PrusaLink API
 func (b *FilamentBridge) monitorPrusaLink(printerID string, config PrinterConfig) error {
 	client := NewPrusaLinkClient(config.IPAddress, config.APIKey, b.config.PrusaLinkTimeout, b.config.PrusaLinkFileDownloadTimeout)
@@ -1183,8 +1064,7 @@ func (b *FilamentBridge) monitorPrusaLink(printerID string, config PrinterConfig
 	isTerminal := currentState == StateIdle || currentState == StateFinished ||
 		currentState == StateStopped || currentState == StateError
 
-	log.Printf("Printer %s (%s): state=%s, job=%s, tracking=%v",
-		config.IPAddress, printerID, currentState, jobName, active != nil)
+	b.noteStateChange(printerID, config.Name, currentState, jobName)
 
 	switch {
 	case isPrinting:
@@ -1611,46 +1491,6 @@ func (b *FilamentBridge) processFilamentUsage(printerName string, filamentUsage 
 	}
 
 	return nil
-}
-
-// isVirtualPrinterToolheadLocation checks if a location name matches the pattern
-// of a virtual printer toolhead location (e.g., "PrinterName - Toolhead 0" or "PrinterName - Black")
-func (b *FilamentBridge) isVirtualPrinterToolheadLocation(name string) bool {
-	// Get all printer configurations
-	printerConfigs, err := b.GetAllPrinterConfigs()
-	if err != nil {
-		// If we can't get printer configs, assume it's not a virtual location
-		log.Printf("Warning: Could not get printer configurations to check virtual location: %v", err)
-		return false
-	}
-
-	// Check if the name matches any printer's toolhead location pattern
-	for printerID, printerConfig := range printerConfigs {
-		// Get toolhead names for this printer
-		toolheadNames, err := b.GetAllToolheadNames(printerID)
-		if err != nil {
-			log.Printf("Warning: Could not get toolhead names for printer %s: %v", printerID, err)
-			toolheadNames = make(map[int]string)
-		}
-
-		for toolheadID := 0; toolheadID < printerConfig.Toolheads; toolheadID++ {
-			// Check default pattern
-			expectedNameDefault := fmt.Sprintf("%s - Toolhead %d", printerConfig.Name, toolheadID)
-			if name == expectedNameDefault {
-				return true
-			}
-
-			// Check custom name pattern
-			if displayName, exists := toolheadNames[toolheadID]; exists {
-				expectedNameCustom := fmt.Sprintf("%s - %s", printerConfig.Name, displayName)
-				if name == expectedNameCustom {
-					return true
-				}
-			}
-		}
-	}
-
-	return false
 }
 
 // Close closes the database connection
