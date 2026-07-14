@@ -1,10 +1,9 @@
-# Build stage
-FROM golang:1.23-alpine AS builder
+# Build stage. --platform=$BUILDPLATFORM makes the builder always run natively
+# on the build host and cross-compile for the target platform, so multi-arch
+# images never compile Go under QEMU emulation. This requires CGO_ENABLED=0,
+# which the pure-Go sqlite driver (modernc.org/sqlite) allows.
+FROM --platform=$BUILDPLATFORM golang:1.25-alpine AS builder
 
-# Install build dependencies for CGO compilation
-RUN apk add --no-cache git build-base
-
-# Set working directory
 WORKDIR /app
 
 # Copy go mod files
@@ -14,38 +13,34 @@ COPY go.mod go.sum ./
 RUN --mount=type=cache,target=/go/pkg/mod \
     go mod download
 
-# Copy templates directory separately for better layer caching
+# Copy embedded assets and source code
 COPY templates/ ./templates/
-
-# Copy static files directory
 COPY static/ ./static/
-
-# Copy source code
 COPY *.go ./
 
-# Release version injected by CI (see docker-build.yml); defaults to "dev" for local builds
+# Release version injected by CI (see release.yml); defaults to "dev" for local builds
 ARG VERSION=dev
 
-# Build the application with cache mounts
+# Cross-compile a fully static binary for the target platform
+ARG TARGETOS TARGETARCH
 RUN --mount=type=cache,target=/go/pkg/mod \
     --mount=type=cache,target=/root/.cache/go-build \
-    CGO_ENABLED=1 GOOS=linux go build -ldflags "-X main.version=${VERSION}" -a -installsuffix cgo -o main .
+    CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} \
+    go build -ldflags "-X main.version=${VERSION}" -o main .
 
 # Final stage
 FROM alpine:latest
 
-# Install runtime dependencies
-# Using --no-scripts to work around Alpine 3.23 trigger script issues with QEMU emulation on arm64
-RUN apk update && apk --no-cache --no-scripts add ca-certificates sqlite
+# Install runtime dependencies (the binary is static; only CA certs are needed
+# for HTTPS). --no-scripts works around Alpine 3.23 trigger script issues with
+# QEMU emulation on arm64.
+RUN apk update && apk --no-cache --no-scripts add ca-certificates
 
 # Create app directory
 WORKDIR /app
 
-# Copy the binary from builder stage
+# Copy the binary from builder stage (templates and static assets are embedded)
 COPY --from=builder /app/main .
-
-# Copy static files from builder stage
-COPY --from=builder /app/static ./static
 
 # Create directory for database
 RUN mkdir -p /app/data

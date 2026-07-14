@@ -97,7 +97,7 @@ This format helps us automatically generate changelogs and determine semantic ve
 
 ### Prerequisites
 
-- Go 1.23 or higher
+- Go 1.25 or higher
 - Docker (for testing with Spoolman)
 - A PrusaLink-compatible printer (or mock for testing)
 

@@ -1,7 +1,7 @@
 # FilaBridge
 
 [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)
-[![Go Version](https://img.shields.io/badge/Go-1.23-00ADD8?logo=go)](https://golang.org/)
+[![Go Version](https://img.shields.io/badge/Go-1.25-00ADD8?logo=go)](https://golang.org/)
 [![GitHub release](https://img.shields.io/github/v/release/sargonas/filabridge)](https://github.com/sargonas/filabridge/releases)
 
 A self-hosted Go microservice that bridges PrusaLink-compatible printers and Spoolman for (mostly) automatic filament inventory management. Originally designed for Prusa printers (CORE One, XL, MK4, etc.) but will work with any printer that supports the PrusaLink API.
@@ -65,7 +65,7 @@ No more manual updates or guesswork about remaining filament!
 - A PrusaLink-compatible 3D printer (Prusa or any printer with a PrusaLink API)
 - Enable PrusaLink on your printer(s) for local network access, and copy the password
 - Spoolman running somewhere
-- **For building from source**: Go 1.23 or higher
+- **For building from source**: Go 1.25 or higher
 - **(Optional) For NFC features**: NFC-capable smartphone and NFC tags (NTAG213/215/216 recommended)
 - **(Recommendation) NFC Tools Pro** mobile app (for programming tags)
 
