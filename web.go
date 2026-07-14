@@ -193,8 +193,9 @@ func (h *WebSocketHub) run() {
 		case client := <-h.register:
 			h.mutex.Lock()
 			h.clients[client] = true
+			total := len(h.clients)
 			h.mutex.Unlock()
-			log.Printf("WebSocket client connected. Total clients: %d", len(h.clients))
+			log.Printf("WebSocket client connected. Total clients: %d", total)
 
 		case client := <-h.unregister:
 			h.mutex.Lock()
@@ -202,11 +203,14 @@ func (h *WebSocketHub) run() {
 				delete(h.clients, client)
 				close(client.send)
 			}
+			total := len(h.clients)
 			h.mutex.Unlock()
-			log.Printf("WebSocket client disconnected. Total clients: %d", len(h.clients))
+			log.Printf("WebSocket client disconnected. Total clients: %d", total)
 
 		case message := <-h.broadcast:
-			h.mutex.RLock()
+			// Write lock: a client with a full send buffer is dropped here,
+			// which mutates the map (delete under RLock is a data race).
+			h.mutex.Lock()
 			for client := range h.clients {
 				select {
 				case client.send <- message:
@@ -215,7 +219,7 @@ func (h *WebSocketHub) run() {
 					delete(h.clients, client)
 				}
 			}
-			h.mutex.RUnlock()
+			h.mutex.Unlock()
 		}
 	}
 }
@@ -362,6 +366,13 @@ func (c *WebSocketClient) writePump() {
 
 // dashboardHandler serves the main dashboard
 func (ws *WebServer) dashboardHandler(c *gin.Context) {
+	// Snapshot the config: direct ws.bridge.config field reads race with
+	// ReloadConfig swapping the pointer.
+	cfg := ws.bridge.GetConfigSnapshot()
+	if cfg == nil {
+		cfg = &Config{Printers: make(map[string]PrinterConfig)}
+	}
+
 	status, err := ws.bridge.GetStatus()
 	if err != nil {
 		c.HTML(http.StatusInternalServerError, "error.html", gin.H{
@@ -400,10 +411,10 @@ func (ws *WebServer) dashboardHandler(c *gin.Context) {
 		"HasPrintErrors":    hasPrintErrors,
 		"PrintErrors":       printErrors,
 		"IsFirstRun":        isFirstRun,
-		"Printers":          ws.bridge.config.Printers,
+		"Printers":          cfg.Printers,
 		"SpoolmanConnected": spoolmanConnected,
 		"SpoolmanError":     spoolmanError,
-		"SpoolmanBaseURL":   ws.bridge.config.SpoolmanURL,
+		"SpoolmanBaseURL":   cfg.SpoolmanURL,
 	})
 }
 
@@ -661,13 +672,15 @@ func (ws *WebServer) getAutoAssignPreviousSpoolHandler(c *gin.Context) {
 
 // updateAutoAssignPreviousSpoolHandler updates auto-assign previous spool settings
 func (ws *WebServer) updateAutoAssignPreviousSpoolHandler(c *gin.Context) {
+	// Note: no binding:"required" on Enabled - the validator treats false as a
+	// missing value, which would make it impossible to ever disable the feature.
 	var req struct {
-		Enabled  bool   `json:"enabled" binding:"required"`
+		Enabled  bool   `json:"enabled"`
 		Location string `json:"location"`
 	}
 
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid JSON or missing 'enabled' field"})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid JSON"})
 		return
 	}
 
@@ -1027,17 +1040,21 @@ func (ws *WebServer) debugSpoolmanHandler(c *gin.Context) {
 
 	// Add raw field analysis
 	for i, spool := range spools {
+		colorHex := ""
+		if spool.Filament != nil {
+			colorHex = spool.Filament.ColorHex
+		}
 		debugInfo["raw_data"].([]gin.H)[i] = gin.H{
 			"id":               spool.ID,
 			"name":             spool.Name,
 			"brand":            spool.Brand,
 			"material":         spool.Material,
-			"color":            spool.Filament.ColorHex,
+			"color":            colorHex,
 			"remaining_length": spool.RemainingLength,
 			"name_empty":       spool.Name == "",
 			"brand_empty":      spool.Brand == "",
 			"material_empty":   spool.Material == "",
-			"color_empty":      spool.Filament.ColorHex == "",
+			"color_empty":      colorHex == "",
 		}
 	}
 
@@ -1068,12 +1085,18 @@ func (ws *WebServer) testPrintCompleteHandler(c *gin.Context) {
 		}
 	}
 
+	cfg := ws.bridge.GetConfigSnapshot()
+	if cfg == nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "No printers configured"})
+		return
+	}
+
 	// Get printer config - first try by name, then by ID
 	var config PrinterConfig
 	var found bool
 
 	// Try to find by name first
-	for _, printerConfig := range ws.bridge.config.Printers {
+	for _, printerConfig := range cfg.Printers {
 		if printerConfig.Name == request.PrinterName {
 			config = printerConfig
 			found = true
@@ -1083,7 +1106,7 @@ func (ws *WebServer) testPrintCompleteHandler(c *gin.Context) {
 
 	// If not found by name, try by ID
 	if !found {
-		config, found = ws.bridge.config.Printers[request.PrinterName]
+		config, found = cfg.Printers[request.PrinterName]
 	}
 
 	if !found {
@@ -1370,7 +1393,7 @@ func (ws *WebServer) nfcUrlsHandler(c *gin.Context) {
 
 	// Generate filament URLs
 	for _, filament := range filaments {
-		url := fmt.Sprintf("%s/filament/show/%d", ws.bridge.config.SpoolmanURL, filament.ID)
+		url := fmt.Sprintf("%s/filament/show/%d", ws.bridge.spoolman.GetBaseURL(), filament.ID)
 
 		// Safely get color hex
 		colorHex := ""

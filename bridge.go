@@ -560,7 +560,10 @@ func (b *FilamentBridge) GetConfigSnapshot() *Config {
 	// Create a shallow copy of the config
 	configCopy := &Config{
 		SpoolmanURL:                  b.config.SpoolmanURL,
+		SpoolmanUsername:             b.config.SpoolmanUsername,
+		SpoolmanPassword:             b.config.SpoolmanPassword,
 		PollInterval:                 b.config.PollInterval,
+		LocationSyncInterval:         b.config.LocationSyncInterval,
 		DBFile:                       b.config.DBFile,
 		WebPort:                      b.config.WebPort,
 		PrusaLinkTimeout:             b.config.PrusaLinkTimeout,
@@ -1020,7 +1023,13 @@ func (b *FilamentBridge) noteStateChange(printerID, name, state, jobName string)
 
 // monitorPrusaLink monitors a single printer using PrusaLink API
 func (b *FilamentBridge) monitorPrusaLink(printerID string, config PrinterConfig) error {
-	client := NewPrusaLinkClient(config.IPAddress, config.APIKey, b.config.PrusaLinkTimeout, b.config.PrusaLinkFileDownloadTimeout)
+	// Read timeouts from a snapshot: b.config can be swapped by ReloadConfig at
+	// any time, so direct field reads from this goroutine would race.
+	cfg := b.GetConfigSnapshot()
+	if cfg == nil {
+		return nil
+	}
+	client := NewPrusaLinkClient(config.IPAddress, config.APIKey, cfg.PrusaLinkTimeout, cfg.PrusaLinkFileDownloadTimeout)
 
 	status, err := client.GetStatus()
 	if err != nil {
@@ -1149,7 +1158,7 @@ func (b *FilamentBridge) monitorPrusaLink(printerID string, config PrinterConfig
 				config.IPAddress, printerID, jobName, currentState, usageScale*100, active.Filename)
 		}
 
-		if err := b.handlePrintEnded(config, client, active, usageScale, completed); err != nil {
+		if err := b.handlePrintEnded(config, client, active, usageScale, completed, cfg.PrusaLinkFileDownloadTimeout); err != nil {
 			// Whole-job failure (download/parse/no-data) before any spool was written.
 			// A print error was already logged; clear tracking so we don't reprocess
 			// it every poll while the printer sits idle.
@@ -1173,12 +1182,12 @@ func (b *FilamentBridge) monitorPrusaLink(printerID string, config PrinterConfig
 }
 
 // normalizeProgress converts a PrusaLink progress value to a fraction in [0,1].
-// The PrusaLink v1 API reports job progress as a percentage (0..100), but we
-// defensively accept an already-normalized 0..1 fraction as well.
+// The PrusaLink v1 API reports job progress as a percentage (0..100), so the
+// value is always divided by 100. Do not try to guess whether a value <= 1.0
+// is "already a fraction": that reads a print cancelled at 1% (progress=1.0)
+// as 100% complete and overbills it by up to 100x.
 func normalizeProgress(p float64) float64 {
-	if p > 1.0 {
-		p = p / 100.0 // value was a 0..100 percentage
-	}
+	p = p / 100.0
 	if p < 0 {
 		return 0
 	}
@@ -1194,7 +1203,7 @@ func normalizeProgress(p float64) float64 {
 // records how the print ended in the history. It prefers the filament estimate
 // captured from job metadata while printing, and only downloads and parses the
 // G-code file as a fallback when that metadata was unavailable.
-func (b *FilamentBridge) handlePrintEnded(config PrinterConfig, prusaClient *PrusaLinkClient, active *activeJob, usageScale float64, completed bool) error {
+func (b *FilamentBridge) handlePrintEnded(config PrinterConfig, prusaClient *PrusaLinkClient, active *activeJob, usageScale float64, completed bool, fileDownloadTimeout int) error {
 	printerName := resolvePrinterName(config)
 	filename := active.Filename
 
@@ -1221,7 +1230,7 @@ func (b *FilamentBridge) handlePrintEnded(config PrinterConfig, prusaClient *Pru
 		}
 
 		log.Printf("No captured metadata for %s; downloading G-code to determine filament usage: %s", printerName, filename)
-		gcodeContent, err := prusaClient.GetGcodeFileWithRetry(filename, b.config.PrusaLinkFileDownloadTimeout)
+		gcodeContent, err := prusaClient.GetGcodeFileWithRetry(filename, fileDownloadTimeout)
 		if err != nil {
 			errorMsg := fmt.Sprintf("failed to download G-code file after retries: %v", err)
 			b.addPrintError(printerName, filename, errorMsg)
@@ -1362,7 +1371,7 @@ func (b *FilamentBridge) GetStatus() (*PrinterStatus, error) {
 				continue // Skip placeholder
 			}
 
-			client := NewPrusaLinkClient(printerConfig.IPAddress, printerConfig.APIKey, b.config.PrusaLinkTimeout, b.config.PrusaLinkFileDownloadTimeout)
+			client := NewPrusaLinkClient(printerConfig.IPAddress, printerConfig.APIKey, configSnapshot.PrusaLinkTimeout, configSnapshot.PrusaLinkFileDownloadTimeout)
 
 			// Use the configured printer name, not the hostname from PrusaLink
 			printerName := printerConfig.Name

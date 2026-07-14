@@ -60,9 +60,17 @@ func main() {
 		*port = config.WebPort
 	}
 
-	// Handle graceful shutdown
+	// Handle graceful shutdown. A single goroutine receives the signal and
+	// closes done; a close wakes every waiter, whereas receiving directly from
+	// sigChan in multiple goroutines would deliver the signal to only one of
+	// them (and possibly not the one blocking main).
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
+	done := make(chan struct{})
+	go func() {
+		<-sigChan
+		close(done)
+	}()
 
 	// Start NFC session cleanup background task
 	go func() {
@@ -74,7 +82,7 @@ func main() {
 				if err := bridge.cleanupExpiredSessions(); err != nil {
 					log.Printf("Error cleaning up NFC sessions: %v", err)
 				}
-			case <-sigChan:
+			case <-done:
 				return
 			}
 		}
@@ -91,7 +99,7 @@ func main() {
 		}()
 
 		// Wait for shutdown signal
-		<-sigChan
+		<-done
 		fmt.Println("Shutting down web server...")
 
 	} else if *bridgeOnly {
@@ -114,14 +122,14 @@ func main() {
 				select {
 				case <-ticker.C:
 					bridge.MonitorPrinters()
-				case <-sigChan:
+				case <-done:
 					return
 				}
 			}
 		}()
 
 		// Wait for shutdown signal
-		<-sigChan
+		<-done
 		fmt.Println("Shutting down bridge service...")
 
 	} else {
@@ -152,7 +160,7 @@ func main() {
 					bridge.MonitorPrinters()
 					// Broadcast status after each monitoring cycle
 					webServer.BroadcastStatus()
-				case <-sigChan:
+				case <-done:
 					return
 				}
 			}
@@ -166,7 +174,7 @@ func main() {
 		}()
 
 		// Wait for shutdown signal
-		<-sigChan
+		<-done
 		fmt.Println("Shutting down services...")
 	}
 }
