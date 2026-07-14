@@ -136,6 +136,9 @@ func (ws *WebServer) setupRoutes() {
 	// Main dashboard
 	ws.router.GET("/", ws.dashboardHandler)
 
+	// Liveness probe for Docker/compose healthchecks and monitoring
+	ws.router.GET("/healthz", ws.healthzHandler)
+
 	// API routes
 	api := ws.router.Group("/api")
 	{
@@ -160,6 +163,7 @@ func (ws *WebServer) setupRoutes() {
 		api.POST("/detect_printer", ws.detectPrinterHandler)
 		api.GET("/print-errors", ws.getPrintErrorsHandler)
 		api.POST("/print-errors/:id/acknowledge", ws.acknowledgePrintErrorHandler)
+		api.GET("/print-history", ws.getPrintHistoryHandler)
 		api.GET("/nfc/assign", ws.nfcAssignHandler)
 		api.GET("/nfc/urls", ws.nfcUrlsHandler)
 		api.GET("/nfc/session/status", ws.nfcSessionStatusHandler)
@@ -385,6 +389,7 @@ func (ws *WebServer) dashboardHandler(c *gin.Context) {
 	hasPrintErrors := len(printErrors) > 0
 
 	c.HTML(http.StatusOK, "index.html", gin.H{
+		"Version":           version,
 		"Status":            status,
 		"Spools":            spools,
 		"HasErrors":         hasErrors,
@@ -396,6 +401,17 @@ func (ws *WebServer) dashboardHandler(c *gin.Context) {
 		"SpoolmanError":     spoolmanError,
 		"SpoolmanBaseURL":   ws.bridge.config.SpoolmanURL,
 	})
+}
+
+// healthzHandler reports process health: 200 when the service and its database
+// are usable, 503 if the database is unreachable. Printer/Spoolman connectivity
+// is intentionally excluded - an offline printer shouldn't restart the container.
+func (ws *WebServer) healthzHandler(c *gin.Context) {
+	if err := ws.bridge.db.Ping(); err != nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"status": "degraded", "error": "database unreachable", "version": version})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"status": "ok", "version": version})
 }
 
 // hasConnectionErrors checks if there are connection errors
@@ -776,7 +792,7 @@ func (ws *WebServer) updatePrinterHandler(c *gin.Context) {
 
 	// Auto-detect model if address or API key changed, or if model is currently "Unknown"
 	if printerConfig.Model == "" || printerConfig.Model == ModelUnknown {
-		log.Printf("🔍 [Auto-Detection] Detecting model for printer %s (IP: %s)", printerID, printerConfig.IPAddress)
+		log.Printf("[Auto-Detection] Detecting model for printer %s (IP: %s)", printerID, printerConfig.IPAddress)
 
 		// Create PrusaLink client for detection
 		client := NewPrusaLinkClient(printerConfig.IPAddress, printerConfig.APIKey, 10, 60) // Use default timeouts for detection
@@ -784,18 +800,18 @@ func (ws *WebServer) updatePrinterHandler(c *gin.Context) {
 		// Try to get printer info
 		printerInfo, err := client.GetPrinterInfo()
 		if err != nil {
-			log.Printf("⚠️ [Auto-Detection] Failed to detect model for %s: %v (keeping current model: %s)",
+			log.Printf("[Auto-Detection] Failed to detect model for %s: %v (keeping current model: %s)",
 				printerConfig.IPAddress, err, printerConfig.Model)
 		} else {
 			// Use shared model detection function
 			detectedModel := detectPrinterModel(printerInfo.Hostname)
 
 			if detectedModel != ModelUnknown {
-				log.Printf("✅ [Auto-Detection] Detected model for %s: '%s' -> %s",
+				log.Printf("[Auto-Detection] Detected model for %s: '%s' -> %s",
 					printerConfig.IPAddress, printerInfo.Hostname, detectedModel)
 				printerConfig.Model = detectedModel
 			} else {
-				log.Printf("❌ [Auto-Detection] No pattern matched for hostname '%s' from %s",
+				log.Printf("[Auto-Detection] No pattern matched for hostname '%s' from %s",
 					printerInfo.Hostname, printerConfig.IPAddress)
 			}
 		}
@@ -931,29 +947,29 @@ func detectPrinterModel(hostname string) string {
 	hostnameLower := strings.ToLower(hostname)
 	hostnameLower = strings.TrimSpace(hostnameLower) // Clean up any whitespace
 
-	log.Printf("🔍 [Detection] Checking hostname '%s' against patterns:", hostnameLower)
+	log.Printf("[Detection] Checking hostname '%s' against patterns:", hostnameLower)
 
 	if strings.Contains(hostnameLower, ModelCorePattern) {
 		model = ModelCoreOne
-		log.Printf("✅ [Detection] Matched pattern '%s' -> %s", ModelCorePattern, model)
+		log.Printf("[Detection] Matched pattern '%s' -> %s", ModelCorePattern, model)
 	} else if strings.Contains(hostnameLower, ModelXLPattern) {
 		model = ModelXL
-		log.Printf("✅ [Detection] Matched pattern '%s' -> %s", ModelXLPattern, model)
+		log.Printf("[Detection] Matched pattern '%s' -> %s", ModelXLPattern, model)
 	} else if strings.Contains(hostnameLower, ModelMK4Pattern) {
 		model = ModelMK4
-		log.Printf("✅ [Detection] Matched pattern '%s' -> %s", ModelMK4Pattern, model)
+		log.Printf("[Detection] Matched pattern '%s' -> %s", ModelMK4Pattern, model)
 	} else if strings.Contains(hostnameLower, ModelMK3Pattern) {
 		model = ModelMK35
-		log.Printf("✅ [Detection] Matched pattern '%s' -> %s", ModelMK3Pattern, model)
+		log.Printf("[Detection] Matched pattern '%s' -> %s", ModelMK3Pattern, model)
 	} else if strings.Contains(hostnameLower, ModelMiniPattern) {
 		model = ModelMiniPlus
-		log.Printf("✅ [Detection] Matched pattern '%s' -> %s", ModelMiniPattern, model)
+		log.Printf("[Detection] Matched pattern '%s' -> %s", ModelMiniPattern, model)
 	} else {
-		log.Printf("❌ [Detection] No pattern matched for hostname '%s'. Available patterns: %s, %s, %s, %s, %s",
+		log.Printf("[Detection] No pattern matched for hostname '%s'. Available patterns: %s, %s, %s, %s, %s",
 			hostnameLower, ModelCorePattern, ModelXLPattern, ModelMK4Pattern, ModelMK3Pattern, ModelMiniPattern)
 	}
 
-	log.Printf("🎯 [Detection] Final result: hostname='%s' -> model='%s'", hostname, model)
+	log.Printf("[Detection] Final result: hostname='%s' -> model='%s'", hostname, model)
 	return model
 }
 
@@ -975,7 +991,7 @@ func (ws *WebServer) detectPrinterHandler(c *gin.Context) {
 		return
 	}
 
-	log.Printf("🔍 [Detection] Starting printer model detection for IP: %s", req.IPAddress)
+	log.Printf("[Detection] Starting printer model detection for IP: %s", req.IPAddress)
 
 	// Create PrusaLink client
 	client := NewPrusaLinkClient(req.IPAddress, req.APIKey, 10, 60) // Use default timeouts for detection
@@ -983,7 +999,7 @@ func (ws *WebServer) detectPrinterHandler(c *gin.Context) {
 	// Try to get printer info, but don't fail if it times out
 	printerInfo, err := client.GetPrinterInfo()
 	if err != nil {
-		log.Printf("❌ [Detection] Failed to get printer info from %s: %v", req.IPAddress, err)
+		log.Printf("[Detection] Failed to get printer info from %s: %v", req.IPAddress, err)
 		// If API call fails, return default values instead of error
 		// This allows users to add printers even if they're offline
 		c.JSON(http.StatusOK, gin.H{
@@ -995,7 +1011,7 @@ func (ws *WebServer) detectPrinterHandler(c *gin.Context) {
 		return
 	}
 
-	log.Printf("📥 [Detection] Received printer info: hostname='%s'", printerInfo.Hostname)
+	log.Printf("[Detection] Received printer info: hostname='%s'", printerInfo.Hostname)
 
 	// Use shared model detection function
 	model := detectPrinterModel(printerInfo.Hostname)
@@ -1102,7 +1118,7 @@ func (ws *WebServer) testPrintCompleteHandler(c *gin.Context) {
 	printerName := resolvePrinterName(config)
 
 	// Process filament usage using helper function
-	if err := ws.bridge.processFilamentUsage(printerName, request.FilamentUsage, request.JobName, time.Now()); err != nil {
+	if err := ws.bridge.processFilamentUsage(printerName, request.FilamentUsage, request.JobName, time.Now(), "completed"); err != nil {
 		log.Printf("Error processing filament usage: %v", err)
 	}
 
@@ -1120,6 +1136,24 @@ func (ws *WebServer) getPrintErrorsHandler(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{
 		"errors": errors,
 	})
+}
+
+// getPrintHistoryHandler returns recent print history entries, newest first
+func (ws *WebServer) getPrintHistoryHandler(c *gin.Context) {
+	limit := 100
+	if limitStr := c.Query("limit"); limitStr != "" {
+		if parsed, err := strconv.Atoi(limitStr); err == nil && parsed > 0 && parsed <= 1000 {
+			limit = parsed
+		}
+	}
+
+	history, err := ws.bridge.GetPrintHistory(limit)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"history": history})
 }
 
 // acknowledgePrintErrorHandler acknowledges a print error

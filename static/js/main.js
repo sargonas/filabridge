@@ -20,6 +20,11 @@ function switchTab(tabName) {
     // Add active class to clicked tab
     event.target.classList.add('active');
     
+    // Load print history when its tab is opened
+    if (tabName === 'history') {
+        loadPrintHistory();
+    }
+
     // Load configuration when settings tab is opened
     if (tabName === 'settings') {
         // Load data for the currently active settings sub-tab
@@ -47,6 +52,91 @@ function switchTab(tabName) {
 function toggleConfig() {
     // Switch to the settings tab
     switchTab('settings');
+}
+
+// Print History tab
+async function loadPrintHistory() {
+    const container = document.getElementById('history-table-container');
+    try {
+        // Fetch history and spools together; spools are only used to show
+        // friendly names, so a spool that no longer exists falls back to its ID
+        const [historyRes, spoolsRes] = await Promise.all([
+            fetch('/api/print-history'),
+            fetch('/api/spools').catch(() => null)
+        ]);
+        const historyData = await historyRes.json();
+
+        const spoolNames = {};
+        if (spoolsRes && spoolsRes.ok) {
+            const spools = await spoolsRes.json();
+            spools.forEach(s => { spoolNames[s.id] = s.name; });
+        }
+
+        const history = historyData.history || [];
+        if (history.length === 0) {
+            container.innerHTML = '<p>No prints recorded yet. Completed and cancelled prints will appear here once filament usage has been tracked.</p>';
+            return;
+        }
+
+        const rows = history.map(h => {
+            const finished = new Date(h.print_finished);
+            const started = new Date(h.print_started);
+            const durationMs = finished - started;
+            const spoolLabel = spoolNames[h.spool_id]
+                ? `[${h.spool_id}] ${spoolNames[h.spool_id]}`
+                : `Spool #${h.spool_id}`;
+            const statusClass = h.status === 'completed' ? 'history-status-completed' : 'history-status-cancelled';
+            const statusLabel = h.status === 'completed' ? '✅ Completed' : '🛑 Cancelled/Failed';
+            return `
+                <tr>
+                    <td class="history-job">${escapeHtml(h.job_name)}</td>
+                    <td>${escapeHtml(h.printer_name)}</td>
+                    <td><span class="history-status ${statusClass}">${statusLabel}</span></td>
+                    <td>${escapeHtml(spoolLabel)}</td>
+                    <td>${h.filament_used.toFixed(1)}g</td>
+                    <td>${finished.toLocaleString()}</td>
+                    <td>${formatDuration(durationMs)}</td>
+                </tr>`;
+        }).join('');
+
+        container.innerHTML = `
+            <div class="history-table-wrapper">
+                <table class="history-table">
+                    <thead>
+                        <tr>
+                            <th>Job</th>
+                            <th>Printer</th>
+                            <th>Status</th>
+                            <th>Spool</th>
+                            <th>Filament</th>
+                            <th>Finished</th>
+                            <th>Run Time</th>
+                        </tr>
+                    </thead>
+                    <tbody>${rows}</tbody>
+                </table>
+            </div>`;
+    } catch (error) {
+        console.error('Error loading print history:', error);
+        container.innerHTML = '<p>Error loading print history</p>';
+    }
+}
+
+// formatDuration renders a millisecond span as "3h 24m" / "12m" / "45s"
+function formatDuration(ms) {
+    if (!isFinite(ms) || ms < 0) return '—';
+    const totalMinutes = Math.floor(ms / 60000);
+    const hours = Math.floor(totalMinutes / 60);
+    const minutes = totalMinutes % 60;
+    if (hours > 0) return `${hours}h ${minutes}m`;
+    if (totalMinutes > 0) return `${minutes}m`;
+    return `${Math.floor(ms / 1000)}s`;
+}
+
+function escapeHtml(text) {
+    const div = document.createElement('div');
+    div.textContent = text == null ? '' : String(text);
+    return div.innerHTML;
 }
 
 // Settings sub-tab switching functionality

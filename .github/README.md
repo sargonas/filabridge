@@ -92,7 +92,7 @@ The Docker image sets `FILABRIDGE_DB_PATH` to `/app/data`, so the database persi
 
 ### Option 2: Pre-built Binary (Linux)
 
-FilaBridge is built to run as a Docker container or a Linux service alongside a Spoolman instance. Pre-built binaries are provided for Linux only — ideal for running bare-metal as a systemd service.
+FilaBridge is built to run as a Docker container or a Linux service alongside a Spoolman instance. Pre-built binaries are provided for Linux only, for anyone who prefers to run it bare-metal as a systemd service.
 
 1. **Download the latest release** for your architecture from the [Releases page](https://github.com/sargonas/filabridge/releases)
    - Linux (amd64, arm64)
@@ -190,7 +190,7 @@ The web interface provides:
 3. **Program NFC Tags**: Use NFC Tools Pro to scan QR codes and write URLs to NFC tags
 4. **Assign Spools**: Tap spool tag, then location tag (location then spool works as well) to instantly assign and update inventory
 
-**Single-printer setups**: If you have exactly one printer with one toolhead configured, the Spool Tags screen also offers a **Quick-Assign** variant for each spool — a single tag that assigns the spool directly to your printer in one scan, no location tag needed. (Multi-toolhead users can build the same thing manually by appending `&location=<location name>` to a spool URL.)
+If you have exactly one printer with one toolhead configured, the Spool Tags screen also offers a Quick-Assign variant for each spool: a single tag that assigns the spool directly to your printer in one scan, with no location tag needed. Multi-toolhead users can build the same thing manually by appending `&location=<location name>` to a spool URL.
 
 ## API Endpoints
 

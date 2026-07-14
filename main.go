@@ -10,19 +10,31 @@ import (
 	"time"
 )
 
+// version is the release version, injected at build time via
+// -ldflags "-X main.version=v1.2.3" (set from the git tag by CI).
+var version = "dev"
+
 func main() {
 	// Command line flags
 	var (
-		webOnly    = flag.Bool("web-only", false, "Run only the web interface")
-		bridgeOnly = flag.Bool("bridge-only", false, "Run only the bridge service")
-		port       = flag.String("port", DefaultWebPort, "Web interface port")
-		host       = flag.String("host", "0.0.0.0", "Web interface host")
+		webOnly     = flag.Bool("web-only", false, "Run only the web interface")
+		bridgeOnly  = flag.Bool("bridge-only", false, "Run only the bridge service")
+		port        = flag.String("port", DefaultWebPort, "Web interface port")
+		host        = flag.String("host", "0.0.0.0", "Web interface host")
+		showVersion = flag.Bool("version", false, "Print version and exit")
 	)
 	flag.Parse()
+
+	if *showVersion {
+		fmt.Printf("FilaBridge %s\n", version)
+		return
+	}
 
 	// Route informational log output to stdout and warnings/errors to stderr
 	// (the log package otherwise sends everything to stderr).
 	installLogSplitter()
+
+	log.Printf("FilaBridge %s starting", version)
 
 	// Create bridge instance first (with default config)
 	bridge, err := NewFilamentBridge(nil)

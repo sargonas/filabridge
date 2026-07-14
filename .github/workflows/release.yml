@@ -36,7 +36,7 @@ jobs:
           GOOS: linux
           GOARCH: amd64
         run: |
-          go build -o filabridge-linux-amd64 .
+          go build -ldflags "-X main.version=${GITHUB_REF_NAME}" -o filabridge-linux-amd64 .
           chmod +x filabridge-linux-amd64
 
       - name: Build for Linux ARM64
@@ -46,7 +46,7 @@ jobs:
           GOARCH: arm64
           CC: aarch64-linux-gnu-gcc
         run: |
-          go build -o filabridge-linux-arm64 .
+          go build -ldflags "-X main.version=${GITHUB_REF_NAME}" -o filabridge-linux-arm64 .
           chmod +x filabridge-linux-arm64
 
       - name: Create checksums

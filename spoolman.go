@@ -197,10 +197,10 @@ func (c *SpoolmanClient) GetAllSpools() ([]SpoolmanSpool, error) {
 		spools[i] = c.normalizeSpoolData(spools[i])
 	}
 
-	// Filter out spools with 0g remaining weight
+	// Filter out archived spools and spools with 0g remaining weight
 	filteredSpools := make([]SpoolmanSpool, 0, len(spools))
 	for _, spool := range spools {
-		if spool.RemainingWeight > 0 {
+		if !spool.Archived && spool.RemainingWeight > 0 {
 			filteredSpools = append(filteredSpools, spool)
 		}
 	}
