@@ -5,6 +5,18 @@ All notable changes to FilaBridge will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v0.9.3] - 2026-07-14
+
+### Other
+
+- Merge pull request #11 from sargonas/QoL-improvements
+- ops feat: pure-Go sqlite driver, native multi-arch builds, merged release workflow, all to streamline from 2x 15min builds to a single flow under 5min
+- Merge pull request #10 from sargonas/QoL-improvements
+- cleaned up legacy "billing" language every where in favor of "recording" and updated Readme
+- Merge pull request #4 from sargonas/QoL-improvements
+- i hate css... ugh.. okay dual QR code layout fixed!
+- build CI fixes
+
 ## [v0.9.2] - 2026-07-14
 
 ### Fixed
