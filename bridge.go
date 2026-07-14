@@ -21,8 +21,8 @@ type FilamentBridge struct {
 	spoolman         *SpoolmanClient
 	db               *sql.DB
 	// In-flight print state is persisted in the active_jobs table (survives
-	// restarts); only the concurrency guard for the billing path is kept in memory.
-	processingPrints map[string]bool       // Guard against overlapping monitor cycles billing the same printer
+	// restarts); only the concurrency guard for the usage-recording path is kept in memory.
+	processingPrints map[string]bool       // Guard against overlapping monitor cycles recording the same printer's usage
 	printErrors      map[string]PrintError // Store print processing errors
 	offlinePrinters  map[string]bool       // Printers currently logged as offline (edge-triggered reachability logging)
 	printerStates    map[string]string     // Last logged state per printer (edge-triggered state logging)
@@ -186,17 +186,30 @@ func (b *FilamentBridge) initDatabase() error {
 			usage_json TEXT NOT NULL DEFAULT '',
 			updated_at TIMESTAMP NOT NULL
 		)`,
-		// billed_jobs is an idempotency ledger: a (printer_id, job_id) pair is
-		// recorded once its filament has been billed to Spoolman, so the same
+		// recorded_jobs is an idempotency ledger: a (printer_id, job_id) pair is
+		// written once its filament usage has been recorded in Spoolman, so the same
 		// job can never be double-counted (on double-detect or restart).
-		`CREATE TABLE IF NOT EXISTS billed_jobs (
+		`CREATE TABLE IF NOT EXISTS recorded_jobs (
 			printer_id TEXT NOT NULL,
 			job_id INTEGER NOT NULL,
 			filename TEXT NOT NULL DEFAULT '',
 			scale REAL NOT NULL DEFAULT 1,
-			billed_at TIMESTAMP NOT NULL,
+			recorded_at TIMESTAMP NOT NULL,
 			PRIMARY KEY (printer_id, job_id)
 		)`,
+	}
+
+	// Pre-release builds named the recorded_jobs table billed_jobs; rename it
+	// (and its billed_at column) in place before creating tables so existing
+	// dedup history is preserved. Runs only when the old table exists.
+	var legacyName string
+	if err := b.db.QueryRow(`SELECT name FROM sqlite_master WHERE type='table' AND name='billed_jobs'`).Scan(&legacyName); err == nil {
+		if _, err := b.db.Exec(`ALTER TABLE billed_jobs RENAME TO recorded_jobs`); err != nil {
+			return fmt.Errorf("failed to rename billed_jobs table: %w", err)
+		}
+		if _, err := b.db.Exec(`ALTER TABLE recorded_jobs RENAME COLUMN billed_at TO recorded_at`); err != nil {
+			return fmt.Errorf("failed to rename billed_at column: %w", err)
+		}
 	}
 
 	for _, query := range createTables {
@@ -940,15 +953,16 @@ func (b *FilamentBridge) clearActiveJob(printerID string) error {
 	return err
 }
 
-// isJobBilled reports whether a (printer, job) pair has already been billed.
-// Jobs without a real id (jobID == 0) can't be deduped and are treated as unbilled.
-func (b *FilamentBridge) isJobBilled(printerID string, jobID int) (bool, error) {
+// isJobRecorded reports whether a (printer, job) pair has already had its
+// filament usage recorded. Jobs without a real id (jobID == 0) can't be
+// deduped and are treated as unrecorded.
+func (b *FilamentBridge) isJobRecorded(printerID string, jobID int) (bool, error) {
 	if jobID == 0 {
 		return false, nil
 	}
 	var one int
 	err := b.db.QueryRow(
-		`SELECT 1 FROM billed_jobs WHERE printer_id = ? AND job_id = ?`, printerID, jobID,
+		`SELECT 1 FROM recorded_jobs WHERE printer_id = ? AND job_id = ?`, printerID, jobID,
 	).Scan(&one)
 	if err == sql.ErrNoRows {
 		return false, nil
@@ -959,13 +973,13 @@ func (b *FilamentBridge) isJobBilled(printerID string, jobID int) (bool, error) 
 	return true, nil
 }
 
-// recordBilledJob marks a (printer, job) pair as billed so it is never counted again.
-func (b *FilamentBridge) recordBilledJob(printerID string, jobID int, filename string, scale float64) error {
+// markJobRecorded marks a (printer, job) pair as recorded so it is never counted again.
+func (b *FilamentBridge) markJobRecorded(printerID string, jobID int, filename string, scale float64) error {
 	if jobID == 0 {
 		return nil // no stable id to dedupe on; nothing to record
 	}
 	_, err := b.db.Exec(
-		`INSERT OR IGNORE INTO billed_jobs (printer_id, job_id, filename, scale, billed_at) VALUES (?, ?, ?, ?, ?)`,
+		`INSERT OR IGNORE INTO recorded_jobs (printer_id, job_id, filename, scale, recorded_at) VALUES (?, ?, ?, ?, ?)`,
 		printerID, jobID, filename, scale, time.Now(),
 	)
 	return err
@@ -1069,7 +1083,7 @@ func (b *FilamentBridge) monitorPrusaLink(printerID string, config PrinterConfig
 	isPrinting := currentState == StatePrinting || currentState == StatePaused
 	// A job has ended if the printer is now in any terminal state: a clean finish
 	// (FINISHED/IDLE) or a cancel/failure (STOPPED/ERROR). Catching STOPPED/ERROR
-	// here is what lets us bill a cancelled print for what it actually used.
+	// here is what lets us record a cancelled print's actual usage.
 	isTerminal := currentState == StateIdle || currentState == StateFinished ||
 		currentState == StateStopped || currentState == StateError
 
@@ -1102,7 +1116,7 @@ func (b *FilamentBridge) monitorPrusaLink(printerID string, config PrinterConfig
 		}
 		// Capture the slicer filament estimate from job metadata while the job is
 		// loaded (it's typically gone once the printer returns to a terminal state).
-		// This is what lets both completion and cancellation bill without a download.
+		// This is what lets both completion and cancellation record usage without a download.
 		if len(aj.Usage) == 0 {
 			if usage := filamentUsageFromMeta(jobInfo.File.Meta); len(usage) > 0 {
 				aj.Usage = usage
@@ -1115,7 +1129,7 @@ func (b *FilamentBridge) monitorPrusaLink(printerID string, config PrinterConfig
 		}
 
 	case isTerminal && active != nil && active.Filename != "":
-		// A tracked job has ended. Classify how it ended to decide how much to bill:
+		// A tracked job has ended. Classify how it ended to decide how much usage to record:
 		//   FINISHED        -> completed, full estimate
 		//   STOPPED / ERROR -> cancelled/failed, estimate * last-seen progress
 		//   IDLE            -> ambiguous (some firmware skips FINISHED): completed only
@@ -1127,16 +1141,16 @@ func (b *FilamentBridge) monitorPrusaLink(printerID string, config PrinterConfig
 			usageScale = active.LastProgress
 		}
 
-		// Idempotency: never bill the same job twice (survives restart/double-detect).
-		if billed, err := b.isJobBilled(printerID, active.JobID); err != nil {
-			log.Printf("Warning: failed to check billed ledger for %s job %d: %v", printerID, active.JobID, err)
-		} else if billed {
-			log.Printf("Job %d on %s already billed; clearing tracking", active.JobID, printerID)
+		// Idempotency: never record the same job twice (survives restart/double-detect).
+		if recorded, err := b.isJobRecorded(printerID, active.JobID); err != nil {
+			log.Printf("Warning: failed to check recorded-jobs ledger for %s job %d: %v", printerID, active.JobID, err)
+		} else if recorded {
+			log.Printf("Job %d on %s already recorded; clearing tracking", active.JobID, printerID)
 			b.clearActiveJob(printerID)
 			return nil
 		}
 
-		// Guard against two overlapping monitor cycles billing the same printer.
+		// Guard against two overlapping monitor cycles recording the same printer's usage.
 		b.mutex.Lock()
 		if b.processingPrints[printerID] {
 			b.mutex.Unlock()
@@ -1168,8 +1182,8 @@ func (b *FilamentBridge) monitorPrusaLink(printerID string, config PrinterConfig
 		}
 
 		// Success: record in the idempotency ledger, then clear tracking.
-		if err := b.recordBilledJob(printerID, active.JobID, active.Filename, usageScale); err != nil {
-			log.Printf("Warning: failed to record billed job %d for %s: %v", active.JobID, printerID, err)
+		if err := b.markJobRecorded(printerID, active.JobID, active.Filename, usageScale); err != nil {
+			log.Printf("Warning: failed to mark job %d as recorded for %s: %v", active.JobID, printerID, err)
 		}
 		b.clearActiveJob(printerID)
 
@@ -1185,7 +1199,7 @@ func (b *FilamentBridge) monitorPrusaLink(printerID string, config PrinterConfig
 // The PrusaLink v1 API reports job progress as a percentage (0..100), so the
 // value is always divided by 100. Do not try to guess whether a value <= 1.0
 // is "already a fraction": that reads a print cancelled at 1% (progress=1.0)
-// as 100% complete and overbills it by up to 100x.
+// as 100% complete and records up to 100x the actual usage.
 func normalizeProgress(p float64) float64 {
 	p = p / 100.0
 	if p < 0 {
@@ -1197,8 +1211,8 @@ func normalizeProgress(p float64) float64 {
 	return p
 }
 
-// handlePrintEnded bills filament for a print that has ended. usageScale is the
-// fraction (0..1) of the slicer's estimate to bill: 1.0 for a completed print, or
+// handlePrintEnded records filament usage for a print that has ended. usageScale
+// is the fraction (0..1) of the slicer's estimate to record: 1.0 for a completed print, or
 // the last-seen progress for one cancelled/failed partway through; completed
 // records how the print ended in the history. It prefers the filament estimate
 // captured from job metadata while printing, and only downloads and parses the
@@ -1207,7 +1221,7 @@ func (b *FilamentBridge) handlePrintEnded(config PrinterConfig, prusaClient *Pru
 	printerName := resolvePrinterName(config)
 	filename := active.Filename
 
-	log.Printf("Print ended on %s: %s (billing %.0f%% of estimate)", printerName, filename, usageScale*100)
+	log.Printf("Print ended on %s: %s (recording %.0f%% of estimate)", printerName, filename, usageScale*100)
 
 	if filename == "" {
 		errorMsg := "no filename available for print processing"
@@ -1223,9 +1237,9 @@ func (b *FilamentBridge) handlePrintEnded(config PrinterConfig, prusaClient *Pru
 	usage := active.Usage
 	source := "job metadata"
 	if len(usage) == 0 {
-		// Nothing printed and no metadata: skip the expensive download, bill nothing.
+		// Nothing printed and no metadata: skip the expensive download, record nothing.
 		if usageScale == 0 {
-			log.Printf("Print %s on %s ended at ~0%% with no metadata; nothing to bill", filename, printerName)
+			log.Printf("Print %s on %s ended at ~0%% with no metadata; nothing to record", filename, printerName)
 			return nil
 		}
 

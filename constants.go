@@ -14,8 +14,8 @@ const (
 
 // PrintCompletionProgressThreshold is the minimum last-seen progress fraction
 // (0..1) for a print that ends in a bare IDLE state (no explicit FINISHED) to be
-// treated as completed rather than cancelled. Below this, the print is billed
-// proportionally to how far it got.
+// treated as completed rather than cancelled. Below this, the print's usage is
+// recorded proportionally to how far it got.
 const PrintCompletionProgressThreshold = 0.95
 
 // Default configuration values

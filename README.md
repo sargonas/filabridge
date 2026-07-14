@@ -4,38 +4,44 @@
 [![Go Version](https://img.shields.io/badge/Go-1.23-00ADD8?logo=go)](https://golang.org/)
 [![GitHub release](https://img.shields.io/github/v/release/sargonas/filabridge)](https://github.com/sargonas/filabridge/releases)
 
-A performant Go microservice that bridges PrusaLink-compatible printers and Spoolman for (mostly) automatic filament inventory management. Originally designed for Prusa printers (CORE One, XL, MK4, etc.) but works with any printer that supports the PrusaLink API.
+A self-hosted Go microservice that bridges PrusaLink-compatible printers and Spoolman for (mostly) automatic filament inventory management. Originally designed for Prusa printers (CORE One, XL, MK4, etc.) but will work with any printer that supports the PrusaLink API.
+
+FilaBridge was created by [needo37](https://github.com/needo37/filabridge), who has since archived the original project. This repository continues its development and maintenance. Many thanks to needo37 for building FilaBridge and releasing it under the GPL so it could live on.
 
 ### The Problem
 
-I run multiple 3D printers and use Spoolman to track my filament inventory. The issue? I had to manually update filament usage after every print. With multi-material prints on my Prusa XL, this was getting tedious and error-prone.
+Spoolman is an excellent tool to track one's filament inventory. However, manually having to update filament usage after every print is prone to human error and mistakes. For owners of a Prusa printer, there are ways to automate this thanks to PrusaLink, but you need a layer between the Printer and Spoolman to do so. [needo37](https://github.com/needo37) created just such a tool before moving on to other projects, and this is a continuation of that work.
 
 ## Features
 
-- 🔗 **PrusaLink Compatibility**: Works with any PrusaLink-compatible printer (Prusa CORE One, XL, MK4, Mini, and more)
-- 📊 **Real-time Dashboard**: Web interface with live updates via WebSocket connections
-- 🎯 **Multi-Toolhead Support**: Seamlessly handles single and multi-toolhead printers (tested with 5-toolhead Prusa XL)
-- 📈 **Smart Usage Tracking**: Automatically parses G-code files to accurately track filament consumption per toolhead
-- 💾 **Persistent Storage**: SQLite database stores toolhead mappings and complete print history
-- ⚡ **High Performance**: Single lightweight binary, minimal resource usage, fast execution
-- 🔧 **Web-based Config**: No config files needed - manage everything through the web UI
-- 🔍 **Smart Spool Search**: Search and filter spools by ID, material, brand, or name with real-time filtering
-- ⚠️ **Error Handling**: Print error detection with acknowledgment system for failed filament tracking
-- 🔄 **Auto-mapping**: Automatic spool assignment when selecting from dropdown menus
-- 🌐 **Live Updates**: Real-time status updates without page refreshes using WebSocket technology
-- 🏷️ **NFC Tag Support**: Generate QR codes and program NFC tags for spools, filaments, and locations
-- 📱 **Smart Scanning**: Two-step NFC workflow - scan spool + location (or location + spool) for instant assignment
-- 📍 **Location Tracking**: Track spools in custom locations (dryboxes) or printer toolheads
+- **PrusaLink Compatibility**: Works with any PrusaLink-compatible printer (Prusa CORE One, XL, MK4, Mini, and more)
+- **Real-time Dashboard**: Web interface with live updates via WebSocket connections
+- **Multi-Toolhead Support**: Seamlessly handles single and multi-toolhead printers (tested with 5-toolhead Prusa XL, looking for INDX testers!)
+- **Smart Usage Tracking**: Reads the slicer's per-toolhead filament estimates from job metadata (parsing the G-code file as a fallback) to track consumption per toolhead
+- **Cancelled Print Tracking**: Prints that are cancelled or fail partway still have their filament usage recorded, scaled to how far they got
+- **Reliable Recording**: In-flight prints are tracked in the database, so they survive restarts and are never counted twice
+- **Print History**: Dashboard tab showing recent prints with completion status, spool used, filament recorded, and run time
+- **Persistent Storage**: SQLite database stores toolhead mappings and complete print history
+- **High Performance**: Single lightweight binary with a single DB file, minimal resource usage, fast execution
+- **Web-based Config**: No config files needed - manage everything through the web UI
+- **Smart Spool Search**: Search and filter spools by ID, material, brand, or name with real-time filtering
+- **Error Handling**: Print error detection with acknowledgment system for failed filament tracking
+- **Auto-mapping**: Automatic spool assignment when selecting from dropdown menus
+- **NFC Tag Support**: Generate QR codes and program NFC tags for spools, filaments, and locations
+- **Smart Scanning**: Two-step NFC workflow - scan spool + location for instant assignment
+- **Quick-Assign Tags**: Single-printer setups get one-scan tags that assign a spool straight to the printer, no location tag needed
+- **Location Tracking**: Track spools in custom locations (dryboxes) or printer toolheads
+- **Smart Housekeeping**: If a new spool is "loaded" to a printer, the previous will be returned to a pre-set default location
 
 ## Why FilaBridge?
 
-Managing filament inventory across multiple 3D printers is tedious. FilaBridge automates this by:
+Managing filament inventory across multiple 3D printers, or even one, can be tedious. FilaBridge automates this by:
 - Monitoring your printers in real-time with live WebSocket updates
 - Tracking which spools are loaded on which toolheads
 - Automatically updating your Spoolman inventory when prints complete
-- Providing accurate filament usage by parsing G-code files
+- Providing accurate filament usage from the slicer's own per-toolhead estimates
 - Handling errors gracefully with clear notifications and acknowledgment system
-- Using NFC tags to quickly assign spools to printers or storage locations
+- Using NFC tags or QR codes to quickly assign spools to printers or storage locations
 - Tracking filament locations across your workshop
 
 No more manual updates or guesswork about remaining filament!
@@ -75,17 +81,28 @@ No more manual updates or guesswork about remaining filament!
 2. **Run FilaBridge**:
    ```bash
    docker run -d --name filabridge -p 5000:5000 \
-     -v .:/app/data \
+     -v "$(pwd)/data:/app/data" \
      ghcr.io/sargonas/filabridge:latest
    ```
 
 3. **Configure**: Open `http://localhost:5000` and click "⚙️ Configuration"
 
 **Using docker-compose (recommended for full stack):**
-```bash
-git clone https://github.com/sargonas/filabridge.git
-cd filabridge
-docker-compose up -d
+```yaml
+services:
+  filabridge:
+    image: ghcr.io/sargonas/filabridge:latest
+    ports:
+      - "5000:5000"
+    volumes:
+      - ./data:/app/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:5000/healthz"]
+      interval: 30s
+      timeout: 5s
+      start_period: 10s
+      retries: 3
 ```
 
 The Docker image sets `FILABRIDGE_DB_PATH` to `/app/data`, so the database persists in the mounted volume.
@@ -112,7 +129,7 @@ FilaBridge is built to run as a Docker container or a Linux service alongside a 
    ./filabridge
    ```
 
-5. **Configure**: Open `http://localhost:5000` and click "⚙️ Configuration"
+5. **Configure**: Open `http://localhost:5000` and click "Configuration"
 
 ### Option 3: Build from Source
 
@@ -125,18 +142,19 @@ FilaBridge is built to run as a Docker container or a Linux service alongside a 
    ```
 
 2. **Run Spoolman** (if not already running):
-   ```bash
-   docker run -d --name spoolman -p 8000:8000 -v spoolman-data:/home/spoolman/data ghcr.io/donkie/spoolman:latest
-   ```
 
 3. **Start FilaBridge**:
    ```bash
    ./filabridge
    ```
 
+## Security
+
+FilaBridge is designed for use on a private, trusted network and has no built-in authentication. For the current time being, anyone who can reach the web interface can change settings and read the credentials you have configured (PrusaLink API keys and the optional Spoolman password). Do not expose FilaBridge directly to the internet. If you need remote access, put it behind a VPN or an authenticating reverse proxy.
+
 ## Configuration
 
-The system stores all configuration in the SQLite database. For Docker deployments, you can optionally set the `FILABRIDGE_DB_PATH` environment variable to specify where the database should be stored (defaults to `/app/data` in Docker).
+The system stores all configuration in the SQLite database. For Docker deployments, you can optionally set the `FILABRIDGE_DB_PATH` environment variable to specify where the database should be stored (defaults to `/app/data` in Docker), however I recommend leaving it as is and changing the volume mount instead, if needed.
 
 ### First Run
 
@@ -144,10 +162,24 @@ The system stores all configuration in the SQLite database. For Docker deploymen
 2. Open the web interface at `http://localhost:5000`
 3. Click "Start Configuration" button
 4. Enter a name for your Printer.
-5. Enter your PrusaLink IP Address and API key
+5. Enter your PrusaLink IP Address and API key (also called the password)
 6. Choose the number of toolheads your printer has.
 7. Click "Save Configuration"
-8. The service will automatically restart with new settings
+8. Settings are applied immediately, no restart needed
+
+## Updating and Backups
+
+All FilaBridge state (configuration, printer definitions, toolhead mappings, and print history) lives in a single SQLite database: `filabridge.db` in the data directory (`/app/data` in Docker).
+
+**Updating (Docker):**
+```bash
+docker compose pull
+docker compose up -d
+```
+
+Database schema changes are applied automatically on startup. You can check the running version in the dashboard footer, via `/healthz`, or with `./filabridge --version`.
+
+**Backups:** Copy the data directory. The database runs in WAL mode, so alongside `filabridge.db` you may also see `filabridge.db-wal` and `filabridge.db-shm`; you could copy all three together, but it is highly recommended to first stop FilaBridge for a clean single-file snapshot.
 
 ## Usage
 
@@ -157,8 +189,8 @@ The system stores all configuration in the SQLite database. For Docker deploymen
 # Run both bridge service and web interface (recommended)
 ./filabridge
 
-# Custom host and port
-./filabridge --host 0.0.0.0 --port 8080
+# Custom port
+./filabridge --port 8080
 ```
 
 ### Web Interface
@@ -167,7 +199,6 @@ The web interface provides:
 
 - **Printer Status**: Real-time view of printer states and current jobs with live WebSocket updates
 - **Toolhead Mapping**: Assign filament spools to specific toolheads with smart search functionality
-- **Progress Monitoring**: Visual progress bars for active prints
 - **Live Updates**: Real-time status updates without page refreshes
 - **Spool Search**: Search and filter spools by ID, material, brand, or name
 - **Error Management**: View and acknowledge print processing errors
@@ -175,19 +206,19 @@ The web interface provides:
 
 ### Filament Management
 
-1. **Add spools to Spoolman**: Use Spoolman's web interface to add your filament spools
+1. **Add spools/filaments/locations to Spoolman**: Use Spoolman's web interface to add these entities
 2. **Map spools to toolheads**: Use the FilaBridge web interface to assign spools with smart search
 3. **Monitor usage**: The system automatically tracks and updates filament usage
 4. **Handle errors**: Acknowledge any print processing errors that require manual intervention
 
-### NFC Tag Management
+### NFC Tag / QR Code Management
 
 1. **Generate QR Codes**: Navigate to NFC Management tab in the web interface
 2. **Create Tags**: 
    - **Spool Tags**: Generate QR codes for individual spools
    - **Filament Tags**: Generate QR codes for filament types (for new unopened spools)
    - **Location Tags**: Create and generate QR codes for printer toolheads and custom locations (dryboxes, storage shelves, etc.)
-3. **Program NFC Tags**: Use NFC Tools Pro to scan QR codes and write URLs to NFC tags
+3. **Program NFC Tags**: Use a mobile NFC tool to scan QR codes and write URLs to NFC tags
 4. **Assign Spools**: Tap spool tag, then location tag (location then spool works as well) to instantly assign and update inventory
 
 If you have exactly one printer with one toolhead configured, the Spool Tags screen also offers a Quick-Assign variant for each spool: a single tag that assigns the spool directly to your printer in one scan, with no location tag needed. Multi-toolhead users can build the same thing manually by appending `&location=<location name>` to a spool URL.
@@ -196,34 +227,39 @@ If you have exactly one printer with one toolhead configured, the Spool Tags scr
 
 The web interface also provides REST API endpoints:
 
+- `GET /healthz` - Health check (used by the Docker healthcheck)
 - `GET /api/status` - Get current printer status and mappings
 - `GET /api/spools` - Get all spools from Spoolman
-- `POST /api/map_toolhead` - Map a spool to a toolhead
-- `POST /api/unmap_toolhead` - Unmap a spool from a toolhead
+- `GET /api/filaments` - Get all filament types from Spoolman
+- `POST /api/map_toolhead` - Map a spool to a toolhead (pass `spool_id: 0` to unmap)
+- `GET /api/print-history` - Get recent print history
 - `GET /api/print-errors` - Get all unacknowledged print errors
 - `POST /api/print-errors/{id}/acknowledge` - Acknowledge a print error
-- `GET /api/nfc/assign` - Handle NFC tag scans (spool or location)
+- `GET/POST /api/printers`, `PUT/DELETE /api/printers/{id}` - Manage printer configurations
+- `POST /api/detect_printer` - Detect a printer's model via PrusaLink
+- `GET/POST /api/config` - Read and update configuration
+- `GET /api/nfc/assign` - Handle NFC tag scans (spool, location, or both in one URL)
 - `GET /api/nfc/urls` - Get all NFC URLs with QR codes
 - `GET /api/nfc/session/status` - Check NFC session status
-- `GET /api/locations` - Get all locations
-- `POST /api/locations` - Create custom location
-- `PUT /api/locations/{name}` - Rename location
-- `DELETE /api/locations/{name}` - Delete location
+- `GET/POST /api/locations`, `PUT/DELETE /api/locations/{name}` - Manage locations
 - `WS /ws/status` - WebSocket endpoint for real-time status updates
 
 ## Project Structure
 
 ```
 filabridge/
-├── main.go                 # Application entry point
+├── main.go                # Application entry point
 ├── config.go              # Configuration management
+├── constants.go           # Printer states, defaults, and config keys
+├── logging.go             # Log routing (info to stdout, errors to stderr)
 ├── prusalink.go           # PrusaLink API client
 ├── spoolman.go            # Spoolman API client
-├── bridge.go              # Core monitoring and tracking logic
+├── bridge.go              # Core monitoring and usage tracking logic
 ├── nfc.go                 # NFC session management and tag handling
-├── web.go                 # HTTP server and web interface
+├── web.go                 # HTTP server and API routes
 ├── templates/             # HTML templates
-├── go.mod                 # Go module definition
+├── static/                # CSS and JavaScript for the dashboard
+├── go.mod / go.sum        # Go module definition
 └── README.md              # Documentation
 ```
 
@@ -233,7 +269,8 @@ filabridge/
 
 1. **Printers not accessible**:
    - Check IP addresses in the web interface configuration
-   - Ensure PrusaLink is enabled on both printers
+   - Verify the PrusaLink password on the printer is set as the API key
+   - Ensure PrusaLink is enabled on your printer(s)
    - Verify network connectivity
 
 2. **Spoolman connection failed**:
@@ -249,18 +286,18 @@ filabridge/
 4. **WebSocket connection issues**:
    - Check browser console for WebSocket connection errors
    - Ensure no firewall is blocking WebSocket connections
-   - The interface will fall back to periodic polling if WebSocket fails
+   - The dashboard reconnects automatically if the connection drops; reload the page if it gives up after repeated failures
 
 5. **Print processing errors**:
    - Check the error notifications in the web interface
    - Acknowledge errors after manually updating Spoolman
-   - Review logs for detailed error information
+   - Review logs in docker for detailed error information
 
 6. **NFC tag issues**:
    - Ensure NFC tags are NTAG213, NTAG215, or NTAG216 format
-   - Use NFC Tools Pro to verify tag is properly formatted
+   - Use a mobile NFC app such as NFC Tools Pro to verify tag is properly formatted
    - QR codes encode the full URL - scan with NFC Tools Pro to program tags
-   - Sessions expire after 5 minutes - complete both scans within the timeout
+   - Sessions expire after 5 minutes - complete both scans within that timeout
 
 ### Logs
 
@@ -294,31 +331,31 @@ go run -race .
 
 Contributions are welcome! Here's how you can help:
 
-- 🐛 **Report bugs**: Open an issue with details about the problem
-- 💡 **Suggest features**: Share your ideas for improvements
-- 🔧 **Submit PRs**: Fix bugs or add features (please open an issue first for major changes)
-- 📖 **Improve docs**: Help make the documentation clearer
-- ⭐ **Star the repo**: Show your support!
+- **Report bugs**: Open an issue with details about the problem
+- **Suggest features**: Share your ideas for improvements
+- **Submit PRs**: Fix bugs or add features (please open an issue first for major changes)
+- **Improve docs**: Help make the documentation clearer
+- **Star the repo**: Show your support!
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for detailed guidelines.
 
 ## Roadmap
 
-- [ ] Support for additional printer APIs
-- [x] Provide a Docker Image
-- [x] Real-time WebSocket updates
-- [x] Enhanced spool search functionality
-- [x] Print error handling and acknowledgment
-- [x] NFC Support
+- [ ] CI builds and automated tests on pull requests
+- [ ] Mask stored credentials (PrusaLink API keys, Spoolman password) in API responses
+- [ ] Faster dashboard loads when a printer is offline (cache last-known printer status)
 - [ ] Mobile-responsive UI improvements
+- [ ] Make printer history an optional toggle, it's borderline scope creep
+- [ ] Support for additional printer APIs (this one is quite the stretch goal!)
 
 ## Support the Project
 
 If you find FilaBridge useful:
-- ⭐ Star the repository
-- 🐛 Report bugs and suggest features
-- 📢 Share it with the 3D printing community
-- 🤝 Contribute code or documentation
+- Star the repository
+- Report bugs and suggest features
+- Share it with the 3D printing community
+- Contribute code or documentation
+- [Buy me a coffee](https://buymeacoffee.com/sargonas), or 3! ;)
 
 ## License
 
