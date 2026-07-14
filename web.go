@@ -1261,6 +1261,22 @@ func (ws *WebServer) nfcAssignHandler(c *gin.Context) {
 func (ws *WebServer) nfcUrlsHandler(c *gin.Context) {
 	var urls []gin.H
 
+	// When exactly one printer with a single toolhead is configured, each spool
+	// also gets a quick-assign URL that carries that toolhead as the location,
+	// so a single scan assigns the spool without needing a second location tag.
+	quickAssignLocation := ""
+	if configs, err := ws.bridge.GetAllPrinterConfigs(); err == nil && len(configs) == 1 {
+		for printerID, printerConfig := range configs {
+			if printerConfig.Toolheads == 1 {
+				displayName, err := ws.bridge.GetToolheadName(printerID, 0)
+				if err != nil {
+					displayName = "Toolhead 0"
+				}
+				quickAssignLocation = fmt.Sprintf("%s - %s", printerConfig.Name, displayName)
+			}
+		}
+	}
+
 	// Get all spools
 	spools, err := ws.bridge.spoolman.GetAllSpools()
 	if err != nil {
@@ -1271,6 +1287,19 @@ func (ws *WebServer) nfcUrlsHandler(c *gin.Context) {
 	// Generate spool URLs
 	for _, spool := range spools {
 		url := fmt.Sprintf("http://%s/api/nfc/assign?spool=%d", c.Request.Host, spool.ID)
+
+		// Optional single-scan quick-assign variant (see quickAssignLocation above)
+		comboURL := ""
+		comboQRBase64 := ""
+		if quickAssignLocation != "" {
+			comboURL = fmt.Sprintf("http://%s/api/nfc/assign?spool=%d&location=%s",
+				c.Request.Host, spool.ID, neturl.QueryEscape(quickAssignLocation))
+			if qrCode, err := qrcode.Encode(comboURL, qrcode.Medium, 256); err != nil {
+				log.Printf("Error generating quick-assign QR code for spool %d: %v", spool.ID, err)
+			} else {
+				comboQRBase64 = base64.StdEncoding.EncodeToString(qrCode)
+			}
+		}
 
 		// Safely get color hex
 		colorHex := ""
@@ -1288,30 +1317,36 @@ func (ws *WebServer) nfcUrlsHandler(c *gin.Context) {
 			log.Printf("Error generating QR code for spool %d: %v", spool.ID, err)
 			// Continue without QR code if generation fails
 			urls = append(urls, gin.H{
-				"type":             "spool",
-				"spool_id":         spool.ID,
-				"spool_name":       spool.Name,
-				"material":         spool.Material,
-				"brand":            spool.Brand,
-				"color_hex":        colorHex,
-				"remaining_weight": spool.RemainingWeight,
-				"url":              url,
-				"qr_code_base64":   "",
+				"type":                 "spool",
+				"spool_id":             spool.ID,
+				"spool_name":           spool.Name,
+				"material":             spool.Material,
+				"brand":                spool.Brand,
+				"color_hex":            colorHex,
+				"remaining_weight":     spool.RemainingWeight,
+				"url":                  url,
+				"qr_code_base64":       "",
+				"combo_url":            comboURL,
+				"combo_qr_code_base64": comboQRBase64,
+				"combo_location":       quickAssignLocation,
 			})
 			continue
 		}
 
 		qrCodeBase64 := base64.StdEncoding.EncodeToString(qrCode)
 		urls = append(urls, gin.H{
-			"type":             "spool",
-			"spool_id":         spool.ID,
-			"spool_name":       spool.Name,
-			"material":         spool.Material,
-			"brand":            spool.Brand,
-			"color_hex":        colorHex,
-			"remaining_weight": spool.RemainingWeight,
-			"url":              url,
-			"qr_code_base64":   qrCodeBase64,
+			"type":                 "spool",
+			"spool_id":             spool.ID,
+			"spool_name":           spool.Name,
+			"material":             spool.Material,
+			"brand":                spool.Brand,
+			"color_hex":            colorHex,
+			"remaining_weight":     spool.RemainingWeight,
+			"url":                  url,
+			"qr_code_base64":       qrCodeBase64,
+			"combo_url":            comboURL,
+			"combo_qr_code_base64": comboQRBase64,
+			"combo_location":       quickAssignLocation,
 		})
 	}
 

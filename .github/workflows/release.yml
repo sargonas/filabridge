@@ -28,7 +28,7 @@ jobs:
       - name: Install cross-compilation tools
         run: |
           sudo apt-get update
-          sudo apt-get install -y gcc-aarch64-linux-gnu gcc-mingw-w64
+          sudo apt-get install -y gcc-aarch64-linux-gnu
 
       - name: Build for Linux AMD64
         env:
@@ -48,33 +48,6 @@ jobs:
         run: |
           go build -o filabridge-linux-arm64 .
           chmod +x filabridge-linux-arm64
-
-      - name: Build for Windows AMD64
-        env:
-          CGO_ENABLED: 1
-          GOOS: windows
-          GOARCH: amd64
-          CC: x86_64-w64-mingw32-gcc
-        run: |
-          go build -o filabridge-windows-amd64.exe .
-
-      - name: Build for macOS AMD64
-        env:
-          CGO_ENABLED: 0
-          GOOS: darwin
-          GOARCH: amd64
-        run: |
-          go build -o filabridge-darwin-amd64 .
-          chmod +x filabridge-darwin-amd64
-
-      - name: Build for macOS ARM64
-        env:
-          CGO_ENABLED: 0
-          GOOS: darwin
-          GOARCH: arm64
-        run: |
-          go build -o filabridge-darwin-arm64 .
-          chmod +x filabridge-darwin-arm64
 
       - name: Create checksums
         run: |
@@ -374,27 +347,27 @@ jobs:
           files: |
             filabridge-linux-amd64
             filabridge-linux-arm64
-            filabridge-windows-amd64.exe
-            filabridge-darwin-amd64
-            filabridge-darwin-arm64
             checksums.txt
           body: |
             # FilaBridge ${{ steps.get_version.outputs.VERSION }}
-            
+
             ## Installation
-            
-            Download the appropriate binary for your platform:
-            
+
+            The recommended way to run FilaBridge is as a Docker container:
+
+            ```bash
+            docker run -d --name filabridge -p 5000:5000 -v ./data:/app/data ghcr.io/${{ github.repository }}:${{ steps.get_version.outputs.VERSION }}
+            ```
+
+            For bare-metal Linux installs (e.g. as a systemd service), download the binary for your architecture:
+
             - **Linux (AMD64)**: `filabridge-linux-amd64`
             - **Linux (ARM64)**: `filabridge-linux-arm64` (Raspberry Pi, etc.)
-            - **Windows (AMD64)**: `filabridge-windows-amd64.exe`
-            - **macOS (Intel)**: `filabridge-darwin-amd64`
-            - **macOS (Apple Silicon)**: `filabridge-darwin-arm64`
-            
+
             ### Quick Start
-            
-            1. Download the binary for your platform
-            2. Make it executable (Linux/macOS): `chmod +x filabridge-*`
+
+            1. Download the binary for your architecture
+            2. Make it executable: `chmod +x filabridge-*`
             3. Run Spoolman: `docker run -d --name spoolman -p 8000:8000 ghcr.io/donkie/spoolman:latest`
             4. Start FilaBridge: `./filabridge-*`
             5. Open http://localhost:5000 and configure your printers

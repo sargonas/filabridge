@@ -356,6 +356,19 @@ function displaySpoolQR(spoolData) {
     document.getElementById('spool-selected-details').innerHTML = ``;
     document.getElementById('spool-qr-large').src = `data:image/png;base64,${spoolData.qr_code_base64}`;
     document.getElementById('spool-url-text').textContent = spoolData.url;
+
+    // Quick-assign variant: only present when a single printer with a single
+    // toolhead is configured, so one scan can assign the spool directly
+    const comboSection = document.getElementById('spool-combo-section');
+    if (spoolData.combo_url) {
+        document.getElementById('spool-combo-details').innerHTML =
+            `Assigns this spool to <strong>${spoolData.combo_location}</strong> in a single scan — no location tag needed.`;
+        document.getElementById('spool-combo-qr-large').src = `data:image/png;base64,${spoolData.combo_qr_code_base64}`;
+        document.getElementById('spool-combo-url-text').textContent = spoolData.combo_url;
+        comboSection.style.display = 'block';
+    } else {
+        comboSection.style.display = 'none';
+    }
 }
 
 // Display QR code for selected filament

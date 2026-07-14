@@ -1,12 +1,10 @@
 # FilaBridge
 
-**UPDATE: DEVELOPMENT IS PERMANENTLY HALTED AFTER PRUSA STOLE THOUSANDS OF DOLLARS FROM ME AND OVER SIX MONTHS OF MY LIFE DUE TO THEIR SHITTY SUPPORT AND NOT ABLE TO MAKE WORKING PRINTERS.**
-
 [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)
 [![Go Version](https://img.shields.io/badge/Go-1.23-00ADD8?logo=go)](https://golang.org/)
-[![GitHub release](https://img.shields.io/github/v/release/needo37/filabridge)](https://github.com/needo37/filabridge/releases)
+[![GitHub release](https://img.shields.io/github/v/release/sargonas/filabridge)](https://github.com/sargonas/filabridge/releases)
 
-A high-performance Go microservice that bridges PrusaLink-compatible printers and Spoolman for (mostly) automatic filament inventory management. Originally designed for Prusa printers (CORE One, XL, MK4, etc.) but works with any printer that supports the PrusaLink API.
+A performant Go microservice that bridges PrusaLink-compatible printers and Spoolman for (mostly) automatic filament inventory management. Originally designed for Prusa printers (CORE One, XL, MK4, etc.) but works with any printer that supports the PrusaLink API.
 
 ### The Problem
 
@@ -44,23 +42,23 @@ No more manual updates or guesswork about remaining filament!
 
 ## Screenshots
 
-![FilaBridge Dashboard](https://github.com/needo37/filabridge/blob/main/screenshots/dashboard.png?raw=true)
+![FilaBridge Dashboard](https://github.com/sargonas/filabridge/blob/main/screenshots/dashboard.png?raw=true)
 *FilaBridge main dashboard showing printer status and toolhead mappings*
 
-![Spool Tags Management](https://github.com/needo37/filabridge/blob/main/screenshots/spool_tags.png?raw=true)
+![Spool Tags Management](https://github.com/sargonas/filabridge/blob/main/screenshots/spool_tags.png?raw=true)
 *NFC Management interface for generating QR codes for individual spools*
 
-![Filament Tags Management](https://github.com/needo37/filabridge/blob/main/screenshots/filament_tags.png?raw=true)
+![Filament Tags Management](https://github.com/sargonas/filabridge/blob/main/screenshots/filament_tags.png?raw=true)
 *Filament type QR code generation for new unopened spools*
 
-![Location Tags Management](https://github.com/needo37/filabridge/blob/main/screenshots/location_tags.png?raw=true)
+![Location Tags Management](https://github.com/sargonas/filabridge/blob/main/screenshots/location_tags.png?raw=true)
 *Location management interface for creating printer toolhead and storage location QR codes*
 
 ## Prerequisites
 
-- A PrusaLink-compatible 3D printer (Prusa or any printer with PrusaLink API)
-- PrusaLink enabled on your printer(s) for local network access
-- Spoolman
+- A PrusaLink-compatible 3D printer (Prusa or any printer with a PrusaLink API)
+- Enable PrusaLink on your printer(s) for local network access, and copy the password
+- Spoolman running somewhere
 - **For building from source**: Go 1.23 or higher
 - **(Optional) For NFC features**: NFC-capable smartphone and NFC tags (NTAG213/215/216 recommended)
 - **(Recommendation) NFC Tools Pro** mobile app (for programming tags)
@@ -78,28 +76,28 @@ No more manual updates or guesswork about remaining filament!
    ```bash
    docker run -d --name filabridge -p 5000:5000 \
      -v .:/app/data \
-     ghcr.io/needo37/filabridge:latest
+     ghcr.io/sargonas/filabridge:latest
    ```
 
 3. **Configure**: Open `http://localhost:5000` and click "⚙️ Configuration"
 
 **Using docker-compose (recommended for full stack):**
 ```bash
-git clone https://github.com/needo37/filabridge.git
+git clone https://github.com/sargonas/filabridge.git
 cd filabridge
 docker-compose up -d
 ```
 
-The docker-compose.yml automatically sets the `FILABRIDGE_DB_PATH` environment variable to `/app/data` to ensure the database persists in the mounted volume.
+The Docker image sets `FILABRIDGE_DB_PATH` to `/app/data`, so the database persists in the mounted volume.
 
-### Option 2: Pre-built Binary
+### Option 2: Pre-built Binary (Linux)
 
-1. **Download the latest release** for your platform from the [Releases page](https://github.com/needo37/filabridge/releases)
+FilaBridge is built to run as a Docker container or a Linux service alongside a Spoolman instance. Pre-built binaries are provided for Linux only — ideal for running bare-metal as a systemd service.
+
+1. **Download the latest release** for your architecture from the [Releases page](https://github.com/sargonas/filabridge/releases)
    - Linux (amd64, arm64)
-   - macOS (amd64/Intel, arm64/Apple Silicon)
-   - Windows (amd64)
 
-2. **Make it executable** (Linux/macOS):
+2. **Make it executable**:
    ```bash
    chmod +x filabridge
    ```
@@ -120,7 +118,7 @@ The docker-compose.yml automatically sets the `FILABRIDGE_DB_PATH` environment v
 
 1. **Clone and build**:
    ```bash
-   git clone https://github.com/needo37/filabridge.git
+   git clone https://github.com/sargonas/filabridge.git
    cd filabridge
    go mod download
    go build -o filabridge .
@@ -191,6 +189,8 @@ The web interface provides:
    - **Location Tags**: Create and generate QR codes for printer toolheads and custom locations (dryboxes, storage shelves, etc.)
 3. **Program NFC Tags**: Use NFC Tools Pro to scan QR codes and write URLs to NFC tags
 4. **Assign Spools**: Tap spool tag, then location tag (location then spool works as well) to instantly assign and update inventory
+
+**Single-printer setups**: If you have exactly one printer with one toolhead configured, the Spool Tags screen also offers a **Quick-Assign** variant for each spool — a single tag that assigns the spool directly to your printer in one scan, no location tag needed. (Multi-toolhead users can build the same thing manually by appending `&location=<location name>` to a spool URL.)
 
 ## API Endpoints
 
@@ -328,5 +328,5 @@ This project is licensed under the GNU General Public License v3.0 - see the [LI
 
 For issues specific to:
 - **PrusaLink**: Check Prusa's documentation
-- **Spoolman**: Visit the [Spoolman GitHub repository](https://github.com/pdrd/spoolman)
+- **Spoolman**: Visit the [Spoolman GitHub repository](https://github.com/Donkie/Spoolman)
 - **This bridge**: Open an issue in this repository
