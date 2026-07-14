@@ -33,32 +33,36 @@
                 <!-- Right Side: QR Code Display -->
                 <div class="nfc-display-panel">
                     <div id="spool-qr-display" class="nfc-qr-display" style="display: none;">
-                        <div class="nfc-selected-info">
-                            <h4 id="spool-selected-name">Selected Spool</h4>
-                            <div id="spool-selected-details"></div>
-                        </div>
-                        <div class="nfc-qr-large-container">
-                            <img id="spool-qr-large" src="" alt="QR Code" class="nfc-qr-large">
-                            <div class="nfc-url-container">
-                                <div id="spool-url-text" class="nfc-url-large"></div>
-                                <button class="nfc-copy-btn" onclick="copyUrlToClipboard('spool-url-text', this)" title="Copy URL">
-                                    <span class="nfc-copy-icon">📋</span>
-                                </button>
+                        <div class="nfc-qr-columns">
+                            <div class="nfc-qr-column">
+                                <div class="nfc-selected-info">
+                                    <h4 id="spool-selected-name">Selected Spool</h4>
+                                    <div id="spool-selected-details"></div>
+                                </div>
+                                <div class="nfc-qr-large-container">
+                                    <img id="spool-qr-large" src="" alt="QR Code" class="nfc-qr-large">
+                                    <div class="nfc-url-container">
+                                        <div id="spool-url-text" class="nfc-url-large"></div>
+                                        <button class="nfc-copy-btn" onclick="copyUrlToClipboard('spool-url-text', this)" title="Copy URL">
+                                            <span class="nfc-copy-icon">📋</span>
+                                        </button>
+                                    </div>
+                                </div>
                             </div>
-                        </div>
-                        <!-- Quick-assign variant, shown only for single-printer/single-toolhead setups -->
-                        <div id="spool-combo-section" style="display: none;">
-                            <div class="nfc-selected-info" style="margin-top: 20px;">
-                                <h4>⚡ Quick-Assign Tag</h4>
-                                <div id="spool-combo-details"></div>
-                            </div>
-                            <div class="nfc-qr-large-container">
-                                <img id="spool-combo-qr-large" src="" alt="Quick-Assign QR Code" class="nfc-qr-large">
-                                <div class="nfc-url-container">
-                                    <div id="spool-combo-url-text" class="nfc-url-large"></div>
-                                    <button class="nfc-copy-btn" onclick="copyUrlToClipboard('spool-combo-url-text', this)" title="Copy URL">
-                                        <span class="nfc-copy-icon">📋</span>
-                                    </button>
+                            <!-- Quick-assign variant, shown only for single-printer/single-toolhead setups -->
+                            <div id="spool-combo-section" class="nfc-qr-column" style="display: none;">
+                                <div class="nfc-selected-info">
+                                    <h4>⚡ Quick-Assign Tag</h4>
+                                    <div id="spool-combo-details"></div>
+                                </div>
+                                <div class="nfc-qr-large-container">
+                                    <img id="spool-combo-qr-large" src="" alt="Quick-Assign QR Code" class="nfc-qr-large">
+                                    <div class="nfc-url-container">
+                                        <div id="spool-combo-url-text" class="nfc-url-large"></div>
+                                        <button class="nfc-copy-btn" onclick="copyUrlToClipboard('spool-combo-url-text', this)" title="Copy URL">
+                                            <span class="nfc-copy-icon">📋</span>
+                                        </button>
+                                    </div>
                                 </div>
                             </div>
                         </div>

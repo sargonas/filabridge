@@ -351,9 +351,13 @@ function displaySpoolQR(spoolData) {
             `Assigns this spool to <strong>${spoolData.combo_location}</strong> in a single scan, no location tag needed.`;
         document.getElementById('spool-combo-qr-large').src = `data:image/png;base64,${spoolData.combo_qr_code_base64}`;
         document.getElementById('spool-combo-url-text').textContent = spoolData.combo_url;
-        comboSection.style.display = 'block';
+        // Clear the inline value rather than setting one, so the stylesheet keeps
+        // control of the column's display type (grid where subgrid is supported).
+        comboSection.style.display = '';
+        display.classList.add('has-combo');
     } else {
         comboSection.style.display = 'none';
+        display.classList.remove('has-combo');
     }
 }
 
