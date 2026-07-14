@@ -118,6 +118,50 @@
     line-height: 1.4;
 }
 
+/* Holds the standard tag and, on single-toolhead setups, the quick-assign tag.
+   Track counts are stated explicitly rather than with repeat(auto-fit, ...):
+   the parent is width:fit-content, which leaves the available width indefinite,
+   and auto-fit collapses to a single track when it cannot measure the space. */
+.nfc-qr-columns {
+    display: grid;
+    grid-template-columns: minmax(220px, 300px);
+    grid-template-rows: auto auto;
+    justify-content: center;
+    align-items: start;
+    gap: 24px;
+}
+
+.nfc-qr-display.has-combo .nfc-qr-columns {
+    grid-template-columns: repeat(2, minmax(220px, 280px));
+}
+
+.nfc-qr-column {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+}
+
+/* The quick-assign column carries an extra line of description, so as plain
+   stacks the two columns start their QR at different heights. Subgrid makes both
+   columns share the parent's rows, so the headings occupy one row and the codes
+   another, and the codes stay aligned however long the location name runs.
+   Browsers without subgrid keep the flex rules above and simply mis-align. */
+@supports (grid-template-rows: subgrid) {
+    .nfc-qr-display.has-combo .nfc-qr-column {
+        display: grid;
+        grid-template-rows: subgrid;
+        grid-row: span 2;
+    }
+}
+
+/* Not enough room for two codes abreast: stack them. The panel scrolls, and
+   the safe-centring above keeps the top of the first code reachable. */
+@media (max-width: 1150px) {
+    .nfc-qr-display.has-combo .nfc-qr-columns {
+        grid-template-columns: minmax(220px, 300px);
+    }
+}
+
 .nfc-qr-large-container {
     display: flex;
     flex-direction: column;
@@ -125,9 +169,13 @@
     gap: 12px;
 }
 
+/* Sized by the column rather than fixed, so two codes shrink to fit side by
+   side instead of overflowing the panel. */
 .nfc-qr-large {
-    width: 300px;
-    height: 300px;
+    width: 100%;
+    max-width: 300px;
+    aspect-ratio: 1 / 1;
+    box-sizing: border-box;
     border-radius: 12px;
     border: 2px solid rgba(255,255,255,0.2);
     background: #fff;
@@ -216,6 +264,13 @@
     display: flex;
     align-items: center;
     justify-content: center;
+    /* "safe" keeps the content centred while it fits, but falls back to
+       start-alignment once it is taller than the panel. Plain centring pushes
+       the overflow past both edges, and the top half is then unreachable: a
+       scroll container cannot scroll above its content origin. Browsers that
+       do not understand "safe" ignore these two lines and keep the rules above. */
+    align-items: safe center;
+    justify-content: safe center;
     overflow: auto;
 }
 
