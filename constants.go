@@ -6,8 +6,9 @@ const (
 	StatePrinting      = "PRINTING"
 	StatePaused        = "PAUSED"
 	StateFinished      = "FINISHED"
-	StateStopped       = "STOPPED" // PrusaLink reports a user-cancelled print as STOPPED
-	StateError         = "ERROR"   // PrusaLink reports a failed/aborted print as ERROR
+	StateStopped       = "STOPPED"   // PrusaLink reports a user-cancelled print as STOPPED
+	StateError         = "ERROR"     // PrusaLink reports a failed/aborted print as ERROR
+	StateAttention     = "ATTENTION" // Printer needs user action mid-job (filament runout, crash detection); the job is still in-flight
 	StateOffline       = "offline"
 	StateNotConfigured = "not_configured"
 )
