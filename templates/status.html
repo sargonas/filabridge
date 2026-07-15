@@ -30,6 +30,21 @@
         </div>
         {{end}}
 
+        {{if .HasRunoutWarnings}}
+        <div id="runout-warnings-container">
+            {{range .RunoutWarnings}}
+            <div class="runout-warning" data-warning-id="{{.ID}}" style="background: #fff3cd; border: 1px solid #ffeaa7; color: #856404; padding: 20px; margin: 20px 0; border-radius: 8px;">
+                <h4 style="margin-top: 0;">⚠️ Low Filament Warning</h4>
+                <p><strong>Printer:</strong> {{.PrinterName}} (Toolhead {{.ToolheadID}})</p>
+                <p><strong>Spool:</strong> [{{.SpoolID}}] {{.SpoolName}} - {{printf "%.1f" .RemainingWeight}}g remaining</p>
+                <p><strong>Print needs:</strong> ~{{printf "%.1f" .RequiredWeight}}g to finish</p>
+                {{if .AutoPaused}}<p><strong>The print has been paused.</strong> Acknowledging will resume it (or swap the spool first, then acknowledge).</p>{{end}}
+                <button class="btn" onclick="acknowledgeRunoutWarning('{{.ID}}')" style="background: #e0a800; margin-top: 10px;">Acknowledge{{if .AutoPaused}} &amp; Resume{{end}}</button>
+            </div>
+            {{end}}
+        </div>
+        {{else}}<div id="runout-warnings-container"></div>{{end}}
+
         {{if .HasPrintErrors}}
         <div id="print-errors-container">
             {{range .PrintErrors}}
