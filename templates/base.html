@@ -31,7 +31,7 @@
             <ul class="tabs">
                 <li><button class="tab active" onclick="switchTab('status')">📊 Filament Status</button></li>
                 <li><button class="tab" onclick="switchTab('nfc')">📱 NFC Management</button></li>
-                <li><button class="tab" onclick="switchTab('history')">🗒️ Print History</button></li>
+                {{if .HistoryEnabled}}<li><button class="tab" onclick="switchTab('history')">🗒️ Print History</button></li>{{end}}
                 <li><button class="tab" onclick="switchTab('settings')">⚙️ Settings</button></li>
             </ul>
             

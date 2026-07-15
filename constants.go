@@ -42,6 +42,7 @@ const (
 	ConfigKeySpoolmanPassword             = "spoolman_password"
 	ConfigKeyAutoAssignPreviousSpoolEnabled = "auto_assign_previous_spool_enabled"
 	ConfigKeyAutoAssignPreviousSpoolLocation = "auto_assign_previous_spool_location"
+	ConfigKeyPrintHistoryEnabled             = "print_history_enabled"
 )
 
 // HTTP timeouts
