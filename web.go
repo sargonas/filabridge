@@ -549,6 +549,30 @@ func (ws *WebServer) mapToolheadHandler(c *gin.Context) {
 		return
 	}
 
+	// Validate the toolhead exists on the target printer
+	printerConfigs, err := ws.bridge.GetAllPrinterConfigs()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	toolheads := 0
+	found := false
+	for _, config := range printerConfigs {
+		if config.Name == req.PrinterName {
+			toolheads = config.Toolheads
+			found = true
+			break
+		}
+	}
+	if !found {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Printer not found"})
+		return
+	}
+	if req.ToolheadID >= toolheads {
+		c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("Toolhead ID must be between 0 and %d", toolheads-1)})
+		return
+	}
+
 	// Handle unmapping (SpoolID = 0) or mapping (SpoolID > 0)
 	if req.SpoolID == 0 {
 		// Unmap the toolhead

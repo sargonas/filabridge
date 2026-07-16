@@ -113,6 +113,28 @@ func TestMapAndUnmapToolhead(t *testing.T) {
 	}
 }
 
+// TestMapToolheadRejectsInvalidTargets: mappings to toolheads beyond the
+// printer's configured count (or to unknown printers) must be rejected, not
+// silently stored.
+func TestMapToolheadRejectsInvalidTargets(t *testing.T) {
+	ws, _, spoolman := newTestServer(t)
+	spoolman.Spools[1] = &fakeSpool{ID: 1, Name: "Spool", RemainingWeight: 500}
+
+	// TestPrinter has 1 toolhead, so toolhead_id 1 is out of range
+	rec, _ := doJSON(t, ws, http.MethodPost, "/api/map_toolhead", `{"printer_name":"TestPrinter","toolhead_id":1,"spool_id":1}`)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("out-of-range toolhead must 400, got %d %s", rec.Code, rec.Body.String())
+	}
+	if id, _ := ws.bridge.GetToolheadMapping("TestPrinter", 1); id != 0 {
+		t.Fatalf("out-of-range mapping was stored: %d", id)
+	}
+
+	rec, _ = doJSON(t, ws, http.MethodPost, "/api/map_toolhead", `{"printer_name":"NoSuchPrinter","toolhead_id":0,"spool_id":1}`)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("unknown printer must 404, got %d %s", rec.Code, rec.Body.String())
+	}
+}
+
 func TestSpoolConflictRejected(t *testing.T) {
 	ws, _, spoolman := newTestServer(t)
 	spoolman.Spools[1] = &fakeSpool{ID: 1, Name: "Spool", RemainingWeight: 500}

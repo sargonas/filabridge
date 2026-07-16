@@ -23,33 +23,7 @@ type PrusaLinkClient struct {
 // PrusaLinkStatus represents the status response from PrusaLink
 type PrusaLinkStatus struct {
 	Printer struct {
-		State       string `json:"state"`
-		Temperature struct {
-			Bed struct {
-				Actual float64 `json:"actual"`
-				Target float64 `json:"target"`
-			} `json:"bed"`
-			Tool0 struct {
-				Actual float64 `json:"actual"`
-				Target float64 `json:"target"`
-			} `json:"tool0"`
-			Tool1 struct {
-				Actual float64 `json:"actual"`
-				Target float64 `json:"target"`
-			} `json:"tool1,omitempty"`
-			Tool2 struct {
-				Actual float64 `json:"actual"`
-				Target float64 `json:"target"`
-			} `json:"tool2,omitempty"`
-			Tool3 struct {
-				Actual float64 `json:"actual"`
-				Target float64 `json:"target"`
-			} `json:"tool3,omitempty"`
-			Tool4 struct {
-				Actual float64 `json:"actual"`
-				Target float64 `json:"target"`
-			} `json:"tool4,omitempty"`
-		} `json:"temperature"`
+		State     string `json:"state"`
 		Telemetry struct {
 			PrintTime     int     `json:"print_time"`
 			PrintTimeLeft int     `json:"print_time_left"`
