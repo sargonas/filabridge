@@ -43,6 +43,7 @@ function switchTab(tabName) {
                 } else if (tabId === 'advanced') {
                     loadAdvancedSettings();
                     loadAutoAssignSettings();
+                    loadPrintHistorySettings();
                 }
             }
         }
@@ -180,6 +181,7 @@ function switchSettingsTab(tabName, clickedElement) {
     } else if (tabName === 'advanced') {
         loadAdvancedSettings();
         loadAutoAssignSettings();
+        loadPrintHistorySettings();
     }
 }
 
@@ -454,6 +456,74 @@ function saveAutoAssignSettings() {
     })
     .catch(error => {
         alert('Error saving auto-assign settings: ' + error.message);
+    });
+}
+
+// Print History settings
+let printHistoryWasEnabled = true;
+
+function loadPrintHistorySettings() {
+    fetch('/api/config/print-history')
+        .then(response => response.json())
+        .then(data => {
+            const checkbox = document.getElementById('printHistoryEnabled');
+            if (checkbox) {
+                checkbox.checked = data.enabled !== false;
+                printHistoryWasEnabled = data.enabled !== false;
+            }
+        })
+        .catch(error => {
+            console.error('Error loading print history settings:', error);
+        });
+}
+
+function savePrintHistorySettings() {
+    const checkbox = document.getElementById('printHistoryEnabled');
+    const enabled = checkbox.checked;
+
+    // Reassure on the way out: turning history off hides the tab but keeps the data
+    if (!enabled && printHistoryWasEnabled) {
+        const proceed = confirm('The Print History tab will be hidden and new prints will not be logged. Existing entries are kept and will return if you re-enable this. Continue?');
+        if (!proceed) {
+            checkbox.checked = true;
+            return;
+        }
+    }
+
+    fetch('/api/config/print-history', {
+        method: 'PUT',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({ enabled: enabled })
+    })
+    .then(response => response.json())
+    .then(data => {
+        if (data.error) {
+            alert('Error saving history settings: ' + data.error);
+        } else {
+            // The tab is rendered server-side, so a reload applies the change
+            window.location.reload();
+        }
+    })
+    .catch(error => {
+        alert('Error saving history settings: ' + error.message);
+    });
+}
+
+function clearPrintHistory() {
+    if (!confirm('Delete all stored print history? This cannot be undone. (Spoolman data is not affected.)')) {
+        return;
+    }
+    fetch('/api/print-history', { method: 'DELETE' })
+    .then(response => response.json())
+    .then(data => {
+        if (data.error) {
+            alert('Error clearing history: ' + data.error);
+        } else {
+            alert('Print history cleared.');
+        }
+    })
+    .catch(error => {
+        alert('Error clearing history: ' + error.message);
     });
 }
 

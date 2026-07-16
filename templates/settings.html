@@ -113,5 +113,23 @@
                 </div>
             </div>
         </div>
+
+        <!-- Print History Settings Section -->
+        <div class="config-section" style="margin-top: 30px;">
+            <h3>🗒️ Print History Settings</h3>
+            <div class="help-text">
+                FilaBridge can keep a local record of prints for the Print History tab. Filament usage is recorded in Spoolman either way; this only controls the local log. Disabling hides the tab and stops new entries (existing entries are kept until cleared).
+            </div>
+            <div class="form-group">
+                <label style="display: flex; align-items: center; gap: 10px; cursor: pointer;">
+                    <input type="checkbox" id="printHistoryEnabled" style="width: auto; cursor: pointer;">
+                    <span>Keep print history and show the Print History tab</span>
+                </label>
+            </div>
+            <div style="margin-top: 20px; text-align: center;">
+                <button class="btn" onclick="savePrintHistorySettings()">💾 Save History Settings</button>
+                <button class="btn btn-secondary" onclick="clearPrintHistory()" style="margin-left: 10px;">🗑️ Clear Stored History</button>
+            </div>
+        </div>
     </div>
 </div>

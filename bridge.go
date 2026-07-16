@@ -286,6 +286,7 @@ func (b *FilamentBridge) initializeDefaultConfig() error {
 		ConfigKeySpoolmanTimeout:                 fmt.Sprintf("%d", SpoolmanTimeout),
 		ConfigKeyAutoAssignPreviousSpoolEnabled:  "false", // Enable auto-assignment of previous spool to default location
 		ConfigKeyAutoAssignPreviousSpoolLocation: "",      // Default location name for auto-assigned previous spools
+		ConfigKeyPrintHistoryEnabled:             "true",  // Keep a local record of prints for the history tab
 		ConfigKeyRunoutWarningEnabled:            "true",  // Warn when the mapped spool has less filament than the print needs
 		ConfigKeyRunoutPauseEnabled:              "false", // Also pause the print when a low-filament warning fires
 	}
@@ -328,6 +329,7 @@ func getConfigDescription(key string) string {
 		ConfigKeySpoolmanTimeout:                 "Spoolman API timeout in seconds",
 		ConfigKeyAutoAssignPreviousSpoolEnabled:  "Enable automatic assignment of previous spool to default location when assigning new spool to toolhead",
 		ConfigKeyAutoAssignPreviousSpoolLocation: "Default location name where previous spools will be automatically assigned (must exist as a location)",
+		ConfigKeyPrintHistoryEnabled:             "Keep a local record of prints and show the Print History tab (usage is recorded in Spoolman either way)",
 		ConfigKeyRunoutWarningEnabled:            "Show a dashboard warning when the mapped spool has less filament remaining than the print requires",
 		ConfigKeyRunoutPauseEnabled:              "Also pause the print when a low-filament warning fires (acknowledging resumes it)",
 	}
@@ -417,6 +419,40 @@ func (b *FilamentBridge) GetAutoAssignPreviousSpoolLocation() (string, error) {
 // SetAutoAssignPreviousSpoolLocation sets the default location name for auto-assigned previous spools
 func (b *FilamentBridge) SetAutoAssignPreviousSpoolLocation(location string) error {
 	return b.SetConfigValue(ConfigKeyAutoAssignPreviousSpoolLocation, location)
+}
+
+// GetPrintHistoryEnabled reports whether local print history is kept and the
+// history tab shown. Defaults to true (databases from before this setting
+// existed have no row for it). Spoolman usage recording is unaffected either way.
+func (b *FilamentBridge) GetPrintHistoryEnabled() (bool, error) {
+	value, err := b.GetConfigValue(ConfigKeyPrintHistoryEnabled)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return true, nil
+		}
+		return true, err
+	}
+	return value != "false", nil
+}
+
+// SetPrintHistoryEnabled sets whether local print history is kept
+func (b *FilamentBridge) SetPrintHistoryEnabled(enabled bool) error {
+	value := "false"
+	if enabled {
+		value = "true"
+	}
+	return b.SetConfigValue(ConfigKeyPrintHistoryEnabled, value)
+}
+
+// ClearPrintHistory deletes all stored print history entries. Does not touch
+// the recorded_jobs dedup ledger, which is required for billing idempotency.
+func (b *FilamentBridge) ClearPrintHistory() error {
+	_, err := b.db.Exec("DELETE FROM print_history")
+	if err != nil {
+		return fmt.Errorf("failed to clear print history: %w", err)
+	}
+	log.Printf("Print history cleared")
+	return nil
 }
 
 // GetRunoutWarningEnabled reports whether low-filament warnings are shown.
@@ -1776,8 +1812,15 @@ func (b *FilamentBridge) GetStatus() (*PrinterStatus, error) {
 }
 
 // processFilamentUsage processes filament usage updates for all toolheads.
-// printStarted and status are recorded in the print history for each toolhead entry.
+// printStarted and status are recorded in the print history for each toolhead
+// entry, unless local print history is disabled in settings.
 func (b *FilamentBridge) processFilamentUsage(printerName string, filamentUsage map[int]float64, jobName string, printStarted time.Time, status string) error {
+	historyEnabled, err := b.GetPrintHistoryEnabled()
+	if err != nil {
+		log.Printf("Warning: failed to read print history setting, keeping history: %v", err)
+		historyEnabled = true
+	}
+
 	// Update Spoolman with filament usage for each toolhead
 	for toolheadID, usedWeight := range filamentUsage {
 		if usedWeight <= 0 {
@@ -1804,9 +1847,11 @@ func (b *FilamentBridge) processFilamentUsage(printerName string, filamentUsage 
 			continue
 		}
 
-		// Log the usage in our database
-		if err := b.LogPrintUsage(printerName, toolheadID, spoolID, usedWeight, jobName, printStarted, status); err != nil {
-			log.Printf("Error logging print usage: %v", err)
+		// Log the usage in our database (unless local history is disabled)
+		if historyEnabled {
+			if err := b.LogPrintUsage(printerName, toolheadID, spoolID, usedWeight, jobName, printStarted, status); err != nil {
+				log.Printf("Error logging print usage: %v", err)
+			}
 		}
 
 		log.Printf("Updated spool %d: used %.2fg filament on %s toolhead %d",

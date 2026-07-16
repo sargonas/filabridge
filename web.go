@@ -161,6 +161,8 @@ func (ws *WebServer) setupRoutes() {
 		api.POST("/config", ws.updateConfigHandler)
 		api.GET("/config/auto-assign-previous-spool", ws.getAutoAssignPreviousSpoolHandler)
 		api.PUT("/config/auto-assign-previous-spool", ws.updateAutoAssignPreviousSpoolHandler)
+		api.GET("/config/print-history", ws.getPrintHistorySettingHandler)
+		api.PUT("/config/print-history", ws.updatePrintHistorySettingHandler)
 		api.GET("/printers", ws.getPrintersHandler)
 		api.POST("/printers", ws.addPrinterHandler)
 		api.PUT("/printers/:id", ws.updatePrinterHandler)
@@ -172,6 +174,7 @@ func (ws *WebServer) setupRoutes() {
 		api.GET("/runout-warnings", ws.getRunoutWarningsHandler)
 		api.POST("/runout-warnings/:id/acknowledge", ws.acknowledgeRunoutWarningHandler)
 		api.GET("/print-history", ws.getPrintHistoryHandler)
+		api.DELETE("/print-history", ws.clearPrintHistoryHandler)
 		api.GET("/nfc/assign", ws.nfcAssignHandler)
 		api.GET("/nfc/urls", ws.nfcUrlsHandler)
 		api.GET("/nfc/session/status", ws.nfcSessionStatusHandler)
@@ -407,10 +410,16 @@ func (ws *WebServer) dashboardHandler(c *gin.Context) {
 	printErrors := ws.bridge.GetPrintErrors()
 	hasPrintErrors := len(printErrors) > 0
 
+	historyEnabled, err := ws.bridge.GetPrintHistoryEnabled()
+	if err != nil {
+		historyEnabled = true
+	}
+
 	runoutWarnings := ws.bridge.GetRunoutWarnings()
 
 	c.HTML(http.StatusOK, "index.html", gin.H{
 		"Version":           version,
+		"HistoryEnabled":    historyEnabled,
 		"Status":            status,
 		"Spools":            spools,
 		"HasErrors":         hasErrors,
@@ -1078,6 +1087,46 @@ func (ws *WebServer) getPrintHistoryHandler(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{"history": history})
+}
+
+// clearPrintHistoryHandler deletes all stored print history entries
+func (ws *WebServer) clearPrintHistoryHandler(c *gin.Context) {
+	if err := ws.bridge.ClearPrintHistory(); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"message": "Print history cleared"})
+}
+
+// getPrintHistorySettingHandler returns whether local print history is kept
+func (ws *WebServer) getPrintHistorySettingHandler(c *gin.Context) {
+	enabled, err := ws.bridge.GetPrintHistoryEnabled()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"enabled": enabled})
+}
+
+// updatePrintHistorySettingHandler updates whether local print history is kept.
+// Disabling stops new entries and hides the history tab; existing entries are
+// kept (use DELETE /api/print-history to remove them).
+func (ws *WebServer) updatePrintHistorySettingHandler(c *gin.Context) {
+	// No binding:"required" on a bool - false would read as missing
+	var req struct {
+		Enabled bool `json:"enabled"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid JSON"})
+		return
+	}
+
+	if err := ws.bridge.SetPrintHistoryEnabled(req.Enabled); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"message": "Print history setting updated", "enabled": req.Enabled})
 }
 
 // getRunoutWarningsHandler returns all unacknowledged low-filament warnings

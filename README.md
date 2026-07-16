@@ -21,7 +21,7 @@ Spoolman is an excellent tool to track one's filament inventory. However, manual
 - **Smart Usage Tracking**: Reads the slicer's per-toolhead filament estimates from job metadata (parsing the G-code file as a fallback) to track consumption per toolhead
 - **Cancelled Print Tracking**: Prints that are cancelled or fail partway still have their filament usage recorded, scaled to how far they got
 - **Reliable Recording**: In-flight prints are tracked in the database, so they survive restarts and are never counted twice
-- **Print History**: Dashboard tab showing recent prints with completion status, spool used, filament recorded, and run time
+- **Print History**: Optional dashboard tab showing recent prints with completion status, spool used, filament recorded, and run time (can be disabled in settings for a leaner setup)
 - **Persistent Storage**: SQLite database stores toolhead mappings and complete print history
 - **High Performance**: Single lightweight binary with a single DB file, minimal resource usage, fast execution
 - **Web-based Config**: No config files needed - manage everything through the web UI
