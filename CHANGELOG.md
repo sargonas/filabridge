@@ -5,6 +5,27 @@ All notable changes to FilaBridge will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v0.9.5] - 2026-07-16
+
+### Added
+
+- stored credentials are write-only in the API and UI now, no longer returning them to a curious user. this closes issue #6
+- added warning system when print calls for more filament than spool has
+
+### Other
+
+- added link to your spoolman instance at the top nacv, closing #14
+- Merge pull request #19 from sargonas/optional-history
+- Merge main into optional-history
+- Merge pull request #18 from sargonas/runout-warning
+- more history testts
+- test coverage for the print history toggle added
+- tests for the new runout warning feature
+- Merge remote-tracking branch 'origin/main' into runout-warning
+- Merge pull request #17 from sargonas/Automation-tests
+-  in-process E2E test suite and CI workflow for PRs
+- added an ability to turn history logging off/on, and to clear the stored history as well
+
 ## [v0.9.4] - 2026-07-15
 
 ### Fixed
