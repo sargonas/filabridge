@@ -397,11 +397,11 @@ function loadAutoAssignSettings() {
                         locationSelect.appendChild(option);
                     });
                     
-                    // If the saved location is not in the list (e.g., it was deleted), add it as selected
+                    // If the saved location is not in the active list, still show it as selected
                     if (location && !storageLocations.find(loc => loc.name === location)) {
                         const option = document.createElement('option');
                         option.value = location;
-                        option.textContent = location + ' (not found)';
+                        option.textContent = location;
                         option.selected = true;
                         locationSelect.appendChild(option);
                     }
