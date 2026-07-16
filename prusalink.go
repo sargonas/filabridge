@@ -182,6 +182,38 @@ func (c *PrusaLinkClient) GetJobInfo() (*PrusaLinkJob, error) {
 	return &job, nil
 }
 
+// jobCommand issues a PUT to a v1 job sub-endpoint (pause/resume). PrusaLink
+// responds 204 on success.
+func (c *PrusaLinkClient) jobCommand(jobID int, command string) error {
+	req, err := http.NewRequest("PUT", fmt.Sprintf("%s/api/v1/job/%d/%s", c.baseURL, jobID, command), nil)
+	if err != nil {
+		return fmt.Errorf("failed to create %s request: %w", command, err)
+	}
+	c.addAPIKey(req)
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("failed to %s job %d: %w", command, jobID, err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusNoContent {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
+		return fmt.Errorf("PrusaLink %s error: %d - %s", command, resp.StatusCode, string(body))
+	}
+	return nil
+}
+
+// PauseJob pauses the given print job
+func (c *PrusaLinkClient) PauseJob(jobID int) error {
+	return c.jobCommand(jobID, "pause")
+}
+
+// ResumeJob resumes the given paused print job
+func (c *PrusaLinkClient) ResumeJob(jobID int) error {
+	return c.jobCommand(jobID, "resume")
+}
+
 // GetGcodeFile downloads the G-code file for a completed print job
 func (c *PrusaLinkClient) GetGcodeFile(filename string) ([]byte, error) {
 	// Use the correct PrusaLink API format: /{filename}
