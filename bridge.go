@@ -17,9 +17,9 @@ import (
 
 // FilamentBridge manages the connection between PrusaLink and Spoolman
 type FilamentBridge struct {
-	config           *Config
-	spoolman         *SpoolmanClient
-	db               *sql.DB
+	config   *Config
+	spoolman *SpoolmanClient
+	db       *sql.DB
 	// In-flight print state is persisted in the active_jobs table (survives
 	// restarts); only the concurrency guard for the usage-recording path is kept in memory.
 	processingPrints map[string]bool       // Guard against overlapping monitor cycles recording the same printer's usage
@@ -27,6 +27,9 @@ type FilamentBridge struct {
 	offlinePrinters  map[string]bool       // Printers currently logged as offline (edge-triggered reachability logging)
 	printerStates    map[string]string     // Last logged state per printer (edge-triggered state logging)
 	offlineMutex     sync.Mutex            // Guards offlinePrinters and printerStates
+	scanAttempts     map[string]int        // Header-scan attempts per printer+file (bounded retries)
+	scanInFlight     map[string]bool       // Printers with a header scan currently running
+	scanMutex        sync.Mutex            // Guards scanAttempts and scanInFlight
 	errorMutex       sync.RWMutex
 	mutex            sync.RWMutex
 }
@@ -85,6 +88,8 @@ func NewFilamentBridge(config *Config) (*FilamentBridge, error) {
 		printErrors:      make(map[string]PrintError),
 		offlinePrinters:  make(map[string]bool),
 		printerStates:    make(map[string]string),
+		scanAttempts:     make(map[string]int),
+		scanInFlight:     make(map[string]bool),
 	}
 
 	// Initialize database
@@ -992,6 +997,7 @@ func (b *FilamentBridge) upsertActiveJob(aj *activeJob) error {
 
 // clearActiveJob removes the in-flight job record for a printer.
 func (b *FilamentBridge) clearActiveJob(printerID string) error {
+	b.clearScanAttempts(printerID)
 	_, err := b.db.Exec(`DELETE FROM active_jobs WHERE printer_id = ?`, printerID)
 	return err
 }
@@ -1078,6 +1084,50 @@ func (b *FilamentBridge) noteStateChange(printerID, name, state, jobName string)
 	log.Printf("Printer %s: %s -> %s%s", name, previous, state, jobSuffix)
 }
 
+// maxEstimateScanAttempts bounds how often the header scan is retried for per
+// print file, in case the printer refuses or fails while printing.
+// Print-end fallback still runs regardless,
+const maxEstimateScanAttempts = 3
+
+// shouldScanForEstimate reports whether a header scan should run now for this
+// printer+file combo. If true the caller owns the in-flight slot and must
+// release it with finishScanForEstimate.
+func (b *FilamentBridge) shouldScanForEstimate(printerID, filename string) bool {
+	b.scanMutex.Lock()
+	defer b.scanMutex.Unlock()
+
+	if b.scanInFlight[printerID] {
+		return false
+	}
+	key := printerID + "|" + filename
+	if b.scanAttempts[key] >= maxEstimateScanAttempts {
+		return false
+	}
+	b.scanAttempts[key]++
+	b.scanInFlight[printerID] = true
+	return true
+}
+
+// finishScanForEstimate releases the in-flight scan slot for a printer.
+func (b *FilamentBridge) finishScanForEstimate(printerID string) {
+	b.scanMutex.Lock()
+	defer b.scanMutex.Unlock()
+	delete(b.scanInFlight, printerID)
+}
+
+// clearScanAttempts forgets header-scan attempt counts for a printer, so the
+// next job starts with a fresh budget.
+func (b *FilamentBridge) clearScanAttempts(printerID string) {
+	b.scanMutex.Lock()
+	defer b.scanMutex.Unlock()
+	prefix := printerID + "|"
+	for key := range b.scanAttempts {
+		if strings.HasPrefix(key, prefix) {
+			delete(b.scanAttempts, key)
+		}
+	}
+}
+
 // monitorPrusaLink monitors a single printer using PrusaLink API
 func (b *FilamentBridge) monitorPrusaLink(printerID string, config PrinterConfig) error {
 	// Read timeouts from a snapshot: b.config can be swapped by ReloadConfig at
@@ -1123,7 +1173,8 @@ func (b *FilamentBridge) monitorPrusaLink(printerID string, config PrinterConfig
 		log.Printf("Warning: failed to read active job for %s: %v", printerID, err)
 	}
 
-	isPrinting := currentState == StatePrinting || currentState == StatePaused
+	isPrinting := currentState == StatePrinting || currentState == StatePaused ||
+		currentState == StateAttention
 	// A job has ended if the printer is now in any terminal state: a clean finish
 	// (FINISHED/IDLE) or a cancel/failure (STOPPED/ERROR). Catching STOPPED/ERROR
 	// here is what lets us record a cancelled print's actual usage.
@@ -1138,7 +1189,7 @@ func (b *FilamentBridge) monitorPrusaLink(printerID string, config PrinterConfig
 		aj := &activeJob{PrinterID: printerID, StartedAt: time.Now()}
 		// Treat this as a continuation of the tracked job when paused, when the job
 		// id matches, or when the printer doesn't report an id at all.
-		if active != nil && (currentState == StatePaused || active.JobID == jobInfo.ID || jobInfo.ID == 0) {
+		if active != nil && (currentState == StatePaused || currentState == StateAttention || active.JobID == jobInfo.ID || jobInfo.ID == 0) {
 			aj.JobID = active.JobID
 			aj.Filename = active.Filename
 			aj.StartedAt = active.StartedAt
@@ -1157,12 +1208,26 @@ func (b *FilamentBridge) monitorPrusaLink(printerID string, config PrinterConfig
 				aj.LastProgress = p
 			}
 		}
-		// Capture the slicer filament estimate from job metadata while the job is
-		// loaded (it's typically gone once the printer returns to a terminal state).
-		// This is what lets both completion and cancellation record usage without a download.
+		// Capture the slicer filament estimate while the job is running, so that
+		// completion and cancellation can record usage without any fetch at
+		// print end. Two sources, cheapest first:
+		//   Job metadata from the API - free, but some firmware (like the
+		//   CORE One) never serves it.
+		//   OR Streaming scan of the print file's header.  .bgcode keeps the
+		//      estimate in its first few KB, so this reads a tiny slice of the
+		//      file. Attempt-limited per job in case the printer refuses file
+		//      reads while printing.
 		if len(aj.Usage) == 0 {
 			if usage := filamentUsageFromMeta(jobInfo.File.Meta); len(usage) > 0 {
 				aj.Usage = usage
+			} else if aj.Filename != "" && b.shouldScanForEstimate(printerID, aj.Filename) {
+				if usage, err := client.ScanGcodeFilamentUsage(aj.Filename, cfg.PrusaLinkFileDownloadTimeout); err != nil {
+					log.Printf("Warning: could not scan %s for filament estimate (will retry): %v", aj.Filename, err)
+				} else if len(usage) > 0 {
+					aj.Usage = usage
+					log.Printf("Captured filament estimate for %s from file header: %v", config.Name, usage)
+				}
+				b.finishScanForEstimate(printerID)
 			}
 		}
 		if aj.Filename != "" {
@@ -1286,21 +1351,34 @@ func (b *FilamentBridge) handlePrintEnded(config PrinterConfig, prusaClient *Pru
 			return nil
 		}
 
-		log.Printf("No captured metadata for %s; downloading G-code to determine filament usage: %s", printerName, filename)
-		gcodeContent, err := prusaClient.GetGcodeFileWithRetry(filename, fileDownloadTimeout)
-		if err != nil {
-			errorMsg := fmt.Sprintf("failed to download G-code file after retries: %v", err)
-			b.addPrintError(printerName, filename, errorMsg)
-			return fmt.Errorf("%s", errorMsg)
+		// Prefer a streaming header scan: .bgcode keeps the estimate in its
+		// first few KB, so this reads a tiny slice of the file where a full
+		// download of a large file cannot finish inside any timeout at
+		// PrusaLink's notoriously low transfer speed.
+		log.Printf("No stored estimate for %s; scanning file header for filament usage: %s", printerName, filename)
+		scanned, scanErr := prusaClient.ScanGcodeFilamentUsage(filename, fileDownloadTimeout)
+		if scanErr == nil && len(scanned) > 0 {
+			usage = scanned
+			source = "file header scan"
+		} else {
+			if scanErr != nil {
+				log.Printf("Warning: header scan failed for %s (%v); falling back to full download", filename, scanErr)
+			}
+			gcodeContent, err := prusaClient.GetGcodeFileWithRetry(filename, fileDownloadTimeout)
+			if err != nil {
+				errorMsg := fmt.Sprintf("failed to download G-code file after retries: %v", err)
+				b.addPrintError(printerName, filename, errorMsg)
+				return fmt.Errorf("%s", errorMsg)
+			}
+			parsed, err := prusaClient.ParseGcodeFilamentUsage(gcodeContent)
+			if err != nil {
+				errorMsg := fmt.Sprintf("failed to parse G-code for filament usage: %v", err)
+				b.addPrintError(printerName, filename, errorMsg)
+				return fmt.Errorf("%s", errorMsg)
+			}
+			usage = parsed
+			source = "G-code file"
 		}
-		parsed, err := prusaClient.ParseGcodeFilamentUsage(gcodeContent)
-		if err != nil {
-			errorMsg := fmt.Sprintf("failed to parse G-code for filament usage: %v", err)
-			b.addPrintError(printerName, filename, errorMsg)
-			return fmt.Errorf("%s", errorMsg)
-		}
-		usage = parsed
-		source = "G-code file"
 	}
 
 	if len(usage) == 0 {

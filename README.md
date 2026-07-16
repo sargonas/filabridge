@@ -3,6 +3,7 @@
 [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)
 [![Go Version](https://img.shields.io/badge/Go-1.25-00ADD8?logo=go)](https://golang.org/)
 [![GitHub release](https://img.shields.io/github/v/release/sargonas/filabridge)](https://github.com/sargonas/filabridge/releases)
+[![CI](https://github.com/sargonas/filabridge/actions/workflows/ci.yml/badge.svg)](https://github.com/sargonas/filabridge/actions/workflows/ci.yml)
 
 A self-hosted Go microservice that bridges PrusaLink-compatible printers and Spoolman for (mostly) automatic filament inventory management. Originally designed for Prusa printers (CORE One, XL, MK4, etc.) but will work with any printer that supports the PrusaLink API.
 
@@ -319,11 +320,12 @@ go mod download
 # Build the application
 go build -o filabridge .
 
-# Run tests
+# Run the test suite (includes in-process end-to-end tests
+# against fake PrusaLink/Spoolman servers)
 go test ./...
 
-# Run with race detection
-go run -race .
+# Same suite under the race detector (what CI runs)
+go test -race ./...
 ```
 
 ## Contributing
@@ -340,7 +342,7 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for detailed guidelines.
 
 ## Roadmap
 
-- [ ] CI builds and automated tests on pull requests
+- [x] CI builds and automated tests on pull requests
 - [ ] Mask stored credentials (PrusaLink API keys, Spoolman password) in API responses
 - [ ] Faster dashboard loads when a printer is offline (cache last-known printer status)
 - [ ] Mobile-responsive UI improvements

@@ -5,6 +5,21 @@ All notable changes to FilaBridge will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v0.9.4] - 2026-07-15
+
+### Fixed
+
+- capture filament estimate at print start via streaming file scan
+
+### Changed
+
+- remove printer model field and hostname detection since the model is not used anywhere functionally and is only for display purposes
+
+### Other
+
+- Merge pull request #16 from sargonas/consumed-bugfix
+- Merge pull request #12 from sargonas/QoL-improvements
+
 ## [v0.9.3] - 2026-07-14
 
 ### Other
