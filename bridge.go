@@ -22,14 +22,14 @@ type FilamentBridge struct {
 	db       *sql.DB
 	// In-flight print state is persisted in the active_jobs table (survives
 	// restarts); only the concurrency guard for the usage-recording path is kept in memory.
-	processingPrints map[string]bool       // Guard against overlapping monitor cycles recording the same printer's usage
-	printErrors      map[string]PrintError // Store print processing errors
-	offlinePrinters  map[string]bool       // Printers currently logged as offline (edge-triggered reachability logging)
-	printerStates    map[string]string     // Last logged state per printer (edge-triggered state logging)
-	offlineMutex     sync.Mutex            // Guards offlinePrinters and printerStates
-	scanAttempts     map[string]int        // Header-scan attempts per printer+file (bounded retries)
-	scanInFlight     map[string]bool       // Printers with a header scan currently running
-	scanMutex        sync.Mutex            // Guards scanAttempts and scanInFlight
+	processingPrints map[string]bool          // Guard against overlapping monitor cycles recording the same printer's usage
+	printErrors      map[string]PrintError    // Store print processing errors
+	offlinePrinters  map[string]bool          // Printers currently logged as offline (edge-triggered reachability logging)
+	printerStates    map[string]string        // Last logged state per printer (edge-triggered state logging)
+	offlineMutex     sync.Mutex               // Guards offlinePrinters and printerStates
+	scanAttempts     map[string]int           // Header-scan attempts per printer+file (bounded retries)
+	scanInFlight     map[string]bool          // Printers with a header scan currently running
+	scanMutex        sync.Mutex               // Guards scanAttempts and scanInFlight
 	runoutWarnings   map[string]RunoutWarning // Active low-filament warnings
 	runoutChecked    map[string]int           // Runout check attempts per printer+job+toolhead+spool
 	warnMutex        sync.RWMutex             // Guards runoutWarnings and runoutChecked
