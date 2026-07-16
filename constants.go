@@ -30,18 +30,18 @@ const (
 
 // Database configuration keys
 const (
-	ConfigKeyPrinterIPs                   = "printer_ips"
-	ConfigKeyAPIKey                       = "prusalink_api_key"
-	ConfigKeySpoolmanURL                  = "spoolman_url"
-	ConfigKeyPollInterval                 = "poll_interval"
-	ConfigKeyLocationSyncInterval         = "location_sync_interval"
-	ConfigKeyWebPort                      = "web_port"
-	ConfigKeyPrusaLinkTimeout             = "prusalink_timeout"
-	ConfigKeyPrusaLinkFileDownloadTimeout = "prusalink_file_download_timeout"
-	ConfigKeySpoolmanTimeout              = "spoolman_timeout"
-	ConfigKeySpoolmanUsername             = "spoolman_username"
-	ConfigKeySpoolmanPassword             = "spoolman_password"
-	ConfigKeyAutoAssignPreviousSpoolEnabled = "auto_assign_previous_spool_enabled"
+	ConfigKeyPrinterIPs                      = "printer_ips"
+	ConfigKeyAPIKey                          = "prusalink_api_key"
+	ConfigKeySpoolmanURL                     = "spoolman_url"
+	ConfigKeyPollInterval                    = "poll_interval"
+	ConfigKeyLocationSyncInterval            = "location_sync_interval"
+	ConfigKeyWebPort                         = "web_port"
+	ConfigKeyPrusaLinkTimeout                = "prusalink_timeout"
+	ConfigKeyPrusaLinkFileDownloadTimeout    = "prusalink_file_download_timeout"
+	ConfigKeySpoolmanTimeout                 = "spoolman_timeout"
+	ConfigKeySpoolmanUsername                = "spoolman_username"
+	ConfigKeySpoolmanPassword                = "spoolman_password"
+	ConfigKeyAutoAssignPreviousSpoolEnabled  = "auto_assign_previous_spool_enabled"
 	ConfigKeyAutoAssignPreviousSpoolLocation = "auto_assign_previous_spool_location"
 )
 
@@ -51,4 +51,3 @@ const (
 	PrusaLinkFileDownloadTimeout = 300 // seconds for file downloads (USB storage can be slow)
 	SpoolmanTimeout              = 10  // seconds
 )
-

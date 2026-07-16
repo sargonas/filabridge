@@ -1,0 +1,69 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+jobs:
+  test:
+    name: Lint, Build, Test
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: '1.25'
+
+      - name: Check formatting
+        run: |
+          UNFORMATTED=$(gofmt -l .)
+          if [ -n "$UNFORMATTED" ]; then
+            echo "These files need gofmt:"
+            echo "$UNFORMATTED"
+            exit 1
+          fi
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: Build
+        env:
+          CGO_ENABLED: 0
+        run: go build ./...
+
+      # The test suite includes in-process end-to-end coverage: fake PrusaLink
+      # and Spoolman servers drive full print lifecycles (completion, cancel
+      # scaling, dedup, ATTENTION handling, header-scan estimate capture) and
+      # the API surface, all under the race detector.
+      - name: Test (with race detector)
+        run: go test -race -count=1 ./...
+
+  docker:
+    name: Docker Build Check
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      # Build-only (no push): proves the Dockerfile stays healthy on PRs.
+      # amd64 only for speed; the release workflow covers multi-arch.
+      - name: Build image
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          platforms: linux/amd64
+          push: false
+          build-args: |
+            VERSION=ci-check
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
