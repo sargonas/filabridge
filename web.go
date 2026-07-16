@@ -59,6 +59,7 @@ type WebSocketMessage struct {
 	Spools           []SpoolmanSpool                    `json:"spools"`
 	ToolheadMappings map[string]map[int]ToolheadMapping `json:"toolhead_mappings"`
 	PrintErrors      []PrintError                       `json:"print_errors,omitempty"`
+	RunoutWarnings   []RunoutWarning                    `json:"runout_warnings,omitempty"`
 }
 
 // NewWebServer creates a new web server with Gin
@@ -170,6 +171,8 @@ func (ws *WebServer) setupRoutes() {
 		api.PUT("/printers/:id/toolheads/:toolhead_id", ws.updateToolheadNameHandler)
 		api.GET("/print-errors", ws.getPrintErrorsHandler)
 		api.POST("/print-errors/:id/acknowledge", ws.acknowledgePrintErrorHandler)
+		api.GET("/runout-warnings", ws.getRunoutWarningsHandler)
+		api.POST("/runout-warnings/:id/acknowledge", ws.acknowledgeRunoutWarningHandler)
 		api.GET("/print-history", ws.getPrintHistoryHandler)
 		api.DELETE("/print-history", ws.clearPrintHistoryHandler)
 		api.GET("/nfc/assign", ws.nfcAssignHandler)
@@ -244,6 +247,7 @@ func (ws *WebServer) BroadcastStatus() {
 
 	// Get print errors
 	printErrors := ws.bridge.GetPrintErrors()
+	runoutWarnings := ws.bridge.GetRunoutWarnings()
 
 	// Create message
 	message := WebSocketMessage{
@@ -253,6 +257,7 @@ func (ws *WebServer) BroadcastStatus() {
 		Spools:           spools,
 		ToolheadMappings: status.ToolheadMappings,
 		PrintErrors:      printErrors,
+		RunoutWarnings:   runoutWarnings,
 	}
 
 	// Marshal to JSON
@@ -410,6 +415,8 @@ func (ws *WebServer) dashboardHandler(c *gin.Context) {
 		historyEnabled = true
 	}
 
+	runoutWarnings := ws.bridge.GetRunoutWarnings()
+
 	c.HTML(http.StatusOK, "index.html", gin.H{
 		"Version":           version,
 		"HistoryEnabled":    historyEnabled,
@@ -418,6 +425,8 @@ func (ws *WebServer) dashboardHandler(c *gin.Context) {
 		"HasErrors":         hasErrors,
 		"HasPrintErrors":    hasPrintErrors,
 		"PrintErrors":       printErrors,
+		"RunoutWarnings":    runoutWarnings,
+		"HasRunoutWarnings": len(runoutWarnings) > 0,
 		"IsFirstRun":        isFirstRun,
 		"Printers":          cfg.Printers,
 		"SpoolmanConnected": spoolmanConnected,
@@ -1118,6 +1127,28 @@ func (ws *WebServer) updatePrintHistorySettingHandler(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{"message": "Print history setting updated", "enabled": req.Enabled})
+}
+
+// getRunoutWarningsHandler returns all unacknowledged low-filament warnings
+func (ws *WebServer) getRunoutWarningsHandler(c *gin.Context) {
+	c.JSON(http.StatusOK, gin.H{"warnings": ws.bridge.GetRunoutWarnings()})
+}
+
+// acknowledgeRunoutWarningHandler dismisses a low-filament warning, resuming
+// the print first if the warning auto-paused it and it is still paused
+func (ws *WebServer) acknowledgeRunoutWarningHandler(c *gin.Context) {
+	id := c.Param("id")
+	if id == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Warning ID is required"})
+		return
+	}
+
+	if err := ws.bridge.AcknowledgeRunoutWarning(id); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"message": "Warning acknowledged"})
 }
 
 // acknowledgePrintErrorHandler acknowledges a print error

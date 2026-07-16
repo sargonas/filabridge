@@ -119,6 +119,7 @@ function updateDashboard(data) {
     }
     
     // Update print errors
+    updateRunoutWarnings(data.runout_warnings || []);
     if (data.print_errors) {
         updatePrintErrors(data.print_errors);
     }
@@ -319,6 +320,65 @@ function updateToolheadMappings(mappings) {
             
         }
     });
+}
+
+function updateRunoutWarnings(warnings) {
+    const container = document.getElementById('runout-warnings-container');
+    if (!container) return;
+
+    container.innerHTML = '';
+
+    if (!warnings || warnings.length === 0) {
+        container.style.display = 'none';
+        return;
+    }
+
+    container.style.display = 'block';
+
+    warnings.forEach(w => {
+        const el = document.createElement('div');
+        el.className = 'runout-warning';
+        el.setAttribute('data-warning-id', w.id);
+        el.style.cssText = 'background: #fff3cd; border: 1px solid #ffeaa7; color: #856404; padding: 20px; margin: 20px 0; border-radius: 8px;';
+
+        const pausedNote = w.auto_paused
+            ? '<p><strong>The print has been paused.</strong> Acknowledging will resume it (or swap the spool first, then acknowledge).</p>'
+            : '';
+        const buttonLabel = w.auto_paused ? 'Acknowledge &amp; Resume' : 'Acknowledge';
+
+        el.innerHTML = `
+            <h4 style="margin-top: 0;">⚠️ Low Filament Warning</h4>
+            <p><strong>Printer:</strong> ${w.printer_name} (Toolhead ${w.toolhead_id})</p>
+            <p><strong>Spool:</strong> [${w.spool_id}] ${w.spool_name} - ${w.remaining_weight.toFixed(1)}g remaining</p>
+            <p><strong>Print needs:</strong> ~${w.required_weight.toFixed(1)}g to finish</p>
+            ${pausedNote}
+            <button class="btn" onclick="acknowledgeRunoutWarning('${w.id}')" style="background: #e0a800; margin-top: 10px;">${buttonLabel}</button>
+        `;
+
+        container.appendChild(el);
+    });
+}
+
+// Acknowledge a low-filament warning (resumes the print if it was auto-paused)
+async function acknowledgeRunoutWarning(warningId) {
+    try {
+        const response = await fetch(`/api/runout-warnings/${encodeURIComponent(warningId)}/acknowledge`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+        });
+
+        if (response.ok) {
+            const el = document.querySelector(`[data-warning-id="${warningId}"]`);
+            if (el) {
+                el.remove();
+            }
+        } else {
+            const data = await response.json().catch(() => ({}));
+            alert('Failed to acknowledge warning: ' + (data.error || 'Unknown error'));
+        }
+    } catch (error) {
+        alert('Failed to acknowledge warning: ' + error.message);
+    }
 }
 
 function updatePrintErrors(printErrors) {

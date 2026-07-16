@@ -213,6 +213,20 @@ function loadConfiguration() {
                         <input type="number" id="poll_interval" value="${config.poll_interval || '30'}" min="10" max="300">
                         <small>How often to check printer status</small>
                     </div>
+                    <div class="form-group">
+                        <label style="display: flex; align-items: center; gap: 10px; cursor: pointer;">
+                            <input type="checkbox" id="runout_warning_enabled" style="width: auto; cursor: pointer;" ${config.runout_warning_enabled !== 'false' ? 'checked' : ''}>
+                            <span><strong>Low filament warning</strong></span>
+                        </label>
+                        <small>Warn on the dashboard when the loaded spool has less filament remaining than the print requires. Purely informational.</small>
+                    </div>
+                    <div class="form-group">
+                        <label style="display: flex; align-items: center; gap: 10px; cursor: pointer;">
+                            <input type="checkbox" id="runout_pause_enabled" style="width: auto; cursor: pointer;" ${config.runout_pause_enabled === 'true' ? 'checked' : ''}>
+                            <span><strong>Pause print on low filament warning</strong></span>
+                        </label>
+                        <small>Also pause the print when the warning fires. Acknowledging the warning resumes the print (or continues as normal if you already resumed it at the printer).</small>
+                    </div>
                     <div style="margin-top: 20px; text-align: center;">
                         <button class="btn" onclick="saveConfiguration()">💾 Save Configuration</button>
                     </div>
@@ -230,7 +244,9 @@ function saveConfiguration() {
         spoolman_url: document.getElementById('spoolman_url').value,
         spoolman_username: document.getElementById('spoolman_username').value,
         spoolman_password: document.getElementById('spoolman_password').value,
-        poll_interval: document.getElementById('poll_interval').value
+        poll_interval: document.getElementById('poll_interval').value,
+        runout_warning_enabled: document.getElementById('runout_warning_enabled').checked ? 'true' : 'false',
+        runout_pause_enabled: document.getElementById('runout_pause_enabled').checked ? 'true' : 'false'
     };
     
     fetch('/api/config', {

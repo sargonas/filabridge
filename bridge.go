@@ -22,14 +22,17 @@ type FilamentBridge struct {
 	db       *sql.DB
 	// In-flight print state is persisted in the active_jobs table (survives
 	// restarts); only the concurrency guard for the usage-recording path is kept in memory.
-	processingPrints map[string]bool       // Guard against overlapping monitor cycles recording the same printer's usage
-	printErrors      map[string]PrintError // Store print processing errors
-	offlinePrinters  map[string]bool       // Printers currently logged as offline (edge-triggered reachability logging)
-	printerStates    map[string]string     // Last logged state per printer (edge-triggered state logging)
-	offlineMutex     sync.Mutex            // Guards offlinePrinters and printerStates
-	scanAttempts     map[string]int        // Header-scan attempts per printer+file (bounded retries)
-	scanInFlight     map[string]bool       // Printers with a header scan currently running
-	scanMutex        sync.Mutex            // Guards scanAttempts and scanInFlight
+	processingPrints map[string]bool          // Guard against overlapping monitor cycles recording the same printer's usage
+	printErrors      map[string]PrintError    // Store print processing errors
+	offlinePrinters  map[string]bool          // Printers currently logged as offline (edge-triggered reachability logging)
+	printerStates    map[string]string        // Last logged state per printer (edge-triggered state logging)
+	offlineMutex     sync.Mutex               // Guards offlinePrinters and printerStates
+	scanAttempts     map[string]int           // Header-scan attempts per printer+file (bounded retries)
+	scanInFlight     map[string]bool          // Printers with a header scan currently running
+	scanMutex        sync.Mutex               // Guards scanAttempts and scanInFlight
+	runoutWarnings   map[string]RunoutWarning // Active low-filament warnings
+	runoutChecked    map[string]int           // Runout check attempts per printer+job+toolhead+spool
+	warnMutex        sync.RWMutex             // Guards runoutWarnings and runoutChecked
 	errorMutex       sync.RWMutex
 	mutex            sync.RWMutex
 }
@@ -66,6 +69,25 @@ type PrintError struct {
 	Acknowledged bool      `json:"acknowledged"`
 }
 
+// RunoutWarning flags a print whose remaining filament requirement exceeds
+// what is left on the mapped spool. Informational by default; when the pause
+// toggle is on the print is paused and AutoPaused records that, so
+// acknowledging can resume it.
+type RunoutWarning struct {
+	ID              string    `json:"id"`
+	PrinterID       string    `json:"printer_id"`
+	PrinterName     string    `json:"printer_name"`
+	ToolheadID      int       `json:"toolhead_id"`
+	SpoolID         int       `json:"spool_id"`
+	SpoolName       string    `json:"spool_name"`
+	JobID           int       `json:"job_id"`
+	RequiredWeight  float64   `json:"required_weight"`  // grams still needed to finish the print
+	RemainingWeight float64   `json:"remaining_weight"` // grams left on the mapped spool
+	AutoPaused      bool      `json:"auto_paused"`
+	Timestamp       time.Time `json:"timestamp"`
+	Acknowledged    bool      `json:"acknowledged"`
+}
+
 // PrinterStatus represents the current status of all printers
 type PrinterStatus struct {
 	Printers         map[string]PrinterData             `json:"printers"`
@@ -90,6 +112,8 @@ func NewFilamentBridge(config *Config) (*FilamentBridge, error) {
 		printerStates:    make(map[string]string),
 		scanAttempts:     make(map[string]int),
 		scanInFlight:     make(map[string]bool),
+		runoutWarnings:   make(map[string]RunoutWarning),
+		runoutChecked:    make(map[string]int),
 	}
 
 	// Initialize database
@@ -263,6 +287,8 @@ func (b *FilamentBridge) initializeDefaultConfig() error {
 		ConfigKeyAutoAssignPreviousSpoolEnabled:  "false", // Enable auto-assignment of previous spool to default location
 		ConfigKeyAutoAssignPreviousSpoolLocation: "",      // Default location name for auto-assigned previous spools
 		ConfigKeyPrintHistoryEnabled:             "true",  // Keep a local record of prints for the history tab
+		ConfigKeyRunoutWarningEnabled:            "true",  // Warn when the mapped spool has less filament than the print needs
+		ConfigKeyRunoutPauseEnabled:              "false", // Also pause the print when a low-filament warning fires
 	}
 
 	// Check if this is a fresh installation by checking if any config exists
@@ -304,6 +330,8 @@ func getConfigDescription(key string) string {
 		ConfigKeyAutoAssignPreviousSpoolEnabled:  "Enable automatic assignment of previous spool to default location when assigning new spool to toolhead",
 		ConfigKeyAutoAssignPreviousSpoolLocation: "Default location name where previous spools will be automatically assigned (must exist as a location)",
 		ConfigKeyPrintHistoryEnabled:             "Keep a local record of prints and show the Print History tab (usage is recorded in Spoolman either way)",
+		ConfigKeyRunoutWarningEnabled:            "Show a dashboard warning when the mapped spool has less filament remaining than the print requires",
+		ConfigKeyRunoutPauseEnabled:              "Also pause the print when a low-filament warning fires (acknowledging resumes it)",
 	}
 	if desc, exists := descriptions[key]; exists {
 		return desc
@@ -425,6 +453,195 @@ func (b *FilamentBridge) ClearPrintHistory() error {
 	}
 	log.Printf("Print history cleared")
 	return nil
+}
+
+// GetRunoutWarningEnabled reports whether low-filament warnings are shown.
+// Defaults to true when the key is missing (pre-feature databases).
+func (b *FilamentBridge) GetRunoutWarningEnabled() (bool, error) {
+	value, err := b.GetConfigValue(ConfigKeyRunoutWarningEnabled)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return true, nil
+		}
+		return true, err
+	}
+	return value != "false", nil
+}
+
+// GetRunoutPauseEnabled reports whether a low-filament warning also pauses the
+// print. Defaults to false; it is an opt-in on top of the warning toggle.
+func (b *FilamentBridge) GetRunoutPauseEnabled() (bool, error) {
+	value, err := b.GetConfigValue(ConfigKeyRunoutPauseEnabled)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return false, nil
+		}
+		return false, err
+	}
+	return value == "true", nil
+}
+
+// GetRunoutWarnings returns all unacknowledged low-filament warnings
+func (b *FilamentBridge) GetRunoutWarnings() []RunoutWarning {
+	b.warnMutex.RLock()
+	defer b.warnMutex.RUnlock()
+
+	var warnings []RunoutWarning
+	for _, w := range b.runoutWarnings {
+		if !w.Acknowledged {
+			warnings = append(warnings, w)
+		}
+	}
+	return warnings
+}
+
+// AcknowledgeRunoutWarning dismisses a low-filament warning. If the warning
+// auto-paused the print and the printer is still paused, the print is resumed
+// first; a print the user already resumed at the printer is left alone.
+func (b *FilamentBridge) AcknowledgeRunoutWarning(id string) error {
+	b.warnMutex.RLock()
+	w, exists := b.runoutWarnings[id]
+	b.warnMutex.RUnlock()
+	if !exists {
+		return fmt.Errorf("runout warning not found: %s", id)
+	}
+
+	if w.AutoPaused && w.JobID != 0 {
+		cfg := b.GetConfigSnapshot()
+		if cfg != nil {
+			if pc, ok := cfg.Printers[w.PrinterID]; ok {
+				client := NewPrusaLinkClient(pc.IPAddress, pc.APIKey, cfg.PrusaLinkTimeout, cfg.PrusaLinkFileDownloadTimeout)
+				status, err := client.GetStatus()
+				if err != nil {
+					return fmt.Errorf("could not check printer state before resuming: %w", err)
+				}
+				if status.Printer.State == StatePaused {
+					if err := client.ResumeJob(w.JobID); err != nil {
+						return fmt.Errorf("failed to resume print: %w", err)
+					}
+					log.Printf("Resumed job %d on %s after low-filament warning was acknowledged", w.JobID, w.PrinterName)
+				}
+			}
+		}
+	}
+
+	b.warnMutex.Lock()
+	w.Acknowledged = true
+	b.runoutWarnings[id] = w
+	b.warnMutex.Unlock()
+	return nil
+}
+
+// maxRunoutCheckAttempts bounds Spoolman lookups per (job, toolhead, spool) so
+// a transient Spoolman failure gets retried without polling it forever.
+const maxRunoutCheckAttempts = 3
+
+// runoutCheckDone is stored once a (job, toolhead, spool) combination has been
+// conclusively checked, so it is never re-checked (and never re-warned).
+const runoutCheckDone = 1000
+
+// checkRunoutWarnings compares the print's remaining filament requirement per
+// toolhead against the mapped spool's remaining weight and raises a warning
+// (optionally pausing the print) when the spool will run short. Each
+// (job, toolhead, spool) combination is checked once; remapping a toolhead to
+// a different spool triggers a fresh check.
+func (b *FilamentBridge) checkRunoutWarnings(printerID string, config PrinterConfig, client *PrusaLinkClient, aj *activeJob) {
+	if len(aj.Usage) == 0 {
+		return
+	}
+	enabled, err := b.GetRunoutWarningEnabled()
+	if err != nil || !enabled {
+		return
+	}
+
+	printerName := resolvePrinterName(config)
+	remainingFraction := 1 - aj.LastProgress
+	if remainingFraction < 0 {
+		remainingFraction = 0
+	}
+
+	for toolheadID, totalGrams := range aj.Usage {
+		spoolID, err := b.GetToolheadMapping(printerName, toolheadID)
+		if err != nil || spoolID == 0 {
+			continue
+		}
+
+		memoKey := fmt.Sprintf("%s|%d|%d|%d", printerID, aj.JobID, toolheadID, spoolID)
+		b.warnMutex.Lock()
+		attempts := b.runoutChecked[memoKey]
+		if attempts >= maxRunoutCheckAttempts {
+			b.warnMutex.Unlock()
+			continue
+		}
+		b.runoutChecked[memoKey] = attempts + 1
+		b.warnMutex.Unlock()
+
+		spool, err := b.spoolman.GetSpool(spoolID)
+		if err != nil {
+			log.Printf("Warning: could not check spool %d for low filament (attempt %d): %v", spoolID, attempts+1, err)
+			continue
+		}
+
+		// Conclusive check: never revisit this combination
+		b.warnMutex.Lock()
+		b.runoutChecked[memoKey] = runoutCheckDone
+		b.warnMutex.Unlock()
+
+		needed := totalGrams * remainingFraction
+		if spool.RemainingWeight >= needed {
+			continue
+		}
+
+		autoPaused := false
+		if pauseEnabled, err := b.GetRunoutPauseEnabled(); err == nil && pauseEnabled && aj.JobID != 0 {
+			if err := client.PauseJob(aj.JobID); err != nil {
+				log.Printf("Warning: could not pause job %d after low-filament warning: %v", aj.JobID, err)
+			} else {
+				autoPaused = true
+				log.Printf("Paused job %d on %s: spool %d has %.1fg remaining but the print needs ~%.1fg",
+					aj.JobID, printerName, spoolID, spool.RemainingWeight, needed)
+			}
+		}
+
+		id := fmt.Sprintf("runout_%s_%d_%d_%d", sanitizeErrorID(printerName), aj.JobID, toolheadID, time.Now().Unix())
+		warning := RunoutWarning{
+			ID:              id,
+			PrinterID:       printerID,
+			PrinterName:     printerName,
+			ToolheadID:      toolheadID,
+			SpoolID:         spoolID,
+			SpoolName:       spool.Name,
+			JobID:           aj.JobID,
+			RequiredWeight:  needed,
+			RemainingWeight: spool.RemainingWeight,
+			AutoPaused:      autoPaused,
+			Timestamp:       time.Now(),
+		}
+		b.warnMutex.Lock()
+		b.runoutWarnings[id] = warning
+		b.warnMutex.Unlock()
+
+		log.Printf("Low filament warning for %s toolhead %d: spool %d (%s) has %.1fg remaining, print needs ~%.1fg",
+			printerName, toolheadID, spoolID, spool.Name, spool.RemainingWeight, needed)
+	}
+}
+
+// clearRunoutState drops unacknowledged warnings and check memos for a printer
+// once its job ends, so stale warnings do not outlive the print they describe.
+func (b *FilamentBridge) clearRunoutState(printerID string) {
+	b.warnMutex.Lock()
+	defer b.warnMutex.Unlock()
+	for id, w := range b.runoutWarnings {
+		if w.PrinterID == printerID {
+			delete(b.runoutWarnings, id)
+		}
+	}
+	prefix := printerID + "|"
+	for key := range b.runoutChecked {
+		if strings.HasPrefix(key, prefix) {
+			delete(b.runoutChecked, key)
+		}
+	}
 }
 
 // GetAllPrinterConfigs gets all printer configurations
@@ -998,6 +1215,7 @@ func (b *FilamentBridge) upsertActiveJob(aj *activeJob) error {
 // clearActiveJob removes the in-flight job record for a printer.
 func (b *FilamentBridge) clearActiveJob(printerID string) error {
 	b.clearScanAttempts(printerID)
+	b.clearRunoutState(printerID)
 	_, err := b.db.Exec(`DELETE FROM active_jobs WHERE printer_id = ?`, printerID)
 	return err
 }
@@ -1235,6 +1453,10 @@ func (b *FilamentBridge) monitorPrusaLink(printerID string, config PrinterConfig
 				log.Printf("Warning: failed to persist active job for %s: %v", printerID, err)
 			}
 		}
+
+		// With the estimate in hand, warn (and optionally pause) if the mapped
+		// spool has less filament remaining than the print still needs.
+		b.checkRunoutWarnings(printerID, config, client, aj)
 
 	case isTerminal && active != nil && active.Filename != "":
 		// A tracked job has ended. Classify how it ended to decide how much usage to record:
