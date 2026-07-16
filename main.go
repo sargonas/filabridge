@@ -54,7 +54,6 @@ func main() {
 		log.Fatalf("Failed to update bridge config: %v", err)
 	}
 
-
 	// Override port from config if not specified
 	if *port == DefaultWebPort && config.WebPort != DefaultWebPort {
 		*port = config.WebPort

@@ -363,28 +363,34 @@ func (c *PrusaLinkClient) ScanGcodeFilamentUsage(filename string, timeout int) (
 		return nil, fmt.Errorf("PrusaLink API error: %d - %s", resp.StatusCode, string(body))
 	}
 
-	// Stream in chunks, scanning the accumulated buffer as data arrives. A
-	// match is only trusted once the buffer extends safely past it (or EOF is
-	// reached), so a value split across a chunk boundary is never truncated.
+	// Stream in chunks, scanning a sliding window of the last overlap bytes
+	// plus the new chunk (never the whole accumulated stream, which would be
+	// quadratic). The overlap ensures a metadata line split across a chunk
+	// boundary is still seen whole, and a match near the window's end is only
+	// trusted once more data has arrived past it (or at EOF), so a value is
+	// never parsed truncated.
 	const chunkSize = 64 << 10
-	buf := make([]byte, 0, chunkSize*4)
+	const overlap = 512 // longer than any "filament used [g]=..." line
+	var totalRead int
+	window := make([]byte, 0, chunkSize+overlap)
 	chunk := make([]byte, chunkSize)
 	for {
 		n, readErr := resp.Body.Read(chunk)
-		if n > 0 {
-			buf = append(buf, chunk[:n]...)
-		}
 		eof := readErr == io.EOF
 		if n > 0 || eof {
-			if loc := filamentUsedRegex.FindSubmatchIndex(buf); loc != nil {
-				// A match near the end of the buffer may be truncated by the
-				// chunk boundary; trust it only once more data has arrived
-				// or at EOF when no more data is coming.
-				if eof || loc[1] < len(buf)-64 {
-					if usage := parseFilamentWeights(string(buf[loc[2]:loc[3]])); len(usage) > 0 {
+			window = append(window, chunk[:n]...)
+			totalRead += n
+			if loc := filamentUsedRegex.FindSubmatchIndex(window); loc != nil {
+				if eof || loc[1] < len(window)-64 {
+					if usage := parseFilamentWeights(string(window[loc[2]:loc[3]])); len(usage) > 0 {
 						return usage, nil
 					}
 				}
+			}
+			// Keep only the tail as the next window's prefix
+			if len(window) > overlap {
+				copy(window, window[len(window)-overlap:])
+				window = window[:overlap]
 			}
 		}
 		if eof {
@@ -393,7 +399,7 @@ func (c *PrusaLinkClient) ScanGcodeFilamentUsage(filename string, timeout int) (
 		if readErr != nil {
 			return nil, fmt.Errorf("failed while scanning G-code file: %w", readErr)
 		}
-		if len(buf) >= GcodeScanLimit {
+		if totalRead >= GcodeScanLimit {
 			return map[int]float64{}, nil // give up; caller may fall back to a full download
 		}
 	}
