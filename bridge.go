@@ -982,6 +982,9 @@ func (b *FilamentBridge) SetToolheadMapping(printerName string, toolheadID int, 
 	// Unlock before potentially calling AssignSpoolToLocation (which may need locks)
 	b.mutex.Unlock()
 
+	// Update the newly loaded spool's location in Spoolman
+	b.updateSpoolLocationForToolhead(printerName, toolheadID, spoolID)
+
 	if enabled && previousSpoolID > 0 && previousSpoolID != spoolID {
 		// Get the configured default location
 		locationName, err := b.GetAutoAssignPreviousSpoolLocation()
@@ -1010,6 +1013,66 @@ func (b *FilamentBridge) SetToolheadMapping(printerName string, toolheadID int, 
 	}
 
 	return nil
+}
+
+// updateSpoolLocationForToolhead sets a spool's Spoolman location to
+// "{PrinterName} - {ToolheadDisplayName}". Failures are logged but
+// never propagated so the toolhead mapping itself is not rolled back.
+func (b *FilamentBridge) updateSpoolLocationForToolhead(printerName string, toolheadID int, spoolID int) {
+	displayName := fmt.Sprintf("Toolhead %d", toolheadID)
+	printerConfigs, err := b.GetAllPrinterConfigs()
+	if err == nil {
+		for printerID, printerConfig := range printerConfigs {
+			if printerConfig.Name == printerName {
+				if name, err := b.GetToolheadName(printerID, toolheadID); err == nil {
+					displayName = name
+				}
+				break
+			}
+		}
+	}
+
+	locationName := fmt.Sprintf("%s - %s", printerName, displayName)
+
+	// Move any other spools currently at this location to the default storage location.
+	b.evictSpoolsFromLocation(locationName, spoolID)
+
+	if err := b.spoolman.UpdateSpoolLocation(spoolID, locationName); err != nil {
+		log.Printf("Warning: Failed to update Spoolman location for spool %d to '%s': %v", spoolID, locationName, err)
+	}
+}
+
+// evictSpoolsFromLocation moves any spools at the given location (except excludeSpoolID)
+// to the auto-assign default storage location, or clears their location if unconfigured.
+func (b *FilamentBridge) evictSpoolsFromLocation(locationName string, excludeSpoolID int) {
+	spools, err := b.spoolman.GetAllSpools()
+	if err != nil {
+		log.Printf("Warning: Failed to fetch spools to check location '%s': %v", locationName, err)
+		return
+	}
+
+	destLocation := ""
+	enabled, err := b.GetAutoAssignPreviousSpoolEnabled()
+	if err == nil && enabled {
+		if name, err := b.GetAutoAssignPreviousSpoolLocation(); err == nil && name != "" {
+			if loc, err := b.spoolman.FindLocationByName(name); err == nil && loc != nil {
+				destLocation = name
+			}
+		}
+	}
+
+	for _, spool := range spools {
+		if spool.ID == excludeSpoolID || spool.Location != locationName {
+			continue
+		}
+		if err := b.spoolman.UpdateSpoolLocation(spool.ID, destLocation); err != nil {
+			log.Printf("Warning: Failed to move spool %d from '%s': %v", spool.ID, locationName, err)
+		} else if destLocation != "" {
+			log.Printf("Moved spool %d from '%s' to '%s'", spool.ID, locationName, destLocation)
+		} else {
+			log.Printf("Cleared location for spool %d (was '%s')", spool.ID, locationName)
+		}
+	}
 }
 
 // GetToolheadMappings gets all toolhead mappings for a printer
@@ -1078,17 +1141,47 @@ func (b *FilamentBridge) GetAllToolheadMappings() (map[string]map[int]ToolheadMa
 // UnmapToolhead removes a spool mapping from a toolhead
 func (b *FilamentBridge) UnmapToolhead(printerName string, toolheadID int) error {
 	b.mutex.Lock()
-	defer b.mutex.Unlock()
 
-	_, err := b.db.Exec(
+	var spoolID int
+	err := b.db.QueryRow(
+		"SELECT spool_id FROM toolhead_mappings WHERE printer_name = ? AND toolhead_id = ?",
+		printerName, toolheadID,
+	).Scan(&spoolID)
+	if err != nil && err != sql.ErrNoRows {
+		b.mutex.Unlock()
+		return fmt.Errorf("failed to query toolhead mapping: %w", err)
+	}
+
+	_, err = b.db.Exec(
 		"DELETE FROM toolhead_mappings WHERE printer_name = ? AND toolhead_id = ?",
 		printerName, toolheadID,
 	)
 	if err != nil {
+		b.mutex.Unlock()
 		return fmt.Errorf("failed to unmap toolhead: %w", err)
 	}
 
+	b.mutex.Unlock()
 	log.Printf("Unmapped %s toolhead %d", printerName, toolheadID)
+
+	if spoolID > 0 {
+		locationName := ""
+		enabled, err := b.GetAutoAssignPreviousSpoolEnabled()
+		if err == nil && enabled {
+			locationName, _ = b.GetAutoAssignPreviousSpoolLocation()
+			if locationName != "" {
+				loc, err := b.spoolman.FindLocationByName(locationName)
+				if err != nil || loc == nil {
+					log.Printf("Warning: Auto-assign location '%s' does not exist, clearing spool %d location", locationName, spoolID)
+					locationName = ""
+				}
+			}
+		}
+		if err := b.spoolman.UpdateSpoolLocation(spoolID, locationName); err != nil {
+			log.Printf("Warning: Failed to update Spoolman location for spool %d: %v", spoolID, err)
+		}
+	}
+
 	return nil
 }
 

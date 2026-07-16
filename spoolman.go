@@ -39,14 +39,13 @@ type SpoolmanSpool struct {
 	FirstUsed       string                 `json:"first_used"`
 	LastUsed        string                 `json:"last_used"`
 	Archived        bool                   `json:"archived"`
-	LocationID      *int                   `json:"location_id"` // Reference to Spoolman Location entity
-	Extra           map[string]interface{} `json:"extra"`
+	Location string                 `json:"location"`
+	Extra    map[string]interface{} `json:"extra"`
 
 	// Computed fields for easier access
 	Name     string `json:"name"`     // Computed from filament.name
 	Brand    string `json:"brand"`    // Computed from filament.vendor.name
 	Material string `json:"material"` // Computed from filament.material
-	Location string `json:"location"` // Spool location (e.g., "Printer1 - Toolhead 0") - kept for backward compatibility
 }
 
 // SpoolmanFilament represents a filament type from Spoolman
@@ -533,7 +532,6 @@ func (c *SpoolmanClient) RenameLocation(oldName, newName string) error {
 
 // UpdateSpoolLocation updates a spool's location in Spoolman using text-based location field
 func (c *SpoolmanClient) UpdateSpoolLocation(spoolID int, locationName string) error {
-	// Use text-based location assignment - Spoolman will create the location if it doesn't exist
 	return c.updateSpoolLocationText(spoolID, locationName)
 }
 

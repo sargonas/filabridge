@@ -390,21 +390,21 @@ function removeSpoolFromOtherDropdowns(spoolId) {
     });
 }
 
-// Refresh all dropdowns to update available spools
+// Refresh all dropdowns to update available spools (debounced)
+let _refreshTimer = null;
 async function refreshAllDropdowns() {
-    // Get all dropdowns except the one that was just updated
-    const allDropdowns = document.querySelectorAll('.custom-dropdown');
-    
-    for (const dropdown of allDropdowns) {
-        // Skip if dropdown is currently open
-        const content = dropdown.querySelector('.dropdown-content');
-        if (content && content.classList.contains('show')) {
-            continue;
+    if (_refreshTimer) clearTimeout(_refreshTimer);
+    _refreshTimer = setTimeout(async () => {
+        _refreshTimer = null;
+        const allDropdowns = document.querySelectorAll('.custom-dropdown');
+        for (const dropdown of allDropdowns) {
+            const content = dropdown.querySelector('.dropdown-content');
+            if (content && content.classList.contains('show')) {
+                continue;
+            }
+            await loadAvailableSpools(dropdown);
         }
-        
-        // Refresh the available spools for this dropdown
-        await loadAvailableSpools(dropdown);
-    }
+    }, 300);
 }
 
 // Update edit button visibility and data based on selected spool

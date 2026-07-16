@@ -189,6 +189,27 @@
     color: #fff !important;
 }
 
+.refresh-from-spoolman-btn {
+    background: rgba(255,255,255,0.1);
+    color: rgba(255,255,255,0.75);
+    padding: 4px 10px;
+    border: 1px solid rgba(255,255,255,0.2);
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 12px;
+    transition: all 0.2s ease;
+}
+
+.refresh-from-spoolman-btn:hover {
+    background: rgba(255,255,255,0.2);
+    color: #fff;
+}
+
+.refresh-from-spoolman-btn:disabled {
+    cursor: not-allowed;
+    opacity: 0.6;
+}
+
 .edit-spool-btn {
     background: #007bff; /* Fallback color */
     color: white;

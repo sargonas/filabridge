@@ -573,6 +573,42 @@ function convertTimestampsToLocal() {
     });
 }
 
+function initRefreshButtons() {
+    document.addEventListener('click', function(e) {
+        const btn = e.target.closest('.refresh-from-spoolman-btn');
+        if (!btn) return;
+
+        const printerId = btn.dataset.printerId;
+        if (!printerId || btn.disabled) return;
+
+        btn.disabled = true;
+        const origText = btn.textContent;
+        btn.textContent = '⏳';
+
+        fetch('/api/refresh_from_spoolman', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({ printer_id: printerId })
+        })
+        .then(r => r.json())
+        .then(data => {
+            if (data.error) {
+                btn.textContent = '✗';
+                console.error('Refresh error:', data.error);
+                setTimeout(() => { btn.textContent = origText; btn.disabled = false; }, 1500);
+            } else {
+                btn.textContent = '✓';
+                setTimeout(() => location.reload(), 500);
+            }
+        })
+        .catch(err => {
+            console.error('Refresh failed:', err);
+            btn.textContent = '✗';
+            setTimeout(() => { btn.textContent = origText; btn.disabled = false; }, 1500);
+        });
+    });
+}
+
 // Initialize everything when page loads
 document.addEventListener('DOMContentLoaded', function() {
     convertTimestampsToLocal();
@@ -582,4 +618,5 @@ document.addEventListener('DOMContentLoaded', function() {
     initCustomDropdowns();
     initColorSwatches();
     initEditButtonColors();
+    initRefreshButtons();
 });

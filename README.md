@@ -32,6 +32,8 @@ Spoolman is an excellent tool to track one's filament inventory. However, manual
 - **Smart Scanning**: Two-step NFC workflow - scan spool + location for instant assignment
 - **Quick-Assign Tags**: Single-printer setups get one-scan tags that assign a spool straight to the printer, no location tag needed
 - **Location Tracking**: Track spools in custom locations (dryboxes) or printer toolheads
+- **Location Sync**: Assigning or unassigning spools in the dashboard automatically updates their Spoolman location
+- **Refresh from Spoolman**: One-click button to read spool locations from Spoolman and map matching spools to toolheads
 - **Smart Housekeeping**: If a new spool is "loaded" to a printer, the previous will be returned to a pre-set default location
 
 ## Why FilaBridge?
@@ -212,6 +214,16 @@ The web interface provides:
 3. **Monitor usage**: The system automatically tracks and updates filament usage
 4. **Handle errors**: Acknowledge any print processing errors that require manual intervention
 
+### Spoolman Location Sync
+
+FilaBridge keeps Spoolman spool locations in sync with your toolhead assignments:
+
+- **Assigning a spool** (via the dashboard dropdown, NFC, or QR code) sets the spool's Spoolman location to `"PrinterName - ToolheadName"` (e.g. `"Core One - Toolhead 0"`). Any other spool already at that location is moved to your configured default storage location (or has its location cleared if none is set).
+- **Unassigning a spool** moves it to the default storage location, or clears its location if none is configured.
+- **Refresh from Spoolman**: Each printer card has a "Refresh" button that reads all spool locations from Spoolman and maps any whose location matches `"PrinterName - ToolheadName"` to the corresponding toolhead. This is useful after editing locations directly in Spoolman or when setting up a fresh FilaBridge instance against an existing Spoolman database.
+
+The location naming convention is `"PrinterName - ToolheadName"`, where PrinterName is the name you gave the printer in FilaBridge and ToolheadName is either a custom name you set or the default `"Toolhead N"`. You can create these locations in Spoolman ahead of time and assign spools to them there, then use the Refresh button to pull the mappings into FilaBridge.
+
 ### NFC Tag / QR Code Management
 
 1. **Generate QR Codes**: Navigate to NFC Management tab in the web interface
@@ -241,6 +253,7 @@ The web interface also provides REST API endpoints:
 - `GET /api/nfc/assign` - Handle NFC tag scans (spool, location, or both in one URL)
 - `GET /api/nfc/urls` - Get all NFC URLs with QR codes
 - `GET /api/nfc/session/status` - Check NFC session status
+- `POST /api/refresh_from_spoolman` - Refresh toolhead mappings from Spoolman spool locations
 - `GET/POST /api/locations`, `PUT/DELETE /api/locations/{name}` - Manage locations
 - `WS /ws/status` - WebSocket endpoint for real-time status updates
 

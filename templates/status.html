@@ -77,7 +77,10 @@
                 <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
                     <h3>Toolhead Mappings</h3>
                 </div>
-                <h4>Map Spools to Toolheads</h4>
+                <div style="display: flex; justify-content: space-between; align-items: center;">
+                    <h4 style="margin: 0;">Map Spools to Toolheads</h4>
+                    <button class="refresh-from-spoolman-btn" data-printer-id="{{$printerID}}" title="Refresh toolhead mappings from Spoolman locations">↻ Refresh</button>
+                </div>
                 <div style="margin-top: 15px;">
                     {{$mapping := index $.Status.ToolheadMappings $printerID}}
                     {{range $toolheadID := generateToolheadIDs $printerConfig.Toolheads}}

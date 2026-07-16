@@ -153,6 +153,7 @@ func (ws *WebServer) setupRoutes() {
 		api.GET("/spools", ws.spoolsHandler)
 		api.GET("/filaments", ws.filamentsHandler)
 		api.POST("/map_toolhead", ws.mapToolheadHandler)
+		api.POST("/refresh_from_spoolman", ws.refreshFromSpoolmanHandler)
 		api.GET("/available_spools", ws.availableSpoolsHandler)
 		api.GET("/spoolman/test", ws.testSpoolmanConnectionHandler)
 		api.GET("/spoolman/debug", ws.debugSpoolmanHandler)
@@ -570,6 +571,85 @@ func (ws *WebServer) mapToolheadHandler(c *gin.Context) {
 		}
 		c.JSON(http.StatusOK, gin.H{"message": "Toolhead mapped successfully"})
 	}
+}
+
+// refreshFromSpoolmanHandler reads spool locations from Spoolman and maps
+// spools to toolheads whose location string matches "{PrinterName} - {DisplayName}".
+func (ws *WebServer) refreshFromSpoolmanHandler(c *gin.Context) {
+	var req struct {
+		PrinterID string `json:"printer_id" binding:"required"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid JSON"})
+		return
+	}
+
+	configs, err := ws.bridge.GetAllPrinterConfigs()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to load printer configs"})
+		return
+	}
+	printerConfig, ok := configs[req.PrinterID]
+	if !ok {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Printer not found"})
+		return
+	}
+
+	toolheadNames, err := ws.bridge.GetAllToolheadNames(req.PrinterID)
+	if err != nil {
+		toolheadNames = make(map[int]string)
+	}
+
+	spools, err := ws.bridge.spoolman.GetAllSpools()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to fetch spools from Spoolman"})
+		return
+	}
+
+	spoolsByLocation := make(map[string]SpoolmanSpool)
+	for _, spool := range spools {
+		if spool.Location == "" {
+			continue
+		}
+		if existing, ok := spoolsByLocation[spool.Location]; !ok || spool.RemainingWeight > existing.RemainingWeight {
+			spoolsByLocation[spool.Location] = spool
+		}
+	}
+
+	type refreshResult struct {
+		ToolheadID  int    `json:"toolhead_id"`
+		SpoolID     int    `json:"spool_id"`
+		DisplayName string `json:"display_name"`
+	}
+	var mapped []refreshResult
+	var errors []string
+
+	for toolheadID := 0; toolheadID < printerConfig.Toolheads; toolheadID++ {
+		displayName := fmt.Sprintf("Toolhead %d", toolheadID)
+		if name, ok := toolheadNames[toolheadID]; ok {
+			displayName = name
+		}
+		locationName := fmt.Sprintf("%s - %s", printerConfig.Name, displayName)
+
+		spool, ok := spoolsByLocation[locationName]
+		if !ok {
+			continue
+		}
+		if err := ws.bridge.clearSpoolFromAllToolheads(spool.ID); err != nil {
+			log.Printf("Warning: Failed to clear spool %d from existing toolheads: %v", spool.ID, err)
+		}
+		if err := ws.bridge.SetToolheadMapping(printerConfig.Name, toolheadID, spool.ID); err != nil {
+			errors = append(errors, fmt.Sprintf("%s: %v", displayName, err))
+			continue
+		}
+		mapped = append(mapped, refreshResult{
+			ToolheadID:  toolheadID,
+			SpoolID:     spool.ID,
+			DisplayName: displayName,
+		})
+	}
+
+	c.JSON(http.StatusOK, gin.H{"mapped": mapped, "errors": errors})
 }
 
 // availableSpoolsHandler returns spools available for assignment to a specific toolhead
