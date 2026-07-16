@@ -257,7 +257,7 @@ function editPrinter(printerId) {
             document.getElementById('editPrinterId').value = printerId;
             document.getElementById('editPrinterName').value = printer.name || '';
             document.getElementById('editPrinterIP').value = printer.ip_address || '';
-            document.getElementById('editPrinterAPIKey').value = printer.api_key || '';
+            document.getElementById('editPrinterAPIKey').value = ''; // keys are never returned by the API
             document.getElementById('editPrinterToolheads').value = printer.toolheads || 1;
             
             // Show the edit modal

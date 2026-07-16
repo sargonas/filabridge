@@ -626,17 +626,35 @@ func (ws *WebServer) availableSpoolsHandler(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"spools": availableSpools})
 }
 
-// getConfigHandler returns current configuration
+// sensitiveConfigKeys are credentials: never returned by the API and only
+// overwritten when a non-empty value is submitted (empty means "keep current").
+var sensitiveConfigKeys = map[string]bool{
+	ConfigKeySpoolmanPassword: true,
+	ConfigKeyAPIKey:           true, // legacy global PrusaLink key
+}
+
+// getConfigHandler returns current configuration. Credentials are masked:
+// the response reports only whether a value is set, never the value itself.
 func (ws *WebServer) getConfigHandler(c *gin.Context) {
 	config, err := ws.bridge.GetAllConfig()
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
+	for key := range sensitiveConfigKeys {
+		if value, exists := config[key]; exists {
+			config[key] = ""
+			if value != "" {
+				config[key+"_set"] = "true"
+			}
+		}
+	}
 	c.JSON(http.StatusOK, config)
 }
 
-// updateConfigHandler updates configuration
+// updateConfigHandler updates configuration. Empty values for credential keys
+// are ignored so a form round-trip of masked values never wipes a stored
+// secret; submit a non-empty value to replace one.
 func (ws *WebServer) updateConfigHandler(c *gin.Context) {
 	var config map[string]string
 	if err := c.ShouldBindJSON(&config); err != nil {
@@ -646,6 +664,9 @@ func (ws *WebServer) updateConfigHandler(c *gin.Context) {
 
 	// Update each config value
 	for key, value := range config {
+		if sensitiveConfigKeys[key] && value == "" {
+			continue // masked round-trip: keep the stored credential
+		}
 		if err := ws.bridge.SetConfigValue(key, value); err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 			return
@@ -728,10 +749,11 @@ func (ws *WebServer) getPrintersHandler(c *gin.Context) {
 	result := make(map[string]interface{})
 	for printerID, printerConfig := range printerConfigs {
 		printerData := map[string]interface{}{
-			"name":       printerConfig.Name,
-			"ip_address": printerConfig.IPAddress,
-			"api_key":    printerConfig.APIKey,
-			"toolheads":  printerConfig.Toolheads,
+			"name":        printerConfig.Name,
+			"ip_address":  printerConfig.IPAddress,
+			"api_key":     "", // never returned; see api_key_set
+			"api_key_set": printerConfig.APIKey != "",
+			"toolheads":   printerConfig.Toolheads,
 		}
 
 		// Get toolhead names for this printer
@@ -821,6 +843,16 @@ func (ws *WebServer) updatePrinterHandler(c *gin.Context) {
 	if err := validateAddress(printerConfig.IPAddress); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
+	}
+
+	// The API never returns stored keys, so the edit form submits an empty
+	// api_key on a masked round-trip: keep the existing key in that case.
+	if printerConfig.APIKey == "" {
+		if existing, err := ws.bridge.GetAllPrinterConfigs(); err == nil {
+			if current, ok := existing[printerID]; ok {
+				printerConfig.APIKey = current.APIKey
+			}
+		}
 	}
 
 	// Save the updated printer configuration

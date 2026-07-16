@@ -151,7 +151,7 @@ FilaBridge is built to run as a Docker container or a Linux service alongside a 
 
 ## Security
 
-FilaBridge is designed for use on a private, trusted network and has no built-in authentication. For the current time being, anyone who can reach the web interface can change settings and read the credentials you have configured (PrusaLink API keys and the optional Spoolman password). Do not expose FilaBridge directly to the internet. If you need remote access, put it behind a VPN or an authenticating reverse proxy.
+FilaBridge is designed for use on a private, trusted network and has no built-in authentication. Stored credentials (PrusaLink API keys and the optional Spoolman password) are write-only: the API and UI never return them once saved. However, anyone who can reach the web interface can still change settings - including pointing FilaBridge at servers they control - so treat interface access as full control. Do not expose FilaBridge directly to the internet. If you need remote access, put it behind a VPN or an authenticating reverse proxy.
 
 ## Configuration
 
@@ -343,10 +343,10 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for detailed guidelines.
 ## Roadmap
 
 - [x] CI builds and automated tests on pull requests
-- [ ] Mask stored credentials (PrusaLink API keys, Spoolman password) in API responses
+- [x] Mask stored credentials (PrusaLink API keys, Spoolman password) in API responses
 - [ ] Faster dashboard loads when a printer is offline (cache last-known printer status)
 - [ ] Mobile-responsive UI improvements
-- [ ] Make printer history an optional toggle, it's borderline scope creep
+- [X] Make printer history an optional toggle, it's borderline scope creep
 - [ ] Support for additional printer APIs (this one is quite the stretch goal!)
 
 ## Support the Project

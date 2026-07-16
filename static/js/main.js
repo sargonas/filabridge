@@ -205,8 +205,8 @@ function loadConfiguration() {
                     </div>
                     <div class="form-group">
                         <label><strong>Spoolman Password (optional):</strong></label>
-                        <input type="password" id="spoolman_password" value="${config.spoolman_password || ''}" placeholder="Leave empty if not using basic auth">
-                        <small>Password for Spoolman basic authentication (optional)</small>
+                        <input type="password" id="spoolman_password" value="" placeholder="${config.spoolman_password_set === 'true' ? 'Unchanged - enter a new value to replace' : 'Leave empty if not using basic auth'}">
+                        <small>Never displayed once saved. Leave blank to keep the current password; clear the username to disable authentication.</small>
                     </div>
                     <div class="form-group">
                         <label><strong>Poll Interval (seconds):</strong></label>
@@ -243,12 +243,16 @@ function saveConfiguration() {
     const config = {
         spoolman_url: document.getElementById('spoolman_url').value,
         spoolman_username: document.getElementById('spoolman_username').value,
-        spoolman_password: document.getElementById('spoolman_password').value,
         poll_interval: document.getElementById('poll_interval').value,
         runout_warning_enabled: document.getElementById('runout_warning_enabled').checked ? 'true' : 'false',
         runout_pause_enabled: document.getElementById('runout_pause_enabled').checked ? 'true' : 'false'
     };
     
+    const password = document.getElementById('spoolman_password').value;
+    if (password) {
+        config.spoolman_password = password;
+    }
+
     fetch('/api/config', {
         method: 'POST',
         headers: {'Content-Type': 'application/json'},
