@@ -25,6 +25,7 @@ Spoolman is an excellent tool to track one's filament inventory. However, manual
 - **Persistent Storage**: SQLite database stores toolhead mappings and complete print history
 - **High Performance**: Single lightweight binary with a single DB file, minimal resource usage, fast execution
 - **Web-based Config**: No config files needed - manage everything through the web UI
+- **Multi-Color Filament Support**: Renders coaxial and longitudinal multi-color filaments with split swatches matching Spoolman's UI
 - **Smart Spool Search**: Search and filter spools by ID, material, brand, or name with real-time filtering
 - **Error Handling**: Print error detection with acknowledgment system for failed filament tracking
 - **Auto-mapping**: Automatic spool assignment when selecting from dropdown menus

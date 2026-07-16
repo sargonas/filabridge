@@ -540,24 +540,61 @@ function apiUrl(path) {
     return `${window.location.origin}${path}`;
 }
 
-// Initialize color swatches based on data-color attributes
+function buildColorSwatch(colorHex, multiColorHexes, multiColorDirection) {
+    if (multiColorHexes) {
+        const colors = multiColorHexes.split(',');
+        const container = document.createElement('div');
+        container.className = 'color-swatch-multi ' + (multiColorDirection || 'coaxial');
+        colors.forEach(c => {
+            const stripe = document.createElement('div');
+            stripe.className = 'color-stripe';
+            stripe.style.backgroundColor = '#' + c.trim();
+            container.appendChild(stripe);
+        });
+        return container;
+    }
+    const swatch = document.createElement('div');
+    swatch.className = 'color-swatch';
+    swatch.style.backgroundColor = '#' + (colorHex || 'ccc');
+    return swatch;
+}
+
+function buildColorStyle(colorHex, multiColorHexes, multiColorDirection) {
+    if (multiColorHexes) {
+        const colors = multiColorHexes.split(',').map(c => '#' + c.trim());
+        const direction = multiColorDirection === 'longitudinal' ? 'to bottom' : 'to right';
+        const gradient = 'linear-gradient(' + direction + ', ' + colors.join(', ') + ')';
+        return { background: gradient, borderColor: colors[0] };
+    }
+    const color = '#' + (colorHex || '007bff');
+    return { background: color, borderColor: color };
+}
+
 function initColorSwatches() {
     document.querySelectorAll('.color-swatch[data-color]').forEach(swatch => {
-        const color = swatch.getAttribute('data-color');
-        if (color) {
-            swatch.style.backgroundColor = '#' + color;
+        const multiHexes = swatch.getAttribute('data-multi-color-hexes');
+        const multiDir = swatch.getAttribute('data-multi-color-direction');
+        if (multiHexes) {
+            const multiSwatch = buildColorSwatch(null, multiHexes, multiDir);
+            swatch.replaceWith(multiSwatch);
+        } else {
+            const color = swatch.getAttribute('data-color');
+            if (color) {
+                swatch.style.backgroundColor = '#' + color;
+            }
         }
     });
 }
 
-// Initialize edit button colors from data attributes
 function initEditButtonColors() {
-    document.querySelectorAll('.edit-spool-btn[data-color-hex]').forEach(button => {
-        const colorHex = button.getAttribute('data-color-hex');
-        if (colorHex) {
-            button.style.backgroundColor = '#' + colorHex;
-            button.style.borderColor = '#' + colorHex;
-        }
+    document.querySelectorAll('.edit-spool-btn[data-color-hex], .edit-spool-btn[data-multi-color-hexes]').forEach(button => {
+        const style = buildColorStyle(
+            button.getAttribute('data-color-hex'),
+            button.getAttribute('data-multi-color-hexes'),
+            button.getAttribute('data-multi-color-direction')
+        );
+        button.style.background = style.background;
+        button.style.borderColor = style.borderColor;
     });
 }
 

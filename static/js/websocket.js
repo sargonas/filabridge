@@ -161,15 +161,19 @@ function updateSpoolData(spools) {
             option.className = 'dropdown-option';
             option.setAttribute('data-value', spool.id);
             option.setAttribute('data-color', spool.filament?.color_hex || '');
-            
-            const colorSwatch = document.createElement('div');
-            colorSwatch.className = 'color-swatch';
-            colorSwatch.style.backgroundColor = '#' + (spool.filament?.color_hex || 'ccc');
-            
+            option.setAttribute('data-multi-color-hexes', spool.filament?.multi_color_hexes || '');
+            option.setAttribute('data-multi-color-direction', spool.filament?.multi_color_direction || '');
+
+            const colorSwatch = buildColorSwatch(
+                spool.filament?.color_hex,
+                spool.filament?.multi_color_hexes,
+                spool.filament?.multi_color_direction
+            );
+
             const optionText = document.createElement('div');
             optionText.className = 'option-text';
             optionText.textContent = `[${spool.id}] ${spool.material || 'Unknown Material'} - ${spool.brand || 'Unknown Brand'} - ${spool.name || 'Unnamed Spool'}${spool.remaining_weight != null ? ` (${Math.round(spool.remaining_weight)}g remaining)` : ''}`;
-            
+
             option.appendChild(colorSwatch);
             option.appendChild(optionText);
             optionsContainer.appendChild(option);
@@ -179,22 +183,24 @@ function updateSpoolData(spools) {
         optionsContainer.querySelectorAll('.dropdown-option').forEach(option => {
             option.addEventListener('click', async function(e) {
                 e.stopPropagation();
-                
+
                 // Update button text and selected state
                 const selectedText = option.querySelector('.option-text').textContent;
                 const selectedColor = option.dataset.color;
                 const selectedValue = option.dataset.value;
-                
+                const selectedMultiHexes = option.dataset.multiColorHexes || '';
+                const selectedMultiDir = option.dataset.multiColorDirection || '';
+
                 // Update hidden input value
                 const hiddenInput = dropdown.querySelector('input[type="hidden"]');
                 if (hiddenInput) {
                     hiddenInput.value = selectedValue;
                 }
-                
+
                 // Update selected state
                 optionsContainer.querySelectorAll('.dropdown-option').forEach(opt => opt.classList.remove('selected'));
                 option.classList.add('selected');
-                
+
                 // Close dropdown
                 const content = dropdown.querySelector('.dropdown-content');
                 const button = dropdown.querySelector('.dropdown-button');
@@ -202,19 +208,19 @@ function updateSpoolData(spools) {
                 content.classList.remove('show');
                 button.classList.remove('open');
                 arrow.classList.remove('open');
-                
+
                 // Auto-map the spool if a spool is selected (not "Empty")
                 if (selectedValue && selectedValue !== '') {
-                    await autoMapSpool(dropdown, selectedValue, selectedText, selectedColor);
+                    await autoMapSpool(dropdown, selectedValue, selectedText, selectedColor, selectedMultiHexes, selectedMultiDir);
                 } else {
                     // Handle empty selection - unmap the toolhead
                     await autoMapSpool(dropdown, '0', selectedText, '');
                 }
-                
+
                 // Update edit button after selection
                 const toolheadRow = dropdown.closest('.toolhead-mapping-row');
                 if (toolheadRow) {
-                    updateEditButton(toolheadRow, selectedValue, selectedColor);
+                    updateEditButton(toolheadRow, selectedValue, selectedColor, selectedMultiHexes, selectedMultiDir);
                 }
             });
         });
@@ -275,25 +281,32 @@ function updateToolheadMappings(mappings) {
                 if (spoolOption) {
                     const selectedText = spoolOption.querySelector('.option-text').textContent;
                     const selectedColor = spoolOption.dataset.color;
-                    
+                    const selectedMultiHexes = spoolOption.dataset.multiColorHexes || '';
+                    const selectedMultiDir = spoolOption.dataset.multiColorDirection || '';
+
                     // Update button display
-                    dropdownButton.innerHTML = `
-                        <div style="display: flex; align-items: center; gap: 10px;">
-                            <div class="color-swatch" style="background-color: #${selectedColor || 'ccc'};"></div>
-                            <span>${selectedText}</span>
-                        </div>
-                        <span class="dropdown-arrow">▼</span>
-                    `;
-                    
+                    const swatchEl = buildColorSwatch(selectedColor, selectedMultiHexes, selectedMultiDir);
+                    const btnContent = document.createElement('div');
+                    btnContent.style.cssText = 'display: flex; align-items: center; gap: 10px;';
+                    btnContent.appendChild(swatchEl);
+                    const spanText = document.createElement('span');
+                    spanText.textContent = selectedText;
+                    btnContent.appendChild(spanText);
+                    dropdownButton.innerHTML = '';
+                    dropdownButton.appendChild(btnContent);
+                    const arrow = document.createElement('span');
+                    arrow.className = 'dropdown-arrow';
+                    arrow.textContent = '▼';
+                    dropdownButton.appendChild(arrow);
+
                     // Mark as selected
                     optionsContainer.querySelectorAll('.dropdown-option').forEach(opt => {
                         opt.classList.remove('selected');
                     });
                     spoolOption.classList.add('selected');
-                    
+
                     // Update edit button
-                    updateEditButton(toolheadRow, spoolId, selectedColor);
-                    
+                    updateEditButton(toolheadRow, spoolId, selectedColor, selectedMultiHexes, selectedMultiDir);
                 }
             }
         } else {

@@ -171,6 +171,19 @@
     background-color: #ccc;
 }
 
+.color-swatch-multi {
+    width: 20px;
+    height: 20px;
+    border-radius: 3px;
+    border: 1px solid #666;
+    flex-shrink: 0;
+    display: flex;
+    overflow: hidden;
+}
+.color-swatch-multi.coaxial { flex-direction: row; }
+.color-swatch-multi.longitudinal { flex-direction: column; }
+.color-swatch-multi .color-stripe { flex: 1 1 0px; }
+
 /* Toolhead Specific Styles */
 .toolhead-select {
     background: rgba(255,255,255,0.1) !important;

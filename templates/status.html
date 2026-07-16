@@ -96,7 +96,7 @@
                                     {{if $mappedSpool.SpoolID}}
                                     {{range $.Spools}}
                                     {{if eq .ID $mappedSpool.SpoolID}}
-                                    <div class="color-swatch" data-color="{{.Filament.ColorHex}}"></div>
+                                    <div class="color-swatch" data-color="{{.Filament.ColorHex}}" data-multi-color-hexes="{{.Filament.MultiColorHexes}}" data-multi-color-direction="{{.Filament.MultiColorDirection}}"></div>
                                     <span>[{{.ID}}] {{if .Material}}{{.Material}}{{else}}Unknown Material{{end}} - {{if .Brand}}{{.Brand}}{{else}}Unknown Brand{{end}} - {{if .Name}}{{.Name}}{{else}}Unnamed Spool{{end}}{{if .RemainingWeight}} ({{printf "%.0f" .RemainingWeight}}g remaining){{end}}</span>
                                     {{end}}
                                     {{end}}
@@ -117,8 +117,8 @@
                                         <div class="option-text">Empty</div>
                                     </div>
                                     {{range $.Spools}}
-                                    <div class="dropdown-option" data-value="{{.ID}}" data-color="{{.Filament.ColorHex}}" {{if $mappedSpool.SpoolID}}{{if eq .ID $mappedSpool.SpoolID}}class="selected"{{end}}{{end}}>
-                                        <div class="color-swatch" data-color="{{.Filament.ColorHex}}"></div>
+                                    <div class="dropdown-option" data-value="{{.ID}}" data-color="{{.Filament.ColorHex}}" data-multi-color-hexes="{{.Filament.MultiColorHexes}}" data-multi-color-direction="{{.Filament.MultiColorDirection}}" {{if $mappedSpool.SpoolID}}{{if eq .ID $mappedSpool.SpoolID}}class="selected"{{end}}{{end}}>
+                                        <div class="color-swatch" data-color="{{.Filament.ColorHex}}" data-multi-color-hexes="{{.Filament.MultiColorHexes}}" data-multi-color-direction="{{.Filament.MultiColorDirection}}"></div>
                                         <div class="option-text">[{{.ID}}] {{if .Material}}{{.Material}}{{else}}Unknown Material{{end}} - {{if .Brand}}{{.Brand}}{{else}}Unknown Brand{{end}} - {{if .Name}}{{.Name}}{{else}}Unnamed Spool{{end}}{{if .RemainingWeight}} ({{printf "%.0f" .RemainingWeight}}g remaining){{end}}</div>
                                     </div>
                                     {{end}}
@@ -134,6 +134,8 @@
                                 {{range $.Spools}}
                                 {{if eq .ID $mappedSpool.SpoolID}}
                                 data-color-hex="{{.Filament.ColorHex}}"
+                                data-multi-color-hexes="{{.Filament.MultiColorHexes}}"
+                                data-multi-color-direction="{{.Filament.MultiColorDirection}}"
                                 {{end}}
                                 {{end}}
                                 {{end}}>

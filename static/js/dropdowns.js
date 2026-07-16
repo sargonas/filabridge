@@ -47,14 +47,18 @@ async function loadAvailableSpools(dropdown) {
             option.className = 'dropdown-option';
             option.setAttribute('data-value', spool.id);
             option.setAttribute('data-color', spool.filament?.color_hex || '');
-            
+            option.setAttribute('data-multi-color-hexes', spool.filament?.multi_color_hexes || '');
+            option.setAttribute('data-multi-color-direction', spool.filament?.multi_color_direction || '');
+
             if (currentSpoolId && spool.id.toString() === currentSpoolId) {
                 option.classList.add('selected');
             }
-            
-            const colorSwatch = document.createElement('div');
-            colorSwatch.className = 'color-swatch';
-            colorSwatch.style.backgroundColor = '#' + (spool.filament?.color_hex || 'ccc');
+
+            const colorSwatch = buildColorSwatch(
+                spool.filament?.color_hex,
+                spool.filament?.multi_color_hexes,
+                spool.filament?.multi_color_direction
+            );
             
             const optionText = document.createElement('div');
             optionText.className = 'option-text';
@@ -74,16 +78,18 @@ async function loadAvailableSpools(dropdown) {
                 const selectedText = option.querySelector('.option-text').textContent;
                 const selectedColor = option.dataset.color;
                 const selectedValue = option.dataset.value;
-                
+                const selectedMultiHexes = option.dataset.multiColorHexes || '';
+                const selectedMultiDir = option.dataset.multiColorDirection || '';
+
                 // Update hidden input value
                 if (hiddenInput) {
                     hiddenInput.value = selectedValue;
                 }
-                
+
                 // Update selected state
                 optionsContainer.querySelectorAll('.dropdown-option').forEach(opt => opt.classList.remove('selected'));
                 option.classList.add('selected');
-                
+
                 // Close dropdown
                 const content = dropdown.querySelector('.dropdown-content');
                 const arrow = dropdown.querySelector('.dropdown-arrow');
@@ -91,23 +97,23 @@ async function loadAvailableSpools(dropdown) {
                 const button = dropdown.querySelector('.dropdown-button');
                 button.classList.remove('open');
                 arrow.classList.remove('open');
-                
+
                 // Auto-map the spool if a spool is selected (not "Empty")
                 if (selectedValue && selectedValue !== '') {
-                    await autoMapSpool(dropdown, selectedValue, selectedText, selectedColor);
+                    await autoMapSpool(dropdown, selectedValue, selectedText, selectedColor, selectedMultiHexes, selectedMultiDir);
                 } else {
                     // Handle empty selection - unmap the toolhead
                     await autoMapSpool(dropdown, '0', selectedText, '');
                 }
-                
+
                 // Update edit button after selection
                 const toolheadRow = dropdown.closest('.toolhead-mapping-row');
                 if (toolheadRow) {
-                    updateEditButton(toolheadRow, selectedValue, selectedColor);
+                    updateEditButton(toolheadRow, selectedValue, selectedColor, selectedMultiHexes, selectedMultiDir);
                 }
             });
         });
-        
+
     } catch (error) {
         console.error('Error loading available spools:', error);
     }
@@ -173,39 +179,41 @@ function initCustomDropdowns() {
         content.querySelectorAll('.dropdown-option').forEach(option => {
             option.addEventListener('click', async (e) => {
                 e.stopPropagation();
-                
+
                 // Update button text and selected state
                 const selectedText = option.querySelector('.option-text').textContent;
                 const selectedColor = option.dataset.color;
                 const selectedValue = option.dataset.value;
-                
+                const selectedMultiHexes = option.dataset.multiColorHexes || '';
+                const selectedMultiDir = option.dataset.multiColorDirection || '';
+
                 // Update hidden input value
                 const hiddenInput = dropdown.querySelector('input[type="hidden"]');
                 if (hiddenInput) {
                     hiddenInput.value = selectedValue;
                 }
-                
+
                 // Update selected state
                 content.querySelectorAll('.dropdown-option').forEach(opt => opt.classList.remove('selected'));
                 option.classList.add('selected');
-                
+
                 // Close dropdown
                 content.classList.remove('show');
                 button.classList.remove('open');
                 arrow.classList.remove('open');
-                
+
                 // Auto-map the spool if a spool is selected (not "Empty")
                 if (selectedValue && selectedValue !== '') {
-                    await autoMapSpool(dropdown, selectedValue, selectedText, selectedColor);
+                    await autoMapSpool(dropdown, selectedValue, selectedText, selectedColor, selectedMultiHexes, selectedMultiDir);
                 } else {
                     // Handle empty selection - unmap the toolhead
                     await autoMapSpool(dropdown, '0', selectedText, '');
                 }
-                
+
                 // Update edit button after selection
                 const toolheadRow = dropdown.closest('.toolhead-mapping-row');
                 if (toolheadRow) {
-                    updateEditButton(toolheadRow, selectedValue, selectedColor);
+                    updateEditButton(toolheadRow, selectedValue, selectedColor, selectedMultiHexes, selectedMultiDir);
                 }
             });
         });
@@ -266,7 +274,7 @@ function initCustomDropdowns() {
 }
 
 // Auto-map spool to toolhead when selected
-async function autoMapSpool(dropdown, selectedValue, selectedText, selectedColor) {
+async function autoMapSpool(dropdown, selectedValue, selectedText, selectedColor, multiColorHexes, multiColorDirection) {
     const toolheadRow = dropdown.closest('.toolhead-mapping-row');
     if (!toolheadRow) {
         console.error('Could not find toolhead mapping row');
@@ -291,17 +299,27 @@ async function autoMapSpool(dropdown, selectedValue, selectedText, selectedColor
     
     const printerName = printerNameElement.textContent;
     
+    // Helper to build button content with swatch and arrow
+    function setButtonContent(arrowText) {
+        const btnContent = document.createElement('div');
+        btnContent.style.cssText = 'display: flex; align-items: center; gap: 10px;';
+        btnContent.appendChild(buildColorSwatch(selectedColor, multiColorHexes, multiColorDirection));
+        const spanEl = document.createElement('span');
+        spanEl.textContent = selectedText;
+        btnContent.appendChild(spanEl);
+        button.innerHTML = '';
+        button.appendChild(btnContent);
+        const arrowEl = document.createElement('span');
+        arrowEl.className = 'dropdown-arrow';
+        arrowEl.textContent = arrowText;
+        button.appendChild(arrowEl);
+    }
+
     // Show loading state
     const button = dropdown.querySelector('.dropdown-button');
     const originalContent = button.innerHTML;
-    button.innerHTML = `
-        <div style="display: flex; align-items: center; gap: 10px;">
-            <div class="color-swatch" style="background-color: #${selectedColor};"></div>
-            <span>${selectedText}</span>
-        </div>
-        <span class="dropdown-arrow">⏳</span>
-    `;
-    
+    setButtonContent('⏳');
+
     try {
         const response = await fetch('/api/map_toolhead', {
             method: 'POST',
@@ -312,9 +330,9 @@ async function autoMapSpool(dropdown, selectedValue, selectedText, selectedColor
                 spool_id: selectedValue === '0' ? 0 : parseInt(selectedValue)
             })
         });
-        
+
         const data = await response.json();
-        
+
         if (data.error) {
             // Handle conflict errors specifically
             if (data.error.includes('is already assigned to')) {
@@ -322,53 +340,41 @@ async function autoMapSpool(dropdown, selectedValue, selectedText, selectedColor
             } else {
                 alert(`Error mapping spool: ${data.error}`);
             }
-            
+
             // Revert to previous selection
             button.innerHTML = originalContent;
             // Update edit button to previous state
-            updateEditButton(toolheadRow, selectedValue, selectedColor);
+            updateEditButton(toolheadRow, selectedValue, selectedColor, multiColorHexes, multiColorDirection);
             return;
         }
-        
+
         // Success - show brief success indicator
-        button.innerHTML = `
-            <div style="display: flex; align-items: center; gap: 10px;">
-                <div class="color-swatch" style="background-color: #${selectedColor};"></div>
-                <span>${selectedText}</span>
-            </div>
-            <span class="dropdown-arrow">✅</span>
-        `;
-        
+        setButtonContent('✅');
+
         // Update edit button visibility and data
-        updateEditButton(toolheadRow, selectedValue, selectedColor);
-        
+        updateEditButton(toolheadRow, selectedValue, selectedColor, multiColorHexes, multiColorDirection);
+
         // Reset to normal state after 2 seconds
         setTimeout(() => {
-            button.innerHTML = `
-                <div style="display: flex; align-items: center; gap: 10px;">
-                    <div class="color-swatch" style="background-color: #${selectedColor};"></div>
-                    <span>${selectedText}</span>
-                </div>
-                <span class="dropdown-arrow">▼</span>
-            `;
+            setButtonContent('▼');
         }, 2000);
-        
+
         // Only remove spools from other dropdowns if we're mapping a spool (not unmapping)
         if (selectedValue !== '0') {
             // Immediately remove the mapped spool from all other dropdowns
             removeSpoolFromOtherDropdowns(selectedValue);
-            
+
             // Refresh all other dropdowns to update available spools
             refreshAllDropdowns();
         } else {
             // If unmapping, just refresh all dropdowns to show the newly available spool
             refreshAllDropdowns();
         }
-        
+
     } catch (error) {
         console.error('Error mapping spool:', error);
         alert('Error mapping spool: ' + error.message);
-        
+
         // Revert to previous selection
         button.innerHTML = originalContent;
     }
@@ -408,27 +414,19 @@ async function refreshAllDropdowns() {
 }
 
 // Update edit button visibility and data based on selected spool
-function updateEditButton(toolheadRow, selectedValue, selectedColor = '') {
+function updateEditButton(toolheadRow, selectedValue, selectedColor = '', multiColorHexes = '', multiColorDirection = '') {
     const editButton = toolheadRow.querySelector('.edit-spool-btn');
     if (!editButton) return;
-    
+
     if (selectedValue && selectedValue !== '' && selectedValue !== '0') {
-        // Show button and update spool ID
         editButton.classList.remove('hidden');
         editButton.setAttribute('data-spool-id', selectedValue);
         editButton.setAttribute('onclick', `openSpoolmanEdit(${selectedValue})`);
-        
-        // Set button color to match filament color
-        if (selectedColor) {
-            editButton.style.backgroundColor = '#' + selectedColor;
-            editButton.style.borderColor = '#' + selectedColor;
-        } else {
-            // Fallback to default blue if no color
-            editButton.style.backgroundColor = '#007bff';
-            editButton.style.borderColor = '#007bff';
-        }
+
+        const style = buildColorStyle(selectedColor, multiColorHexes, multiColorDirection);
+        editButton.style.background = style.background;
+        editButton.style.borderColor = style.borderColor;
     } else {
-        // Hide button
         editButton.classList.add('hidden');
         editButton.setAttribute('data-spool-id', '');
         editButton.setAttribute('onclick', 'openSpoolmanEdit(null)');
