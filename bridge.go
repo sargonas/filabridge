@@ -17,9 +17,9 @@ import (
 
 // FilamentBridge manages the connection between PrusaLink and Spoolman
 type FilamentBridge struct {
-	config           *Config
-	spoolman         *SpoolmanClient
-	db               *sql.DB
+	config   *Config
+	spoolman *SpoolmanClient
+	db       *sql.DB
 	// In-flight print state is persisted in the active_jobs table (survives
 	// restarts); only the concurrency guard for the usage-recording path is kept in memory.
 	processingPrints map[string]bool       // Guard against overlapping monitor cycles recording the same printer's usage
