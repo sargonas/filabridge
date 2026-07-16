@@ -46,6 +46,19 @@ const (
 	ConfigKeyPrintHistoryEnabled             = "print_history_enabled"
 	ConfigKeyRunoutWarningEnabled            = "runout_warning_enabled"
 	ConfigKeyRunoutPauseEnabled              = "runout_pause_enabled"
+	ConfigKeyAppriseEnabled                  = "apprise_enabled"
+	ConfigKeyAppriseAPIURL                   = "apprise_api_url"
+	ConfigKeyAppriseMode                     = "apprise_mode"
+	ConfigKeyAppriseURLs                     = "apprise_urls"
+	ConfigKeyAppriseKey                      = "apprise_key"
+	ConfigKeyAppriseTag                      = "apprise_tag"
+	ConfigKeyAppriseNotifyPrintStarted       = "apprise_notify_print_started"
+	ConfigKeyAppriseNotifyPrintDone          = "apprise_notify_print_done"
+	ConfigKeyAppriseNotifyPrintFailed        = "apprise_notify_print_failed"
+	ConfigKeyAppriseNotifyLowFilament        = "apprise_notify_low_filament"
+	ConfigKeyAppriseNotifyAutoPaused         = "apprise_notify_auto_paused"
+	ConfigKeyAppriseNotifyOffline            = "apprise_notify_offline"
+	ConfigKeyAppriseNotifyOnline             = "apprise_notify_online"
 )
 
 // HTTP timeouts
@@ -53,4 +66,5 @@ const (
 	PrusaLinkTimeout             = 10  // seconds
 	PrusaLinkFileDownloadTimeout = 300 // seconds for file downloads (USB storage can be slow)
 	SpoolmanTimeout              = 10  // seconds
+	AppriseTimeout               = 30  // seconds
 )

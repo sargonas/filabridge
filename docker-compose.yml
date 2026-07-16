@@ -12,3 +12,12 @@ services:
       timeout: 5s
       start_period: 10s
       retries: 3
+
+  # Optional: Apprise API for push notifications (Discord, Telegram, Slack, email, etc.)
+  # Uncomment to enable, then configure in FilaBridge Settings > Notifications
+  # with API URL: http://apprise:8000
+  # apprise:
+  #   image: caronc/apprise:latest
+  #   ports:
+  #     - "8000:8000"
+  #   restart: unless-stopped

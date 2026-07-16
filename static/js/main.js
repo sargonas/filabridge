@@ -40,6 +40,8 @@ function switchTab(tabName) {
                     loadConfiguration();
                 } else if (tabId === 'printers') {
                     loadPrinters();
+                } else if (tabId === 'notifications') {
+                    loadNotificationSettings();
                 } else if (tabId === 'advanced') {
                     loadAdvancedSettings();
                     loadAutoAssignSettings();
@@ -178,6 +180,8 @@ function switchSettingsTab(tabName, clickedElement) {
         loadConfiguration();
     } else if (tabName === 'printers') {
         loadPrinters();
+    } else if (tabName === 'notifications') {
+        loadNotificationSettings();
     } else if (tabName === 'advanced') {
         loadAdvancedSettings();
         loadAutoAssignSettings();
@@ -528,6 +532,220 @@ function clearPrintHistory() {
     })
     .catch(error => {
         alert('Error clearing history: ' + error.message);
+    });
+}
+
+// Notification Settings Functions
+let appriseCheckboxHandler = null;
+
+let _savedAppriseApiUrl = '';
+let _savedAppriseUrls = '';
+let _savedAppriseMode = 'stateless';
+let _savedAppriseKey = '';
+let _savedAppriseTag = '';
+
+function _checkNotificationFieldsChanged() {
+    const apiUrl = document.getElementById('appriseApiUrl')?.value || '';
+    const urls = document.getElementById('appriseUrls')?.value || '';
+    const mode = document.querySelector('input[name="appriseMode"]:checked')?.value || 'stateless';
+    const key = document.getElementById('appriseKey')?.value || '';
+    const tag = document.getElementById('appriseTag')?.value || '';
+    const changed = apiUrl !== _savedAppriseApiUrl || urls !== _savedAppriseUrls ||
+        mode !== _savedAppriseMode || key !== _savedAppriseKey || tag !== _savedAppriseTag;
+    document.querySelectorAll('.test-event-btn').forEach(btn => {
+        btn.style.display = changed ? 'none' : '';
+    });
+    if (changed) {
+        document.getElementById('notificationSaveResult').innerHTML = '';
+    }
+}
+
+function _updateModeFields() {
+    const mode = document.querySelector('input[name="appriseMode"]:checked')?.value || 'stateless';
+    document.getElementById('statelessFields').style.display = mode === 'stateless' ? 'block' : 'none';
+    document.getElementById('statefulFields').style.display = mode === 'stateful' ? 'block' : 'none';
+}
+
+function _onModeChange() {
+    _updateModeFields();
+    _checkNotificationFieldsChanged();
+}
+
+function loadNotificationSettings() {
+    fetch('/api/config/notifications')
+        .then(response => response.json())
+        .then(data => {
+            if (data.error) {
+                console.error('Error loading notification settings:', data.error);
+                return;
+            }
+
+            document.getElementById('appriseEnabled').checked = data.enabled || false;
+            document.getElementById('appriseApiUrl').value = data.api_url || '';
+            document.getElementById('appriseUrls').value = data.urls || '';
+            document.getElementById('appriseKey').value = data.key || '';
+            document.getElementById('appriseTag').value = data.tag || '';
+
+            const mode = data.mode || 'stateless';
+            document.getElementById('appriseModeStateless').checked = mode === 'stateless';
+            document.getElementById('appriseModeStateful').checked = mode === 'stateful';
+            _updateModeFields();
+
+            _savedAppriseApiUrl = data.api_url || '';
+            _savedAppriseUrls = data.urls || '';
+            _savedAppriseMode = mode;
+            _savedAppriseKey = data.key || '';
+            _savedAppriseTag = data.tag || '';
+
+            document.getElementById('notifyPrintStarted').checked = data.notify_print_started !== false;
+            document.getElementById('notifyPrintDone').checked = data.notify_print_done !== false;
+            document.getElementById('notifyPrintFailed').checked = data.notify_print_failed !== false;
+            document.getElementById('notifyLowFilament').checked = data.notify_low_filament !== false;
+            document.getElementById('notifyAutoPaused').checked = data.notify_auto_paused !== false;
+            document.getElementById('notifyOffline').checked = data.notify_offline !== false;
+            document.getElementById('notifyOnline').checked = data.notify_online !== false;
+
+            const settingsGroup = document.getElementById('appriseSettingsGroup');
+            settingsGroup.style.display = data.enabled ? 'block' : 'none';
+
+            const checkbox = document.getElementById('appriseEnabled');
+            if (appriseCheckboxHandler) {
+                checkbox.removeEventListener('change', appriseCheckboxHandler);
+            }
+            appriseCheckboxHandler = function() {
+                settingsGroup.style.display = this.checked ? 'block' : 'none';
+            };
+            checkbox.addEventListener('change', appriseCheckboxHandler);
+
+            document.getElementById('appriseConnectionResult').innerHTML = '';
+            document.getElementById('notificationSaveResult').innerHTML = '';
+
+            const apiUrlInput = document.getElementById('appriseApiUrl');
+            const urlsInput = document.getElementById('appriseUrls');
+            const keyInput = document.getElementById('appriseKey');
+            const tagInput = document.getElementById('appriseTag');
+            const modeRadios = document.querySelectorAll('input[name="appriseMode"]');
+
+            [apiUrlInput, urlsInput, keyInput, tagInput].forEach(el => {
+                el.removeEventListener('input', _checkNotificationFieldsChanged);
+                el.addEventListener('input', _checkNotificationFieldsChanged);
+            });
+            modeRadios.forEach(r => {
+                r.removeEventListener('change', _onModeChange);
+                r.addEventListener('change', _onModeChange);
+            });
+
+            _checkNotificationFieldsChanged();
+        })
+        .catch(error => {
+            console.error('Error loading notification settings:', error);
+        });
+}
+
+function saveNotificationSettings() {
+    const enabled = document.getElementById('appriseEnabled').checked;
+    const apiUrl = document.getElementById('appriseApiUrl').value.trim();
+
+    const resultDiv = document.getElementById('notificationSaveResult');
+
+    if (enabled && !apiUrl) {
+        resultDiv.innerHTML = '<span style="color: #f44336;">❌ Apprise API URL is required when notifications are enabled.</span>';
+        return;
+    }
+
+    resultDiv.innerHTML = '<span style="color: #aaa;">Saving...</span>';
+
+    const mode = document.querySelector('input[name="appriseMode"]:checked')?.value || 'stateless';
+    const key = document.getElementById('appriseKey').value.trim() || 'apprise';
+    const tag = document.getElementById('appriseTag').value.trim() || 'all';
+
+    if (mode === 'stateful') {
+        document.getElementById('appriseKey').value = key;
+        document.getElementById('appriseTag').value = tag;
+    }
+
+    const settings = {
+        enabled: enabled,
+        api_url: apiUrl,
+        mode: mode,
+        urls: document.getElementById('appriseUrls').value,
+        key: key,
+        tag: tag,
+        notify_print_started: document.getElementById('notifyPrintStarted').checked,
+        notify_print_done: document.getElementById('notifyPrintDone').checked,
+        notify_print_failed: document.getElementById('notifyPrintFailed').checked,
+        notify_low_filament: document.getElementById('notifyLowFilament').checked,
+        notify_auto_paused: document.getElementById('notifyAutoPaused').checked,
+        notify_offline: document.getElementById('notifyOffline').checked,
+        notify_online: document.getElementById('notifyOnline').checked,
+    };
+
+    fetch('/api/config/notifications', {
+        method: 'PUT',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify(settings)
+    })
+    .then(response => response.json())
+    .then(data => {
+        if (data.error) {
+            resultDiv.innerHTML = '<span style="color: #f44336;">❌ ' + escapeHtml(data.error) + '</span>';
+        } else {
+            resultDiv.innerHTML = '<span style="color: #4caf50;">✅ Settings saved</span>';
+            _savedAppriseApiUrl = document.getElementById('appriseApiUrl').value.trim();
+            _savedAppriseUrls = document.getElementById('appriseUrls').value;
+            _savedAppriseMode = document.querySelector('input[name="appriseMode"]:checked')?.value || 'stateless';
+            _savedAppriseKey = document.getElementById('appriseKey').value.trim();
+            _savedAppriseTag = document.getElementById('appriseTag').value.trim();
+            _checkNotificationFieldsChanged();
+        }
+    })
+    .catch(error => {
+        resultDiv.innerHTML = '<span style="color: #f44336;">❌ ' + escapeHtml(error.message) + '</span>';
+    });
+}
+
+function testAppriseConnection() {
+    const resultDiv = document.getElementById('appriseConnectionResult');
+    resultDiv.innerHTML = '<span style="color: #aaa;">Testing connection...</span>';
+
+    const apiURL = document.getElementById('appriseApiUrl')?.value || '';
+    fetch('/api/config/notifications/test-connection', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({ api_url: apiURL })
+    })
+    .then(response => response.json())
+    .then(data => {
+        if (data.connected) {
+            resultDiv.innerHTML = '<span style="color: #4caf50;">✅ Connection successful</span>';
+        } else {
+            resultDiv.innerHTML = '<span style="color: #f44336;">❌ ' + escapeHtml(data.error) + '</span>';
+        }
+    })
+    .catch(error => {
+        resultDiv.innerHTML = '<span style="color: #f44336;">❌ Connection failed: ' + escapeHtml(error.message) + '</span>';
+    });
+}
+
+function testEventNotification(event) {
+    const resultDiv = document.getElementById('notificationSaveResult');
+    resultDiv.innerHTML = '<span style="color: #aaa;">Sending test notification...</span>';
+
+    fetch('/api/config/notifications/test', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({ event: event })
+    })
+    .then(response => response.json())
+    .then(data => {
+        if (data.error) {
+            resultDiv.innerHTML = '<span style="color: #f44336;">❌ ' + escapeHtml(data.error) + '</span>';
+        } else {
+            resultDiv.innerHTML = '<span style="color: #4caf50;">✅ Test notification sent</span>';
+        }
+    })
+    .catch(error => {
+        resultDiv.innerHTML = '<span style="color: #f44336;">❌ ' + escapeHtml(error.message) + '</span>';
     });
 }
 

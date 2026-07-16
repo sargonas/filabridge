@@ -35,6 +35,7 @@ type FilamentBridge struct {
 	warnMutex        sync.RWMutex             // Guards runoutWarnings and runoutChecked
 	errorMutex       sync.RWMutex
 	mutex            sync.RWMutex
+	notifier         *AppriseNotifier
 }
 
 // ToolheadMapping represents a mapping between a printer toolhead and a spool
@@ -114,6 +115,7 @@ func NewFilamentBridge(config *Config) (*FilamentBridge, error) {
 		scanInFlight:     make(map[string]bool),
 		runoutWarnings:   make(map[string]RunoutWarning),
 		runoutChecked:    make(map[string]int),
+		notifier:         NewAppriseNotifier(AppriseTimeout),
 	}
 
 	// Initialize database
@@ -289,6 +291,16 @@ func (b *FilamentBridge) initializeDefaultConfig() error {
 		ConfigKeyPrintHistoryEnabled:             "true",  // Keep a local record of prints for the history tab
 		ConfigKeyRunoutWarningEnabled:            "true",  // Warn when the mapped spool has less filament than the print needs
 		ConfigKeyRunoutPauseEnabled:              "false", // Also pause the print when a low-filament warning fires
+		ConfigKeyAppriseEnabled:                  "false",
+		ConfigKeyAppriseAPIURL:                   "",
+		ConfigKeyAppriseURLs:                     "",
+		ConfigKeyAppriseNotifyPrintStarted:       "true",
+		ConfigKeyAppriseNotifyPrintDone:          "true",
+		ConfigKeyAppriseNotifyPrintFailed:        "true",
+		ConfigKeyAppriseNotifyLowFilament:        "true",
+		ConfigKeyAppriseNotifyAutoPaused:         "true",
+		ConfigKeyAppriseNotifyOffline:            "true",
+		ConfigKeyAppriseNotifyOnline:             "true",
 	}
 
 	// Check if this is a fresh installation by checking if any config exists
@@ -623,6 +635,12 @@ func (b *FilamentBridge) checkRunoutWarnings(printerID string, config PrinterCon
 
 		log.Printf("Low filament warning for %s toolhead %d: spool %d (%s) has %.1fg remaining, print needs ~%.1fg",
 			printerName, toolheadID, spoolID, spool.Name, spool.RemainingWeight, needed)
+
+		if autoPaused {
+			go b.notifyAutoPaused(config, warning, aj)
+		} else {
+			go b.notifyLowFilament(config, warning, aj)
+		}
 	}
 }
 
@@ -1269,12 +1287,16 @@ func (b *FilamentBridge) noteConnectivity(printerID, ipAddress, name string, err
 			log.Printf("Printer %s (%s - %s) is offline, suppressing further offline warnings until it returns: %v",
 				ipAddress, printerID, name, err)
 			b.offlinePrinters[printerID] = true
+			title, body, notifType := buildOfflineMessage(name, ipAddress)
+			go b.notify(ConfigKeyAppriseNotifyOffline, title, body, notifType)
 		}
 		return
 	}
 	if wasOffline {
 		log.Printf("Printer %s (%s - %s) is back online", ipAddress, printerID, name)
 		delete(b.offlinePrinters, printerID)
+		title, body, notifType := buildOnlineMessage(name, ipAddress)
+		go b.notify(ConfigKeyAppriseNotifyOnline, title, body, notifType)
 	}
 }
 
@@ -1454,6 +1476,10 @@ func (b *FilamentBridge) monitorPrusaLink(printerID string, config PrinterConfig
 			}
 		}
 
+		if active == nil && aj.Filename != "" {
+			go b.notifyPrintStarted(config, aj)
+		}
+
 		// With the estimate in hand, warn (and optionally pause) if the mapped
 		// spool has less filament remaining than the print still needs.
 		b.checkRunoutWarnings(printerID, config, client, aj)
@@ -1510,6 +1536,8 @@ func (b *FilamentBridge) monitorPrusaLink(printerID string, config PrinterConfig
 			b.clearActiveJob(printerID)
 			return nil
 		}
+
+		go b.notifyPrintEnded(config, active, completed, usageScale)
 
 		// Success: record in the idempotency ledger, then clear tracking.
 		if err := b.markJobRecorded(printerID, active.JobID, active.Filename, usageScale); err != nil {

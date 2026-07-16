@@ -33,6 +33,7 @@ Spoolman is an excellent tool to track one's filament inventory. However, manual
 - **Quick-Assign Tags**: Single-printer setups get one-scan tags that assign a spool straight to the printer, no location tag needed
 - **Location Tracking**: Track spools in custom locations (dryboxes) or printer toolheads
 - **Smart Housekeeping**: If a new spool is "loaded" to a printer, the previous will be returned to a pre-set default location
+- **Push Notifications**: Get notified via Discord, Telegram, Slack, email, and [90+ other services](https://appriseit.com/services/) when prints start, finish, fail, or when filament runs low — powered by [Apprise](https://github.com/caronc/apprise)
 
 ## Why FilaBridge?
 
@@ -224,6 +225,37 @@ The web interface provides:
 
 If you have exactly one printer with one toolhead configured, the Spool Tags screen also offers a Quick-Assign variant for each spool: a single tag that assigns the spool directly to your printer in one scan, with no location tag needed. Multi-toolhead users can build the same thing manually by appending `&location=<location name>` to a spool URL.
 
+### Push Notifications (Apprise)
+
+FilaBridge can send push notifications to Discord, Telegram, Slack, email, and [90+ other services](https://appriseit.com/services/) via [Apprise](https://github.com/caronc/apprise).
+
+**Setup:**
+
+1. **Run the Apprise API sidecar** alongside FilaBridge. If you use docker-compose, uncomment the `apprise` service in `docker-compose.yml`. Otherwise:
+   ```bash
+   docker run -d --name apprise -p 8000:8000 caronc/apprise:latest
+   ```
+
+2. **Configure in FilaBridge**: Go to Settings > Notifications and:
+   - Enable notifications
+   - Set the **Apprise API URL** (e.g. `http://apprise:8000` if using docker-compose, or `http://localhost:8000` if running standalone)
+   - Choose a **Notification Mode**:
+     - **Stateless** — notification URLs are sent with each request. Add one or more [Apprise URLs](https://appriseit.com/services/) for your services, one per line. Examples:
+       - Discord: `discord://webhook_id/webhook_token`
+       - Telegram: `tgram://bot_token/chat_id`
+       - Slack: `slack://token_a/token_b/token_c/#channel`
+       - Email: `mailto://user:pass@gmail.com`
+     - **Stateful** — notification URLs are configured and stored in the Apprise API itself (via its web UI or config). Set the **Persistent Storage Key** and optionally a **Tag** to target specific services. This is the recommended mode when running Apprise API as a shared notification hub.
+   - Use the **Test** button to verify the connection
+   - Choose which events trigger notifications:
+     - Print started
+     - Print completed
+     - Print failed/cancelled
+     - Low filament warning
+     - Print auto-paused (due to insufficient filament)
+     - Printer went offline
+     - Printer came back online
+
 ## API Endpoints
 
 The web interface also provides REST API endpoints:
@@ -242,6 +274,9 @@ The web interface also provides REST API endpoints:
 - `GET /api/nfc/urls` - Get all NFC URLs with QR codes
 - `GET /api/nfc/session/status` - Check NFC session status
 - `GET/POST /api/locations`, `PUT/DELETE /api/locations/{name}` - Manage locations
+- `GET/PUT /api/config/notifications` - Read and update notification settings
+- `POST /api/config/notifications/test-connection` - Test Apprise API connectivity
+- `POST /api/config/notifications/test` - Send a test notification
 - `WS /ws/status` - WebSocket endpoint for real-time status updates
 
 ## Project Structure
@@ -255,6 +290,7 @@ filabridge/
 ├── prusalink.go           # PrusaLink API client
 ├── spoolman.go            # Spoolman API client
 ├── bridge.go              # Core monitoring and usage tracking logic
+├── notifier.go            # Apprise push notification client
 ├── nfc.go                 # NFC session management and tag handling
 ├── web.go                 # HTTP server and API routes
 ├── templates/             # HTML templates

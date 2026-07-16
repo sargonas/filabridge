@@ -163,6 +163,10 @@ func (ws *WebServer) setupRoutes() {
 		api.PUT("/config/auto-assign-previous-spool", ws.updateAutoAssignPreviousSpoolHandler)
 		api.GET("/config/print-history", ws.getPrintHistorySettingHandler)
 		api.PUT("/config/print-history", ws.updatePrintHistorySettingHandler)
+		api.GET("/config/notifications", ws.getNotificationSettingsHandler)
+		api.PUT("/config/notifications", ws.updateNotificationSettingsHandler)
+		api.POST("/config/notifications/test-connection", ws.testAppriseConnectionHandler)
+		api.POST("/config/notifications/test", ws.testNotificationHandler)
 		api.GET("/printers", ws.getPrintersHandler)
 		api.POST("/printers", ws.addPrinterHandler)
 		api.PUT("/printers/:id", ws.updatePrinterHandler)
@@ -1159,6 +1163,213 @@ func (ws *WebServer) updatePrintHistorySettingHandler(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{"message": "Print history setting updated", "enabled": req.Enabled})
+}
+
+func (ws *WebServer) getNotificationSettingsHandler(c *gin.Context) {
+	getBool := func(key string) bool {
+		val, err := ws.bridge.GetConfigValue(key)
+		if err != nil {
+			return true
+		}
+		return val != "false"
+	}
+	getString := func(key string) string {
+		val, _ := ws.bridge.GetConfigValue(key)
+		return val
+	}
+
+	urls := getString(ConfigKeyAppriseURLs)
+	mode := getString(ConfigKeyAppriseMode)
+	if mode == "" {
+		mode = "stateless"
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"enabled":              getString(ConfigKeyAppriseEnabled) == "true",
+		"api_url":              getString(ConfigKeyAppriseAPIURL),
+		"mode":                 mode,
+		"urls":                 urls,
+		"key":                  getString(ConfigKeyAppriseKey),
+		"tag":                  getString(ConfigKeyAppriseTag),
+		"notify_print_started": getBool(ConfigKeyAppriseNotifyPrintStarted),
+		"notify_print_done":    getBool(ConfigKeyAppriseNotifyPrintDone),
+		"notify_print_failed":  getBool(ConfigKeyAppriseNotifyPrintFailed),
+		"notify_low_filament":  getBool(ConfigKeyAppriseNotifyLowFilament),
+		"notify_auto_paused":   getBool(ConfigKeyAppriseNotifyAutoPaused),
+		"notify_offline":       getBool(ConfigKeyAppriseNotifyOffline),
+		"notify_online":        getBool(ConfigKeyAppriseNotifyOnline),
+	})
+}
+
+func (ws *WebServer) updateNotificationSettingsHandler(c *gin.Context) {
+	var req struct {
+		Enabled            bool   `json:"enabled"`
+		APIURL             string `json:"api_url"`
+		Mode               string `json:"mode"`
+		URLs               string `json:"urls"`
+		Key                string `json:"key"`
+		Tag                string `json:"tag"`
+		NotifyPrintStarted bool   `json:"notify_print_started"`
+		NotifyPrintDone    bool   `json:"notify_print_done"`
+		NotifyPrintFailed  bool   `json:"notify_print_failed"`
+		NotifyLowFilament  bool   `json:"notify_low_filament"`
+		NotifyAutoPaused   bool   `json:"notify_auto_paused"`
+		NotifyOffline      bool   `json:"notify_offline"`
+		NotifyOnline       bool   `json:"notify_online"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid JSON"})
+		return
+	}
+
+	if req.Enabled && req.APIURL == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Apprise API URL is required when notifications are enabled"})
+		return
+	}
+
+	if req.Mode == "" {
+		req.Mode = "stateless"
+	}
+
+	boolStr := func(v bool) string {
+		if v {
+			return "true"
+		}
+		return "false"
+	}
+
+	settings := map[string]string{
+		ConfigKeyAppriseEnabled:            boolStr(req.Enabled),
+		ConfigKeyAppriseAPIURL:             req.APIURL,
+		ConfigKeyAppriseMode:               req.Mode,
+		ConfigKeyAppriseKey:                req.Key,
+		ConfigKeyAppriseTag:                req.Tag,
+		ConfigKeyAppriseNotifyPrintStarted: boolStr(req.NotifyPrintStarted),
+		ConfigKeyAppriseNotifyPrintDone:    boolStr(req.NotifyPrintDone),
+		ConfigKeyAppriseNotifyPrintFailed:  boolStr(req.NotifyPrintFailed),
+		ConfigKeyAppriseNotifyLowFilament:  boolStr(req.NotifyLowFilament),
+		ConfigKeyAppriseNotifyAutoPaused:   boolStr(req.NotifyAutoPaused),
+		ConfigKeyAppriseNotifyOffline:      boolStr(req.NotifyOffline),
+		ConfigKeyAppriseNotifyOnline:       boolStr(req.NotifyOnline),
+	}
+	if req.URLs != "" {
+		settings[ConfigKeyAppriseURLs] = req.URLs
+	}
+
+	for key, val := range settings {
+		if err := ws.bridge.SetConfigValue(key, val); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("failed to save %s: %v", key, err)})
+			return
+		}
+	}
+
+	c.JSON(http.StatusOK, gin.H{"message": "Notification settings saved"})
+}
+
+func (ws *WebServer) testAppriseConnectionHandler(c *gin.Context) {
+	var req struct {
+		APIURL string `json:"api_url"`
+	}
+	json.NewDecoder(c.Request.Body).Decode(&req)
+
+	apiURL := req.APIURL
+	if apiURL == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Apprise API URL is required", "connected": false})
+		return
+	}
+
+	if err := ws.bridge.notifier.TestConnection(apiURL); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error(), "connected": false})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"message": "Apprise API connection successful", "connected": true})
+}
+
+func (ws *WebServer) testNotificationHandler(c *gin.Context) {
+	apiURL, err := ws.bridge.GetConfigValue(ConfigKeyAppriseAPIURL)
+	if err != nil || apiURL == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Apprise API URL is not configured"})
+		return
+	}
+
+	var req struct {
+		Event string `json:"event"`
+	}
+	json.NewDecoder(c.Request.Body).Decode(&req)
+
+	title, body, notifType := testNotificationContent(req.Event)
+
+	mode, _ := ws.bridge.GetConfigValue(ConfigKeyAppriseMode)
+
+	if mode == "stateful" {
+		key, _ := ws.bridge.GetConfigValue(ConfigKeyAppriseKey)
+		if key == "" {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Persistent storage key is not configured"})
+			return
+		}
+		tag, _ := ws.bridge.GetConfigValue(ConfigKeyAppriseTag)
+		err = ws.bridge.notifier.SendStateful(apiURL, key, tag, title, body, notifType)
+	} else {
+		rawURLs, err2 := ws.bridge.GetConfigValue(ConfigKeyAppriseURLs)
+		if err2 != nil || rawURLs == "" {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "No notification URLs configured"})
+			return
+		}
+
+		var urls []string
+		for _, u := range strings.Split(rawURLs, "\n") {
+			u = strings.TrimSpace(u)
+			if u != "" {
+				urls = append(urls, u)
+			}
+		}
+		if len(urls) == 0 {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "No valid notification URLs configured"})
+			return
+		}
+
+		err = ws.bridge.notifier.Send(apiURL, urls, title, body, notifType)
+	}
+
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"message": "Test notification sent successfully"})
+}
+
+func testNotificationContent(event string) (title, body, notifType string) {
+	dummyToolheads := []toolheadNotifyInfo{{
+		ID: 0, SpoolID: 42, Mapped: true, Resolved: true,
+		SpoolName: "Generic PLA", Brand: "Prusament", Material: "PLA",
+		EstimateGrams: 12.4, UsedGrams: 12.4, RemainingWeight: 850.0,
+	}}
+
+	switch event {
+	case "print_started":
+		return buildPrintStartedMessage("Test Printer", "benchy.gcode", dummyToolheads)
+	case "print_done":
+		return buildPrintEndedMessage("Test Printer", "benchy.gcode", "1h 24m", true, 1.0, dummyToolheads)
+	case "print_failed":
+		failed := []toolheadNotifyInfo{{
+			ID: 0, SpoolID: 42, Mapped: true, Resolved: true,
+			SpoolName: "Generic PLA", Brand: "Prusament", Material: "PLA",
+			EstimateGrams: 12.4, UsedGrams: 5.6, RemainingWeight: 844.4,
+		}}
+		return buildPrintEndedMessage("Test Printer", "benchy.gcode", "38m", false, 0.45, failed)
+	case "low_filament":
+		return buildLowFilamentMessage("Test Printer", "benchy.gcode", "Generic PLA", 42, 8.2, 12.4)
+	case "auto_paused":
+		return buildAutoPausedMessage("Test Printer", "Generic PLA", 42, 0, 8.2, 12.4)
+	case "offline":
+		return buildOfflineMessage("Test Printer", "192.168.1.100")
+	case "online":
+		return buildOnlineMessage("Test Printer", "192.168.1.100")
+	default:
+		return buildPrintStartedMessage("Test Printer", "benchy.gcode", dummyToolheads)
+	}
 }
 
 // getRunoutWarningsHandler returns all unacknowledged low-filament warnings

@@ -10,6 +10,7 @@
         <button class="settings-tab active" onclick="switchSettingsTab('getting-started', this)">📚 Getting Started</button>
         <button class="settings-tab" onclick="switchSettingsTab('basic-config', this)">🔧 Basic Configuration</button>
         <button class="settings-tab" onclick="switchSettingsTab('printers', this)">🖨️ Printers</button>
+        <button class="settings-tab" onclick="switchSettingsTab('notifications', this)">🔔 Notifications</button>
         <button class="settings-tab" onclick="switchSettingsTab('advanced', this)">⚙️ Advanced Settings</button>
     </div>
     
@@ -49,6 +50,144 @@
         </div>
     </div>
     
+    <!-- Notifications Tab -->
+    <div id="notifications-tab" class="settings-tab-content">
+        <div class="config-section">
+            <h3>🔔 Notification Settings</h3>
+            <div class="help-text">
+                Send push notifications via <a href="https://github.com/caronc/apprise" target="_blank" rel="noopener">Apprise</a> when prints start, finish, fail, or when printers go offline.
+                Requires an <a href="https://github.com/caronc/apprise-api" target="_blank" rel="noopener">Apprise API</a> container running alongside FilaBridge.
+            </div>
+
+            <div class="form-group">
+                <label style="display: flex; align-items: center; gap: 10px; cursor: pointer;">
+                    <input type="checkbox" id="appriseEnabled" style="width: auto; cursor: pointer;">
+                    <span><strong>Enable Notifications</strong></span>
+                </label>
+            </div>
+
+            <div id="appriseSettingsGroup" style="display: none;">
+                <div class="form-group">
+                    <label for="appriseApiUrl"><strong>Apprise API URL</strong></label>
+                    <div style="display: flex; gap: 10px; align-items: center;">
+                        <input type="text" id="appriseApiUrl" placeholder="http://apprise:8000" style="flex: 1;">
+                        <button class="btn btn-secondary" onclick="testAppriseConnection()" style="white-space: nowrap;">🔗 Test Connection</button>
+                    </div>
+                    <small>URL of the Apprise API container (required when notifications are enabled)</small>
+                    <div id="appriseConnectionResult" style="margin-top: 5px;"></div>
+                </div>
+
+                <div class="form-group">
+                    <label><strong>Notification Mode</strong></label>
+                    <div style="display: flex; gap: 20px; margin-top: 5px;">
+                        <label style="display: flex; align-items: center; gap: 8px; cursor: pointer;">
+                            <input type="radio" name="appriseMode" value="stateless" id="appriseModeStateless" style="width: auto; cursor: pointer;">
+                            <span>Stateless — notification URLs sent with each request</span>
+                        </label>
+                        <label style="display: flex; align-items: center; gap: 8px; cursor: pointer;">
+                            <input type="radio" name="appriseMode" value="stateful" id="appriseModeStateful" style="width: auto; cursor: pointer;">
+                            <span>Stateful — use persistent storage in Apprise API</span>
+                        </label>
+                    </div>
+                </div>
+
+                <div id="statelessFields">
+                    <div class="form-group">
+                        <label for="appriseUrls"><strong>Notification URLs</strong></label>
+                        <textarea id="appriseUrls" rows="4" style="width: 100%; padding: 12px; border-radius: 8px; border: 1px solid #666; font-size: 14px; background: rgba(255,255,255,0.1); color: #fff; font-family: monospace; resize: vertical;"></textarea>
+                        <small>One URL per line. <a href="https://appriseit.com/services/" target="_blank" rel="noopener">Supported services</a></small>
+                    </div>
+                </div>
+
+                <div id="statefulFields" style="display: none;">
+                    <div class="form-group">
+                        <label for="appriseKey"><strong>Persistent Storage Key</strong></label>
+                        <input type="text" id="appriseKey" placeholder="apprise">
+                        <small>The key used to store notification URLs in the Apprise API (configured in the Apprise web UI)</small>
+                    </div>
+                    <div class="form-group">
+                        <label for="appriseTag"><strong>Tag</strong></label>
+                        <input type="text" id="appriseTag" placeholder="all">
+                        <small>Only notify services matching this tag (leave empty to notify all configured services)</small>
+                    </div>
+                </div>
+
+                <div style="margin-top: 20px;">
+                    <label><strong>Event Toggles</strong></label>
+                    <small style="display: block; margin-bottom: 10px;">Choose which events trigger notifications</small>
+                    <div class="form-group">
+                        <div style="display: flex; align-items: center; gap: 10px;">
+                            <label style="display: flex; align-items: center; gap: 10px; cursor: pointer; flex: 1;">
+                                <input type="checkbox" id="notifyPrintStarted" style="width: auto; cursor: pointer;">
+                                <span>Print started</span>
+                            </label>
+                            <button class="btn btn-secondary test-event-btn" onclick="testEventNotification('print_started')" style="padding: 2px 8px; font-size: 12px;">Test</button>
+                        </div>
+                    </div>
+                    <div class="form-group">
+                        <div style="display: flex; align-items: center; gap: 10px;">
+                            <label style="display: flex; align-items: center; gap: 10px; cursor: pointer; flex: 1;">
+                                <input type="checkbox" id="notifyPrintDone" style="width: auto; cursor: pointer;">
+                                <span>Print completed</span>
+                            </label>
+                            <button class="btn btn-secondary test-event-btn" onclick="testEventNotification('print_done')" style="padding: 2px 8px; font-size: 12px;">Test</button>
+                        </div>
+                    </div>
+                    <div class="form-group">
+                        <div style="display: flex; align-items: center; gap: 10px;">
+                            <label style="display: flex; align-items: center; gap: 10px; cursor: pointer; flex: 1;">
+                                <input type="checkbox" id="notifyPrintFailed" style="width: auto; cursor: pointer;">
+                                <span>Print failed / cancelled</span>
+                            </label>
+                            <button class="btn btn-secondary test-event-btn" onclick="testEventNotification('print_failed')" style="padding: 2px 8px; font-size: 12px;">Test</button>
+                        </div>
+                    </div>
+                    <div class="form-group">
+                        <div style="display: flex; align-items: center; gap: 10px;">
+                            <label style="display: flex; align-items: center; gap: 10px; cursor: pointer; flex: 1;">
+                                <input type="checkbox" id="notifyLowFilament" style="width: auto; cursor: pointer;">
+                                <span>Low filament warning</span>
+                            </label>
+                            <button class="btn btn-secondary test-event-btn" onclick="testEventNotification('low_filament')" style="padding: 2px 8px; font-size: 12px;">Test</button>
+                        </div>
+                    </div>
+                    <div class="form-group">
+                        <div style="display: flex; align-items: center; gap: 10px;">
+                            <label style="display: flex; align-items: center; gap: 10px; cursor: pointer; flex: 1;">
+                                <input type="checkbox" id="notifyAutoPaused" style="width: auto; cursor: pointer;">
+                                <span>Print auto-paused (low filament)</span>
+                            </label>
+                            <button class="btn btn-secondary test-event-btn" onclick="testEventNotification('auto_paused')" style="padding: 2px 8px; font-size: 12px;">Test</button>
+                        </div>
+                    </div>
+                    <div class="form-group">
+                        <div style="display: flex; align-items: center; gap: 10px;">
+                            <label style="display: flex; align-items: center; gap: 10px; cursor: pointer; flex: 1;">
+                                <input type="checkbox" id="notifyOffline" style="width: auto; cursor: pointer;">
+                                <span>Printer offline</span>
+                            </label>
+                            <button class="btn btn-secondary test-event-btn" onclick="testEventNotification('offline')" style="padding: 2px 8px; font-size: 12px;">Test</button>
+                        </div>
+                    </div>
+                    <div class="form-group">
+                        <div style="display: flex; align-items: center; gap: 10px;">
+                            <label style="display: flex; align-items: center; gap: 10px; cursor: pointer; flex: 1;">
+                                <input type="checkbox" id="notifyOnline" style="width: auto; cursor: pointer;">
+                                <span>Printer back online</span>
+                            </label>
+                            <button class="btn btn-secondary test-event-btn" onclick="testEventNotification('online')" style="padding: 2px 8px; font-size: 12px;">Test</button>
+                        </div>
+                    </div>
+                </div>
+
+                <div style="margin-top: 20px; text-align: center;">
+                    <button class="btn" onclick="saveNotificationSettings()">💾 Save Notification Settings</button>
+                    <div id="notificationSaveResult" style="margin-top: 10px;"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+
     <!-- Advanced Settings Tab -->
     <div id="advanced-tab" class="settings-tab-content">
         <div class="config-section">
