@@ -126,3 +126,25 @@ func TestSpoolConflictRejected(t *testing.T) {
 		t.Fatalf("same spool on two printers must 409, got %d", rec.Code)
 	}
 }
+
+// TestDashboardSpoolmanLink: the tab bar links out to the configured Spoolman
+// instance, and hides the link when no URL is configured.
+func TestDashboardSpoolmanLink(t *testing.T) {
+	ws, _, spoolman := newTestServer(t)
+
+	rec, _ := doJSON(t, ws, http.MethodGet, "/", "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("dashboard: %d", rec.Code)
+	}
+	if !strings.Contains(rec.Body.String(), `href="`+spoolman.URL()+`"`) {
+		t.Fatal("Spoolman link missing from tab bar")
+	}
+
+	// Unconfigured Spoolman: no dead link
+	ws.bridge.SetConfigValue(ConfigKeySpoolmanURL, "")
+	ws.bridge.ReloadConfig()
+	rec, _ = doJSON(t, ws, http.MethodGet, "/", "")
+	if strings.Contains(rec.Body.String(), "Spoolman ↗") {
+		t.Fatal("Spoolman link rendered without a configured URL")
+	}
+}

@@ -33,6 +33,7 @@
                 <li><button class="tab" onclick="switchTab('nfc')">📱 NFC Management</button></li>
                 {{if .HistoryEnabled}}<li><button class="tab" onclick="switchTab('history')">🗒️ Print History</button></li>{{end}}
                 <li><button class="tab" onclick="switchTab('settings')">⚙️ Settings</button></li>
+                {{if .SpoolmanBaseURL}}<li><a class="tab" href="{{.SpoolmanBaseURL}}" target="_blank" rel="noopener">🧵 Spoolman ↗</a></li>{{end}}
             </ul>
             
             {{template "content" .}}
