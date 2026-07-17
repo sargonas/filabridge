@@ -67,10 +67,17 @@ async function loadPrintHistory() {
         ]);
         const historyData = await historyRes.json();
 
-        const spoolNames = {};
+        const spoolInfo = {};
         if (spoolsRes && spoolsRes.ok) {
             const spools = await spoolsRes.json();
-            spools.forEach(s => { spoolNames[s.id] = s.name; });
+            spools.forEach(s => {
+                spoolInfo[s.id] = {
+                    name: s.name,
+                    colorHex: s.filament?.color_hex || '',
+                    multiColorHexes: s.filament?.multi_color_hexes || '',
+                    multiColorDirection: s.filament?.multi_color_direction || ''
+                };
+            });
         }
 
         const history = historyData.history || [];
@@ -83,9 +90,11 @@ async function loadPrintHistory() {
             const finished = new Date(h.print_finished);
             const started = new Date(h.print_started);
             const durationMs = finished - started;
-            const spoolLabel = spoolNames[h.spool_id]
-                ? `[${h.spool_id}] ${spoolNames[h.spool_id]}`
+            const info = spoolInfo[h.spool_id];
+            const spoolLabel = info
+                ? `[${h.spool_id}] ${escapeHtml(info.name)}`
                 : `Spool #${h.spool_id}`;
+            const swatchHtml = info ? buildColorSwatchHTML(info.colorHex, info.multiColorHexes, info.multiColorDirection) : '';
             const statusClass = h.status === 'completed' ? 'history-status-completed' : 'history-status-cancelled';
             const statusLabel = h.status === 'completed' ? '✅ Completed' : '🛑 Cancelled/Failed';
             return `
@@ -93,7 +102,7 @@ async function loadPrintHistory() {
                     <td class="history-job">${escapeHtml(h.job_name)}</td>
                     <td>${escapeHtml(h.printer_name)}</td>
                     <td><span class="history-status ${statusClass}">${statusLabel}</span></td>
-                    <td>${escapeHtml(spoolLabel)}</td>
+                    <td><div style="display: flex; align-items: center; gap: 8px;">${swatchHtml}<span>${spoolLabel}</span></div></td>
                     <td>${h.filament_used.toFixed(1)}g</td>
                     <td>${finished.toLocaleString()}</td>
                     <td>${formatDuration(durationMs)}</td>
@@ -538,6 +547,17 @@ function apiUrl(path) {
         path = '/' + path;
     }
     return `${window.location.origin}${path}`;
+}
+
+function buildColorSwatchHTML(colorHex, multiColorHexes, multiColorDirection) {
+    if (multiColorHexes) {
+        const colors = multiColorHexes.split(',');
+        const dir = multiColorDirection || 'coaxial';
+        return '<div class="color-swatch-multi ' + dir + '">' +
+            colors.map(c => '<div class="color-stripe" style="background-color: #' + c.trim() + ';"></div>').join('') +
+            '</div>';
+    }
+    return '<div class="color-swatch" style="background-color: #' + (colorHex || 'ccc') + ';"></div>';
 }
 
 function buildColorSwatch(colorHex, multiColorHexes, multiColorDirection) {
