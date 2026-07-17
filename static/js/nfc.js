@@ -28,6 +28,8 @@ function switchNfcTab(tabName, clickedElement) {
         });
     }
     
+    location.hash = 'nfc/' + tabName;
+
     // Load data for specific tabs
     if (tabName === 'spool-tags') {
         loadSpoolTags();

@@ -19,7 +19,14 @@ function switchTab(tabName) {
     
     // Add active class to clicked tab
     event.target.classList.add('active');
-    
+
+    // Update URL hash (skip for default status tab to keep URL clean)
+    if (tabName === 'status') {
+        history.replaceState(null, '', location.pathname);
+    } else {
+        location.hash = tabName;
+    }
+
     // Load print history when its tab is opened
     if (tabName === 'history') {
         loadPrintHistory();
@@ -171,6 +178,8 @@ function switchSettingsTab(tabName, clickedElement) {
         });
     }
     
+    location.hash = 'settings/' + tabName;
+
     // Load data for specific tabs
     if (tabName === 'getting-started') {
         // Getting Started tab doesn't need data loading
@@ -582,4 +591,27 @@ document.addEventListener('DOMContentLoaded', function() {
     initCustomDropdowns();
     initColorSwatches();
     initEditButtonColors();
+    restoreTabFromHash();
 });
+
+function restoreTabFromHash() {
+    const hash = location.hash.replace('#', '');
+    if (!hash) return;
+
+    const parts = hash.split('/');
+    const mainTab = parts[0];
+    const subTab = parts[1];
+
+    // Find and click the main tab button
+    const tabBtn = document.querySelector(`.tab[onclick*="'${mainTab}'"]`);
+    if (!tabBtn) return;
+    tabBtn.click();
+
+    if (!subTab) return;
+
+    if (mainTab === 'settings') {
+        switchSettingsTab(subTab);
+    } else if (mainTab === 'nfc') {
+        switchNfcTab(subTab);
+    }
+}
