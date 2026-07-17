@@ -125,18 +125,7 @@ window.onclick = function(event) {
 }
 
 function addPrinter(printerConfig) {
-    return fetch('/api/printers', {
-        method: 'POST',
-        headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify(printerConfig)
-    })
-    .then(response => response.json())
-    .then(data => {
-        if (data.error) {
-            throw new Error(data.error);
-        }
-        return data;
-    });
+    return apiRequest('/api/printers', { method: 'POST', body: printerConfig });
 }
 
 // Handle form submission
@@ -217,17 +206,8 @@ document.getElementById('editPrinterForm').addEventListener('submit', function(e
     };
     
     // Update the printer
-    fetch(`/api/printers/${printerId}`, {
-        method: 'PUT',
-        headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify(printerConfig)
-    })
-    .then(response => response.json())
-    .then(data => {
-        if (data.error) {
-            throw new Error(data.error);
-        }
-        
+    apiRequest(`/api/printers/${printerId}`, { method: 'PUT', body: printerConfig })
+    .then(() => {
         // Success - close modal and refresh
         closeEditPrinterModal();
         loadPrinters();
@@ -271,17 +251,10 @@ function editPrinter(printerId) {
 
 function deletePrinter(printerId) {
     if (confirm('Are you sure you want to delete this printer?')) {
-        fetch(`/api/printers/${printerId}`, {
-            method: 'DELETE'
-        })
-        .then(response => response.json())
-        .then(data => {
-            if (data.error) {
-                alert('Error deleting printer: ' + data.error);
-            } else {
-                alert('Printer deleted successfully!');
-                loadPrinters();
-            }
+        apiRequest(`/api/printers/${printerId}`, { method: 'DELETE' })
+        .then(() => {
+            alert('Printer deleted successfully!');
+            loadPrinters();
         })
         .catch(error => {
             alert('Error deleting printer: ' + error.message);
@@ -330,20 +303,12 @@ function saveToolheadNames(printerId) {
     }
     
     // Save each toolhead name
-    const savePromises = updates.map(update => {
-        return fetch(`/api/printers/${printerId}/toolheads/${update.toolheadId}`, {
+    const savePromises = updates.map(update =>
+        apiRequest(`/api/printers/${printerId}/toolheads/${update.toolheadId}`, {
             method: 'PUT',
-            headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({ name: update.name })
+            body: { name: update.name }
         })
-        .then(response => response.json())
-        .then(data => {
-            if (data.error) {
-                throw new Error(data.error);
-            }
-            return data;
-        });
-    });
+    );
     
     // Execute all updates
     Promise.all(savePromises)

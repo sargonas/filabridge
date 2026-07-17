@@ -263,31 +263,38 @@ func (c *SpoolmanClient) GetAllFilaments() ([]SpoolmanFilament, error) {
 	return filaments, nil
 }
 
-// UpdateSpool updates spool information (used for filament usage tracking)
-func (c *SpoolmanClient) UpdateSpool(spoolID int, data map[string]interface{}) error {
+// patchJSON sends a PATCH with a JSON body to the given API path (relative to
+// the Spoolman base URL) and verifies a 200 response. opDesc names the
+// operation for error messages, e.g. "updating spool 3".
+func (c *SpoolmanClient) patchJSON(path string, data map[string]interface{}, opDesc string) error {
 	jsonData, err := json.Marshal(data)
 	if err != nil {
-		return fmt.Errorf("error marshaling spool update data: %w", err)
+		return fmt.Errorf("error marshaling data for %s: %w", opDesc, err)
 	}
 
-	req, err := http.NewRequest("PATCH", fmt.Sprintf("%s/api/v1/spool/%d", c.baseURL, spoolID), bytes.NewBuffer(jsonData))
+	req, err := http.NewRequest("PATCH", c.baseURL+path, bytes.NewBuffer(jsonData))
 	if err != nil {
-		return fmt.Errorf("error creating PUT request: %w", err)
+		return fmt.Errorf("error creating PATCH request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
 	c.addAuthHeader(req)
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
-		return fmt.Errorf("error updating spool %d in Spoolman: %w", spoolID, err)
+		return fmt.Errorf("error %s in Spoolman: %w", opDesc, err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
 		return c.handleAPIError(resp)
 	}
-
 	return nil
+}
+
+// UpdateSpool updates spool information (used for filament usage tracking)
+func (c *SpoolmanClient) UpdateSpool(spoolID int, data map[string]interface{}) error {
+	return c.patchJSON(fmt.Sprintf("/api/v1/spool/%d", spoolID), data,
+		fmt.Sprintf("updating spool %d", spoolID))
 }
 
 // GetSpool fetches a single spool by ID from Spoolman
@@ -486,69 +493,36 @@ func (c *SpoolmanClient) FindLocationByName(name string) (*SpoolmanLocation, err
 // UpdateSpoolLocation updates a spool's location in Spoolman using text-based location field
 func (c *SpoolmanClient) UpdateSpoolLocation(spoolID int, locationName string) error {
 	// Use text-based location assignment - Spoolman will create the location if it doesn't exist
-	return c.updateSpoolLocationText(spoolID, locationName)
+	err := c.patchJSON(fmt.Sprintf("/api/v1/spool/%d", spoolID),
+		map[string]interface{}{"location": locationName},
+		fmt.Sprintf("updating spool %d location", spoolID))
+	if err != nil {
+		return err
+	}
+	log.Printf("Successfully updated spool %d to location '%s' (text-based)", spoolID, locationName)
+	return nil
 }
 
 // UpdateLocation updates a location name in Spoolman
 func (c *SpoolmanClient) UpdateLocation(locationID int, newName string) error {
-	updateData := map[string]interface{}{
-		"name": newName,
-	}
-
-	jsonData, err := json.Marshal(updateData)
+	err := c.patchJSON(fmt.Sprintf("/api/v1/location/%d", locationID),
+		map[string]interface{}{"name": newName},
+		fmt.Sprintf("updating location %d", locationID))
 	if err != nil {
-		return fmt.Errorf("failed to marshal location update data: %w", err)
+		return err
 	}
-
-	req, err := http.NewRequest("PATCH", fmt.Sprintf("%s/api/v1/location/%d", c.baseURL, locationID), bytes.NewBuffer(jsonData))
-	if err != nil {
-		return fmt.Errorf("error creating PATCH request: %w", err)
-	}
-	req.Header.Set("Content-Type", "application/json")
-	c.addAuthHeader(req)
-
-	resp, err := c.httpClient.Do(req)
-	if err != nil {
-		return fmt.Errorf("error updating location %d in Spoolman: %w", locationID, err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return c.handleAPIError(resp)
-	}
-
 	log.Printf("Successfully updated Spoolman location %d to '%s'", locationID, newName)
 	return nil
 }
 
 // ArchiveLocation archives a location in Spoolman
 func (c *SpoolmanClient) ArchiveLocation(locationID int) error {
-	updateData := map[string]interface{}{
-		"archived": true,
-	}
-
-	jsonData, err := json.Marshal(updateData)
+	err := c.patchJSON(fmt.Sprintf("/api/v1/location/%d", locationID),
+		map[string]interface{}{"archived": true},
+		fmt.Sprintf("archiving location %d", locationID))
 	if err != nil {
-		return fmt.Errorf("failed to marshal location archive data: %w", err)
+		return err
 	}
-
-	req, err := http.NewRequest("PATCH", fmt.Sprintf("%s/api/v1/location/%d", c.baseURL, locationID), bytes.NewBuffer(jsonData))
-	if err != nil {
-		return fmt.Errorf("error creating PATCH request: %w", err)
-	}
-	req.Header.Set("Content-Type", "application/json")
-	c.addAuthHeader(req)
-
-	resp, err := c.httpClient.Do(req)
-	if err != nil {
-		return fmt.Errorf("error archiving location %d in Spoolman: %w", locationID, err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return c.handleAPIError(resp)
-	}
-
 	log.Printf("Successfully archived Spoolman location %d", locationID)
 	return nil
 }
@@ -577,36 +551,4 @@ func (c *SpoolmanClient) UpdateLocationByName(oldName, newName string) error {
 
 	// Update the location using its ID
 	return c.UpdateLocation(locationID, newName)
-}
-
-// updateSpoolLocationText updates a spool's location using the text field
-func (c *SpoolmanClient) updateSpoolLocationText(spoolID int, locationName string) error {
-	updateData := map[string]interface{}{
-		"location": locationName,
-	}
-
-	jsonData, err := json.Marshal(updateData)
-	if err != nil {
-		return fmt.Errorf("error marshaling location update data: %w", err)
-	}
-
-	req, err := http.NewRequest("PATCH", fmt.Sprintf("%s/api/v1/spool/%d", c.baseURL, spoolID), bytes.NewBuffer(jsonData))
-	if err != nil {
-		return fmt.Errorf("error creating PATCH request: %w", err)
-	}
-	req.Header.Set("Content-Type", "application/json")
-	c.addAuthHeader(req)
-
-	resp, err := c.httpClient.Do(req)
-	if err != nil {
-		return fmt.Errorf("error updating spool %d location in Spoolman: %w", spoolID, err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return c.handleAPIError(resp)
-	}
-
-	log.Printf("Successfully updated spool %d to location '%s' (text-based)", spoolID, locationName)
-	return nil
 }

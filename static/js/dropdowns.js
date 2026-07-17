@@ -1,5 +1,30 @@
 // FilaBridge Dashboard - Dropdown Functionality
 
+// setDropdownButton renders the standard swatch + label + arrow button content
+function setDropdownButton(button, color, text, arrow) {
+    button.innerHTML = `
+        <div style="display: flex; align-items: center; gap: 10px;">
+            <div class="color-swatch" style="background-color: #${color || 'ccc'};"></div>
+            <span>${text}</span>
+        </div>
+        <span class="dropdown-arrow">${arrow}</span>
+    `;
+}
+
+// closeDropdown collapses a custom dropdown; clearSearch also resets its search box
+function closeDropdown(dropdown, clearSearch = false) {
+    dropdown.querySelector('.dropdown-content')?.classList.remove('show');
+    dropdown.querySelector('.dropdown-button')?.classList.remove('open');
+    dropdown.querySelector('.dropdown-arrow')?.classList.remove('open');
+    if (clearSearch) {
+        const searchInput = dropdown.querySelector('.dropdown-search');
+        if (searchInput) {
+            searchInput.value = '';
+            searchInput.dispatchEvent(new Event('input'));
+        }
+    }
+}
+
 // Load available spools for a specific dropdown
 async function loadAvailableSpools(dropdown) {
     const toolheadRow = dropdown.closest('.toolhead-mapping-row');
@@ -83,15 +108,9 @@ async function loadAvailableSpools(dropdown) {
                 // Update selected state
                 optionsContainer.querySelectorAll('.dropdown-option').forEach(opt => opt.classList.remove('selected'));
                 option.classList.add('selected');
-                
-                // Close dropdown
-                const content = dropdown.querySelector('.dropdown-content');
-                const arrow = dropdown.querySelector('.dropdown-arrow');
-                content.classList.remove('show');
-                const button = dropdown.querySelector('.dropdown-button');
-                button.classList.remove('open');
-                arrow.classList.remove('open');
-                
+
+                closeDropdown(dropdown);
+
                 // Auto-map the spool if a spool is selected (not "Empty")
                 if (selectedValue && selectedValue !== '') {
                     await autoMapSpool(dropdown, selectedValue, selectedText, selectedColor);
@@ -188,12 +207,9 @@ function initCustomDropdowns() {
                 // Update selected state
                 content.querySelectorAll('.dropdown-option').forEach(opt => opt.classList.remove('selected'));
                 option.classList.add('selected');
-                
-                // Close dropdown
-                content.classList.remove('show');
-                button.classList.remove('open');
-                arrow.classList.remove('open');
-                
+
+                closeDropdown(dropdown);
+
                 // Auto-map the spool if a spool is selected (not "Empty")
                 if (selectedValue && selectedValue !== '') {
                     await autoMapSpool(dropdown, selectedValue, selectedText, selectedColor);
@@ -214,18 +230,10 @@ function initCustomDropdowns() {
         button.addEventListener('click', async (e) => {
             e.stopPropagation();
             
-            // Close other dropdowns
+            // Close other dropdowns (clearing their search boxes)
             document.querySelectorAll('.custom-dropdown').forEach(other => {
                 if (other !== dropdown) {
-                    other.querySelector('.dropdown-content').classList.remove('show');
-                    other.querySelector('.dropdown-button').classList.remove('open');
-                    other.querySelector('.dropdown-arrow').classList.remove('open');
-                    // Clear search in other dropdowns
-                    const otherSearch = other.querySelector('.dropdown-search');
-                    if (otherSearch) {
-                        otherSearch.value = '';
-                        otherSearch.dispatchEvent(new Event('input'));
-                    }
+                    closeDropdown(other, true);
                 }
             });
             
@@ -249,19 +257,9 @@ function initCustomDropdowns() {
         });
     });
     
-    // Close dropdowns when clicking outside
+    // Close dropdowns when clicking outside (clearing their search boxes)
     document.addEventListener('click', () => {
-        document.querySelectorAll('.custom-dropdown').forEach(dropdown => {
-            dropdown.querySelector('.dropdown-content').classList.remove('show');
-            dropdown.querySelector('.dropdown-button').classList.remove('open');
-            dropdown.querySelector('.dropdown-arrow').classList.remove('open');
-            // Clear search when closing dropdown
-            const searchInput = dropdown.querySelector('.dropdown-search');
-            if (searchInput) {
-                searchInput.value = '';
-                searchInput.dispatchEvent(new Event('input'));
-            }
-        });
+        document.querySelectorAll('.custom-dropdown').forEach(dropdown => closeDropdown(dropdown, true));
     });
 }
 
@@ -294,13 +292,7 @@ async function autoMapSpool(dropdown, selectedValue, selectedText, selectedColor
     // Show loading state
     const button = dropdown.querySelector('.dropdown-button');
     const originalContent = button.innerHTML;
-    button.innerHTML = `
-        <div style="display: flex; align-items: center; gap: 10px;">
-            <div class="color-swatch" style="background-color: #${selectedColor};"></div>
-            <span>${selectedText}</span>
-        </div>
-        <span class="dropdown-arrow">⏳</span>
-    `;
+    setDropdownButton(button, selectedColor, selectedText, '⏳');
     
     try {
         const response = await fetch('/api/map_toolhead', {
@@ -331,26 +323,14 @@ async function autoMapSpool(dropdown, selectedValue, selectedText, selectedColor
         }
         
         // Success - show brief success indicator
-        button.innerHTML = `
-            <div style="display: flex; align-items: center; gap: 10px;">
-                <div class="color-swatch" style="background-color: #${selectedColor};"></div>
-                <span>${selectedText}</span>
-            </div>
-            <span class="dropdown-arrow">✅</span>
-        `;
-        
+        setDropdownButton(button, selectedColor, selectedText, '✅');
+
         // Update edit button visibility and data
         updateEditButton(toolheadRow, selectedValue, selectedColor);
-        
+
         // Reset to normal state after 2 seconds
         setTimeout(() => {
-            button.innerHTML = `
-                <div style="display: flex; align-items: center; gap: 10px;">
-                    <div class="color-swatch" style="background-color: #${selectedColor};"></div>
-                    <span>${selectedText}</span>
-                </div>
-                <span class="dropdown-arrow">▼</span>
-            `;
+            setDropdownButton(button, selectedColor, selectedText, '▼');
         }, 2000);
         
         // Only remove spools from other dropdowns if we're mapping a spool (not unmapping)

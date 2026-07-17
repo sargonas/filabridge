@@ -180,82 +180,70 @@ func (c *PrusaLinkClient) ResumeJob(jobID int) error {
 
 // GetGcodeFileWithRetry downloads the G-code file with retry logic and exponential backoff
 func (c *PrusaLinkClient) GetGcodeFileWithRetry(filename string, fileDownloadTimeout int) ([]byte, error) {
-	const maxRetries = 3
 	backoffDelays := []time.Duration{2 * time.Second, 4 * time.Second, 8 * time.Second}
+	maxRetries := len(backoffDelays)
 
-	var lastErr error
+	// A dedicated client with an extended timeout for file downloads, using the
+	// same DNS timeout configuration as the regular client for consistency.
+	fileDialer := &net.Dialer{
+		Timeout:   5 * time.Second, // DNS resolution timeout
+		KeepAlive: 30 * time.Second,
+	}
+	fileClient := &http.Client{
+		Timeout: time.Duration(fileDownloadTimeout) * time.Second,
+		Transport: &http.Transport{
+			DialContext:           fileDialer.DialContext,
+			MaxIdleConns:          10,
+			MaxIdleConnsPerHost:   2,
+			IdleConnTimeout:       90 * time.Second,
+			ResponseHeaderTimeout: 30 * time.Second,
+			ExpectContinueTimeout: 1 * time.Second,
+		},
+	}
 
-	for attempt := 0; attempt < maxRetries; attempt++ {
-		log.Printf("Downloading G-code file attempt %d/%d: %s", attempt+1, maxRetries, filename)
-
-		// Create a new client with extended timeout for file downloads
-		// Use the same DNS timeout configuration for consistency
-		fileDialer := &net.Dialer{
-			Timeout:   5 * time.Second, // DNS resolution timeout
-			KeepAlive: 30 * time.Second,
-		}
-
-		fileClient := &http.Client{
-			Timeout: time.Duration(fileDownloadTimeout) * time.Second,
-			Transport: &http.Transport{
-				DialContext:           fileDialer.DialContext,
-				MaxIdleConns:          10,
-				MaxIdleConnsPerHost:   2,
-				IdleConnTimeout:       90 * time.Second,
-				ResponseHeaderTimeout: 30 * time.Second,
-				ExpectContinueTimeout: 1 * time.Second,
-			},
-		}
-
-		// Use the correct PrusaLink API format: /{filename}
+	// Single download attempt. The filename should already include the full
+	// path (e.g., "usb/SHAPE-~1.BGC").
+	attemptDownload := func() ([]byte, error) {
 		req, err := http.NewRequest("GET", c.baseURL+"/"+filename, nil)
 		if err != nil {
-			lastErr = fmt.Errorf("failed to create G-code request: %w", err)
-			log.Printf("Attempt %d failed: %v", attempt+1, lastErr)
-			if attempt < maxRetries-1 {
-				time.Sleep(backoffDelays[attempt])
-			}
-			continue
+			return nil, fmt.Errorf("failed to create G-code request: %w", err)
 		}
-
 		c.addAPIKey(req)
 
 		resp, err := fileClient.Do(req)
 		if err != nil {
-			lastErr = fmt.Errorf("failed to get G-code file from PrusaLink: %w", err)
-			log.Printf("Attempt %d failed: %v", attempt+1, lastErr)
-			if attempt < maxRetries-1 {
-				time.Sleep(backoffDelays[attempt])
-			}
-			continue
+			return nil, fmt.Errorf("failed to get G-code file from PrusaLink: %w", err)
 		}
+		defer resp.Body.Close()
 
 		if resp.StatusCode != http.StatusOK {
 			body, _ := io.ReadAll(resp.Body)
-			resp.Body.Close()
-			lastErr = fmt.Errorf("PrusaLink API error: %d - %s", resp.StatusCode, string(body))
-			log.Printf("Attempt %d failed: %v", attempt+1, lastErr)
-			if attempt < maxRetries-1 {
-				time.Sleep(backoffDelays[attempt])
-			}
-			continue
+			return nil, fmt.Errorf("PrusaLink API error: %d - %s", resp.StatusCode, string(body))
 		}
 
 		body, err := io.ReadAll(resp.Body)
-		resp.Body.Close()
 		if err != nil {
-			lastErr = fmt.Errorf("failed to read G-code file: %w", err)
-			log.Printf("Attempt %d failed: %v", attempt+1, lastErr)
-			if attempt < maxRetries-1 {
-				time.Sleep(backoffDelays[attempt])
-			}
-			continue
+			return nil, fmt.Errorf("failed to read G-code file: %w", err)
+		}
+		return body, nil
+	}
+
+	var lastErr error
+	for attempt := 0; attempt < maxRetries; attempt++ {
+		log.Printf("Downloading G-code file attempt %d/%d: %s", attempt+1, maxRetries, filename)
+
+		body, err := attemptDownload()
+		if err == nil {
+			log.Printf("Successfully downloaded G-code file on attempt %d: %s (%d bytes)",
+				attempt+1, filename, len(body))
+			return body, nil
 		}
 
-		// Success!
-		log.Printf("Successfully downloaded G-code file on attempt %d: %s (%d bytes)",
-			attempt+1, filename, len(body))
-		return body, nil
+		lastErr = err
+		log.Printf("Attempt %d failed: %v", attempt+1, lastErr)
+		if attempt < maxRetries-1 {
+			time.Sleep(backoffDelays[attempt])
+		}
 	}
 
 	return nil, fmt.Errorf("failed to download G-code file after %d attempts: %w", maxRetries, lastErr)

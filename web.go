@@ -696,13 +696,7 @@ func (ws *WebServer) updateConfigHandler(c *gin.Context) {
 	}
 
 	// Reload configuration
-	newConfig, err := LoadConfig(ws.bridge)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-		return
-	}
-
-	if err := ws.bridge.UpdateConfig(newConfig); err != nil {
+	if err := ws.bridge.ReloadConfig(); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}

@@ -39,35 +39,10 @@ func LoadConfig(bridge *FilamentBridge) (*Config, error) {
 		return nil, fmt.Errorf("failed to load config from database: %w", err)
 	}
 
-	// Parse poll interval
-	pollInterval := DefaultPollInterval
-	if pollStr, exists := configValues[ConfigKeyPollInterval]; exists {
-		if parsed, err := strconv.Atoi(pollStr); err == nil {
-			pollInterval = parsed
-		}
-	}
-
-	// Parse timeout values
-	prusaLinkTimeout := PrusaLinkTimeout
-	if timeoutStr, exists := configValues[ConfigKeyPrusaLinkTimeout]; exists {
-		if parsed, err := strconv.Atoi(timeoutStr); err == nil {
-			prusaLinkTimeout = parsed
-		}
-	}
-
-	prusaLinkFileDownloadTimeout := PrusaLinkFileDownloadTimeout
-	if timeoutStr, exists := configValues[ConfigKeyPrusaLinkFileDownloadTimeout]; exists {
-		if parsed, err := strconv.Atoi(timeoutStr); err == nil {
-			prusaLinkFileDownloadTimeout = parsed
-		}
-	}
-
-	spoolmanTimeout := SpoolmanTimeout
-	if timeoutStr, exists := configValues[ConfigKeySpoolmanTimeout]; exists {
-		if parsed, err := strconv.Atoi(timeoutStr); err == nil {
-			spoolmanTimeout = parsed
-		}
-	}
+	pollInterval := parseIntConfig(configValues, ConfigKeyPollInterval, DefaultPollInterval)
+	prusaLinkTimeout := parseIntConfig(configValues, ConfigKeyPrusaLinkTimeout, PrusaLinkTimeout)
+	prusaLinkFileDownloadTimeout := parseIntConfig(configValues, ConfigKeyPrusaLinkFileDownloadTimeout, PrusaLinkFileDownloadTimeout)
+	spoolmanTimeout := parseIntConfig(configValues, ConfigKeySpoolmanTimeout, SpoolmanTimeout)
 
 	config := &Config{
 		SpoolmanURL:                  configValues[ConfigKeySpoolmanURL],
@@ -82,44 +57,34 @@ func LoadConfig(bridge *FilamentBridge) (*Config, error) {
 		Printers:                     make(map[string]PrinterConfig),
 	}
 
-	// Load individual printer configurations from database
+	// Load printer configs directly from database without making API calls.
+	// This prevents race conditions and timeouts during config loading; live
+	// printer status is handled by the monitoring cycle.
 	printerConfigs, err := bridge.GetAllPrinterConfigs()
 	if err != nil {
 		log.Printf("Error loading printer configs: %v", err)
-		// Fallback to empty config
-		config.Printers["no_printers"] = PrinterConfig{
-			Name:      "No Printers Configured",
-			IPAddress: "",
-			APIKey:    "",
-			Toolheads: 0,
-		}
-		return config, nil
 	}
-
-	// Process each printer configuration
 	for printerID, printerConfig := range printerConfigs {
-		// Load printer configs directly from database without making API calls
-		// This prevents race conditions and timeouts during config loading
-		// Live printer status will be handled by the monitoring cycle
-		config.Printers[printerID] = PrinterConfig{
-			Name:      printerConfig.Name,
-			IPAddress: printerConfig.IPAddress,
-			APIKey:    printerConfig.APIKey,
-			Toolheads: printerConfig.Toolheads,
-		}
+		config.Printers[printerID] = printerConfig
 	}
 
-	// If no printers configured, add placeholder
+	// If no printers configured (or loading failed), add placeholder
 	if len(config.Printers) == 0 {
-		config.Printers["no_printers"] = PrinterConfig{
-			Name:      "No Printers Configured",
-			IPAddress: "",
-			APIKey:    "",
-			Toolheads: 0,
-		}
+		config.Printers["no_printers"] = PrinterConfig{Name: "No Printers Configured"}
 	}
 
 	return config, nil
+}
+
+// parseIntConfig returns the named config value as an int, or the default when
+// the key is absent or not a valid integer.
+func parseIntConfig(values map[string]string, key string, defaultValue int) int {
+	if str, exists := values[key]; exists {
+		if parsed, err := strconv.Atoi(str); err == nil {
+			return parsed
+		}
+	}
+	return defaultValue
 }
 
 // resolvePrinterName resolves printer name from config, with fallback to IP-based name

@@ -273,20 +273,24 @@ func (b *FilamentBridge) initDatabase() error {
 
 // initializeDefaultConfig sets up default configuration values
 func (b *FilamentBridge) initializeDefaultConfig() error {
-	defaultConfigs := map[string]string{
-		ConfigKeySpoolmanURL:                     DefaultSpoolmanURL,
-		ConfigKeySpoolmanUsername:                "", // Spoolman basic auth username (optional)
-		ConfigKeySpoolmanPassword:                "", // Spoolman basic auth password (optional)
-		ConfigKeyPollInterval:                    fmt.Sprintf("%d", DefaultPollInterval),
-		ConfigKeyWebPort:                         DefaultWebPort,
-		ConfigKeyPrusaLinkTimeout:                fmt.Sprintf("%d", PrusaLinkTimeout),
-		ConfigKeyPrusaLinkFileDownloadTimeout:    fmt.Sprintf("%d", PrusaLinkFileDownloadTimeout),
-		ConfigKeySpoolmanTimeout:                 fmt.Sprintf("%d", SpoolmanTimeout),
-		ConfigKeyAutoAssignPreviousSpoolEnabled:  "false", // Enable auto-assignment of previous spool to default location
-		ConfigKeyAutoAssignPreviousSpoolLocation: "",      // Default location name for auto-assigned previous spools
-		ConfigKeyPrintHistoryEnabled:             "true",  // Keep a local record of prints for the history tab
-		ConfigKeyRunoutWarningEnabled:            "true",  // Warn when the mapped spool has less filament than the print needs
-		ConfigKeyRunoutPauseEnabled:              "false", // Also pause the print when a low-filament warning fires
+	type defaultConfig struct {
+		value       string
+		description string
+	}
+	defaultConfigs := map[string]defaultConfig{
+		ConfigKeySpoolmanURL:                     {DefaultSpoolmanURL, "URL of Spoolman instance"},
+		ConfigKeySpoolmanUsername:                {"", "Spoolman basic auth username (optional, leave empty if not using basic auth)"},
+		ConfigKeySpoolmanPassword:                {"", "Spoolman basic auth password (optional, leave empty if not using basic auth)"},
+		ConfigKeyPollInterval:                    {fmt.Sprintf("%d", DefaultPollInterval), "Polling interval in seconds"},
+		ConfigKeyWebPort:                         {DefaultWebPort, "Port for web interface"},
+		ConfigKeyPrusaLinkTimeout:                {fmt.Sprintf("%d", PrusaLinkTimeout), "PrusaLink API timeout in seconds"},
+		ConfigKeyPrusaLinkFileDownloadTimeout:    {fmt.Sprintf("%d", PrusaLinkFileDownloadTimeout), "PrusaLink file download timeout in seconds"},
+		ConfigKeySpoolmanTimeout:                 {fmt.Sprintf("%d", SpoolmanTimeout), "Spoolman API timeout in seconds"},
+		ConfigKeyAutoAssignPreviousSpoolEnabled:  {"false", "Enable automatic assignment of previous spool to default location when assigning new spool to toolhead"},
+		ConfigKeyAutoAssignPreviousSpoolLocation: {"", "Default location name where previous spools will be automatically assigned (must exist as a location)"},
+		ConfigKeyPrintHistoryEnabled:             {"true", "Keep a local record of prints and show the Print History tab (usage is recorded in Spoolman either way)"},
+		ConfigKeyRunoutWarningEnabled:            {"true", "Show a dashboard warning when the mapped spool has less filament remaining than the print requires"},
+		ConfigKeyRunoutPauseEnabled:              {"false", "Also pause the print when a low-filament warning fires (acknowledging resumes it)"},
 	}
 
 	// Check if this is a fresh installation by checking if any config exists
@@ -298,10 +302,10 @@ func (b *FilamentBridge) initializeDefaultConfig() error {
 
 	// Only insert defaults if this is a fresh installation
 	if totalCount == 0 {
-		for key, value := range defaultConfigs {
+		for key, cfg := range defaultConfigs {
 			_, err := b.db.Exec(
 				"INSERT INTO configuration (key, value, description) VALUES (?, ?, ?)",
-				key, value, getConfigDescription(key),
+				key, cfg.value, cfg.description,
 			)
 			if err != nil {
 				return fmt.Errorf("failed to insert default config %s: %w", key, err)
@@ -310,29 +314,6 @@ func (b *FilamentBridge) initializeDefaultConfig() error {
 	}
 
 	return nil
-}
-
-// getConfigDescription returns a description for a configuration key
-func getConfigDescription(key string) string {
-	descriptions := map[string]string{
-		ConfigKeySpoolmanURL:                     "URL of Spoolman instance",
-		ConfigKeySpoolmanUsername:                "Spoolman basic auth username (optional, leave empty if not using basic auth)",
-		ConfigKeySpoolmanPassword:                "Spoolman basic auth password (optional, leave empty if not using basic auth)",
-		ConfigKeyPollInterval:                    "Polling interval in seconds",
-		ConfigKeyWebPort:                         "Port for web interface",
-		ConfigKeyPrusaLinkTimeout:                "PrusaLink API timeout in seconds",
-		ConfigKeyPrusaLinkFileDownloadTimeout:    "PrusaLink file download timeout in seconds",
-		ConfigKeySpoolmanTimeout:                 "Spoolman API timeout in seconds",
-		ConfigKeyAutoAssignPreviousSpoolEnabled:  "Enable automatic assignment of previous spool to default location when assigning new spool to toolhead",
-		ConfigKeyAutoAssignPreviousSpoolLocation: "Default location name where previous spools will be automatically assigned (must exist as a location)",
-		ConfigKeyPrintHistoryEnabled:             "Keep a local record of prints and show the Print History tab (usage is recorded in Spoolman either way)",
-		ConfigKeyRunoutWarningEnabled:            "Show a dashboard warning when the mapped spool has less filament remaining than the print requires",
-		ConfigKeyRunoutPauseEnabled:              "Also pause the print when a low-filament warning fires (acknowledging resumes it)",
-	}
-	if desc, exists := descriptions[key]; exists {
-		return desc
-	}
-	return "Configuration value"
 }
 
 // GetConfigValue gets a configuration value from the database
@@ -831,26 +812,15 @@ func (b *FilamentBridge) GetConfigSnapshot() *Config {
 		return nil
 	}
 
-	// Create a shallow copy of the config
-	configCopy := &Config{
-		SpoolmanURL:                  b.config.SpoolmanURL,
-		SpoolmanUsername:             b.config.SpoolmanUsername,
-		SpoolmanPassword:             b.config.SpoolmanPassword,
-		PollInterval:                 b.config.PollInterval,
-		DBFile:                       b.config.DBFile,
-		WebPort:                      b.config.WebPort,
-		PrusaLinkTimeout:             b.config.PrusaLinkTimeout,
-		PrusaLinkFileDownloadTimeout: b.config.PrusaLinkFileDownloadTimeout,
-		SpoolmanTimeout:              b.config.SpoolmanTimeout,
-		Printers:                     make(map[string]PrinterConfig),
-	}
-
-	// Copy printer configs
+	// Copy the config value, then replace the shared Printers map with a copy
+	// (all other fields are value types).
+	configCopy := *b.config
+	configCopy.Printers = make(map[string]PrinterConfig, len(b.config.Printers))
 	for id, printer := range b.config.Printers {
 		configCopy.Printers[id] = printer
 	}
 
-	return configCopy
+	return &configCopy
 }
 
 // ReloadConfig reloads the configuration from the database
