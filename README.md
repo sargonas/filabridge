@@ -167,7 +167,6 @@ The system stores all configuration in the SQLite database. For Docker deploymen
 6. Choose the number of toolheads your printer has.
 7. Click "Save Configuration"
 8. Settings are applied immediately, no restart needed
-9. (Optional) Create a locating in Spoolman that matches your toolhead name. e.g. `CORE_One - Toolhead_0`
 
 ## Updating and Backups
 
@@ -212,6 +211,13 @@ The web interface provides:
 2. **Map spools to toolheads**: Use the FilaBridge web interface to assign spools with smart search
 3. **Monitor usage**: The system automatically tracks and updates filament usage
 4. **Handle errors**: Acknowledge any print processing errors that require manual intervention
+
+#### Spoolman Location Sync
+
+FilaBridge keeps each spool's Spoolman location in step with its toolhead assignment automatically — whether you assign via the dashboard dropdown, NFC, or QR code:
+
+- **Assigning a spool** sets its Spoolman location to `"PrinterName - ToolheadName"` (e.g. `CORE One - Toolhead 0`), where `ToolheadName` is the custom name you gave the toolhead or the default `Toolhead N`. Spoolman creates the location automatically the first time it's used — no need to pre-create it.
+- **Unassigning a spool**, or loading a new spool over an existing one, moves the displaced spool to your configured default storage location (see the auto-assign setting in Advanced Settings). If no default is configured, the spool's location is simply cleared.
 
 ### NFC Tag / QR Code Management
 
@@ -300,9 +306,9 @@ filabridge/
    - QR codes encode the full URL - scan with NFC Tools Pro to program tags
    - Sessions expire after 5 minutes - complete both scans within that timeout
 
-7. **Spoolman not tracking spools in Printer**:
-   - Ensure you have manually created a location in spoolman that matches your toolhead location name. (e.g. `CORE_One - Toolhead_0`)
-   - Check the option to automatically move spools back to a default location when a new spool is loaded
+7. **Spool locations not moving to a default location when unloaded**:
+   - Spool locations follow toolhead assignments automatically (see [Spoolman Location Sync](#spoolman-location-sync)); no manual location setup is required.
+   - To have unloaded spools return to a storage location instead of having their location cleared, enable "automatically move spools back to a default location" in Advanced Settings and set a location that exists in Spoolman.
 
 ### Logs
 

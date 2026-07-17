@@ -194,15 +194,9 @@ function updateSpoolData(spools) {
                 // Update selected state
                 optionsContainer.querySelectorAll('.dropdown-option').forEach(opt => opt.classList.remove('selected'));
                 option.classList.add('selected');
-                
-                // Close dropdown
-                const content = dropdown.querySelector('.dropdown-content');
-                const button = dropdown.querySelector('.dropdown-button');
-                const arrow = dropdown.querySelector('.dropdown-arrow');
-                content.classList.remove('show');
-                button.classList.remove('open');
-                arrow.classList.remove('open');
-                
+
+                closeDropdown(dropdown);
+
                 // Auto-map the spool if a spool is selected (not "Empty")
                 if (selectedValue && selectedValue !== '') {
                     await autoMapSpool(dropdown, selectedValue, selectedText, selectedColor);
@@ -277,13 +271,7 @@ function updateToolheadMappings(mappings) {
                     const selectedColor = spoolOption.dataset.color;
                     
                     // Update button display
-                    dropdownButton.innerHTML = `
-                        <div style="display: flex; align-items: center; gap: 10px;">
-                            <div class="color-swatch" style="background-color: #${selectedColor || 'ccc'};"></div>
-                            <span>${selectedText}</span>
-                        </div>
-                        <span class="dropdown-arrow">▼</span>
-                    `;
+                    setDropdownButton(dropdownButton, selectedColor, selectedText, '▼');
                     
                     // Mark as selected
                     optionsContainer.querySelectorAll('.dropdown-option').forEach(opt => {
@@ -444,22 +432,8 @@ async function acknowledgeError(errorId) {
                 }
             }
         } else {
-            // Check if response is JSON
-            const contentType = response.headers.get('content-type');
-            if (contentType && contentType.includes('application/json')) {
-                try {
-                    const errorData = await response.json();
-                    alert('Failed to acknowledge error: ' + (errorData.error || 'Unknown error'));
-                } catch (jsonError) {
-                    console.error('Failed to parse error response as JSON:', jsonError);
-                    alert('Failed to acknowledge error: Invalid server response');
-                }
-            } else {
-                // Response is not JSON, get text
-                const errorText = await response.text();
-                console.error('Non-JSON error response:', errorText);
-                alert('Failed to acknowledge error: ' + (errorText || 'Unknown error'));
-            }
+            const data = await response.json().catch(() => ({}));
+            alert('Failed to acknowledge error: ' + (data.error || 'Unknown error'));
         }
     } catch (error) {
         console.error('Error acknowledging print error:', error);

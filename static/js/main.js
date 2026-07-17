@@ -25,28 +25,26 @@ function switchTab(tabName) {
         loadPrintHistory();
     }
 
-    // Load configuration when settings tab is opened
+    // Load data for the currently active settings sub-tab
     if (tabName === 'settings') {
-        // Load data for the currently active settings sub-tab
-        const activeSettingsTab = document.querySelector('.settings-tab.active');
-        if (activeSettingsTab) {
-            // Determine which tab is active and load its data
-            const activeTabContent = document.querySelector('.settings-tab-content.active');
-            if (activeTabContent) {
-                const tabId = activeTabContent.id.replace('-tab', '');
-                if (tabId === 'getting-started') {
-                    // Getting Started tab doesn't need data loading
-                } else if (tabId === 'basic-config') {
-                    loadConfiguration();
-                } else if (tabId === 'printers') {
-                    loadPrinters();
-                } else if (tabId === 'advanced') {
-                    loadAdvancedSettings();
-                    loadAutoAssignSettings();
-                    loadPrintHistorySettings();
-                }
-            }
+        const activeTabContent = document.querySelector('.settings-tab-content.active');
+        if (activeTabContent) {
+            loadSettingsTabData(activeTabContent.id.replace('-tab', ''));
         }
+    }
+}
+
+// loadSettingsTabData loads the data a settings sub-tab needs when opened
+// (the Getting Started tab needs none)
+function loadSettingsTabData(tabId) {
+    if (tabId === 'basic-config') {
+        loadConfiguration();
+    } else if (tabId === 'printers') {
+        loadPrinters();
+    } else if (tabId === 'advanced') {
+        loadAdvancedSettings();
+        loadAutoAssignSettings();
+        loadPrintHistorySettings();
     }
 }
 
@@ -172,17 +170,7 @@ function switchSettingsTab(tabName, clickedElement) {
     }
     
     // Load data for specific tabs
-    if (tabName === 'getting-started') {
-        // Getting Started tab doesn't need data loading
-    } else if (tabName === 'basic-config') {
-        loadConfiguration();
-    } else if (tabName === 'printers') {
-        loadPrinters();
-    } else if (tabName === 'advanced') {
-        loadAdvancedSettings();
-        loadAutoAssignSettings();
-        loadPrintHistorySettings();
-    }
+    loadSettingsTabData(tabName);
 }
 
 // Configuration Management
@@ -239,6 +227,23 @@ function loadConfiguration() {
         });
 }
 
+// apiRequest sends a JSON request and resolves with the parsed response body,
+// rejecting when the network fails or the body carries an {error} field.
+// Non-string bodies are JSON-encoded with the appropriate Content-Type header.
+async function apiRequest(url, options = {}) {
+    const opts = { ...options };
+    if (opts.body !== undefined && typeof opts.body !== 'string') {
+        opts.headers = { 'Content-Type': 'application/json', ...(opts.headers || {}) };
+        opts.body = JSON.stringify(opts.body);
+    }
+    const response = await fetch(url, opts);
+    const data = await response.json();
+    if (data.error) {
+        throw new Error(data.error);
+    }
+    return data;
+}
+
 function saveConfiguration() {
     const config = {
         spoolman_url: document.getElementById('spoolman_url').value,
@@ -253,19 +258,10 @@ function saveConfiguration() {
         config.spoolman_password = password;
     }
 
-    fetch('/api/config', {
-        method: 'POST',
-        headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify(config)
-    })
-    .then(response => response.json())
-    .then(data => {
-        if (data.error) {
-            alert('Error saving configuration: ' + data.error);
-        } else {
-            alert('Configuration saved successfully! The application will restart.');
-            location.reload();
-        }
+    apiRequest('/api/config', { method: 'POST', body: config })
+    .then(() => {
+        alert('Configuration saved successfully! The application will restart.');
+        location.reload();
     })
     .catch(error => {
         alert('Error saving configuration: ' + error.message);
@@ -307,19 +303,10 @@ function saveAdvancedSettings() {
         return;
     }
     
-    fetch('/api/config', {
-        method: 'POST',
-        headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify(config)
-    })
-    .then(response => response.json())
-    .then(data => {
-        if (data.error) {
-            alert('Error saving advanced settings: ' + data.error);
-        } else {
-            alert('Advanced settings saved successfully! The application will restart to apply changes.');
-            location.reload();
-        }
+    apiRequest('/api/config', { method: 'POST', body: config })
+    .then(() => {
+        alert('Advanced settings saved successfully! The application will restart to apply changes.');
+        location.reload();
     })
     .catch(error => {
         alert('Error saving advanced settings: ' + error.message);
@@ -445,18 +432,9 @@ function saveAutoAssignSettings() {
         location: location
     };
     
-    fetch('/api/config/auto-assign-previous-spool', {
-        method: 'PUT',
-        headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify(settings)
-    })
-    .then(response => response.json())
-    .then(data => {
-        if (data.error) {
-            alert('Error saving auto-assign settings: ' + data.error);
-        } else {
-            alert('Auto-assign settings saved successfully!');
-        }
+    apiRequest('/api/config/auto-assign-previous-spool', { method: 'PUT', body: settings })
+    .then(() => {
+        alert('Auto-assign settings saved successfully!');
     })
     .catch(error => {
         alert('Error saving auto-assign settings: ' + error.message);
@@ -494,19 +472,10 @@ function savePrintHistorySettings() {
         }
     }
 
-    fetch('/api/config/print-history', {
-        method: 'PUT',
-        headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({ enabled: enabled })
-    })
-    .then(response => response.json())
-    .then(data => {
-        if (data.error) {
-            alert('Error saving history settings: ' + data.error);
-        } else {
-            // The tab is rendered server-side, so a reload applies the change
-            window.location.reload();
-        }
+    apiRequest('/api/config/print-history', { method: 'PUT', body: { enabled: enabled } })
+    .then(() => {
+        // The tab is rendered server-side, so a reload applies the change
+        window.location.reload();
     })
     .catch(error => {
         alert('Error saving history settings: ' + error.message);
@@ -517,14 +486,9 @@ function clearPrintHistory() {
     if (!confirm('Delete all stored print history? This cannot be undone. (Spoolman data is not affected.)')) {
         return;
     }
-    fetch('/api/print-history', { method: 'DELETE' })
-    .then(response => response.json())
-    .then(data => {
-        if (data.error) {
-            alert('Error clearing history: ' + data.error);
-        } else {
-            alert('Print history cleared.');
-        }
+    apiRequest('/api/print-history', { method: 'DELETE' })
+    .then(() => {
+        alert('Print history cleared.');
     })
     .catch(error => {
         alert('Error clearing history: ' + error.message);

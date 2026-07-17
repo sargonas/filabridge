@@ -1,0 +1,77 @@
+name: Block AI co-authored PRs
+
+on:
+  pull_request_target:
+    types: [opened, reopened, synchronize]
+
+permissions:
+  pull-requests: write
+  contents: read
+
+jobs:
+  block:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Scan commit messages for AI co-author trailers
+        id: scan
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          PR: ${{ github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+
+          PATTERN='co-authored-by:[[:space:]]*(claude|copilot|cursor[[:space:]]*agent)|noreply@anthropic\.com|copilot@github\.com|Copilot@users\.noreply\.github\.com|cursoragent@cursor\.com'
+
+          gh api --paginate "repos/$REPO/pulls/$PR/commits" \
+            --jq '.[] | "\(.sha[0:8]) \(.commit.message)"' > /tmp/messages.txt
+
+          if grep -Eiq "$PATTERN" /tmp/messages.txt; then
+            echo "found=true" >> "$GITHUB_OUTPUT"
+            {
+              echo 'hits<<HITS_EOF'
+              grep -Ei "$PATTERN" /tmp/messages.txt | sed 's/^/  /' | head -n 25
+              echo 'HITS_EOF'
+            } >> "$GITHUB_OUTPUT"
+          else
+            echo "found=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Comment and close
+        if: steps.scan.outputs.found == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          PR: ${{ github.event.pull_request.number }}
+          HITS: ${{ steps.scan.outputs.hits }}
+        run: |
+          set -euo pipefail
+          cat > /tmp/comment.md <<EOF
+          ### This pull request has been closed automatically
+
+          One or more commits carry an AI co-author trailer. This repository does not
+          accept contributions attributed to AI agents, so this PR cannot be merged as-is.
+
+          Matching lines:
+
+          \`\`\`
+          $HITS
+          \`\`\`
+
+          **If the attribution is wrong** — VS Code shipped a period where
+          \`git.addAICoAuthor\` defaulted to \`all\` and stamped the Copilot trailer onto
+          commits that never touched Copilot, including for users who had AI features
+          disabled. The default was reverted on 2026-05-03. If that is what happened here,
+          set \`"git.addAICoAuthor": "off"\` in your VS Code settings.
+
+          While this project is not Anti-AI, we are not keen on having commits in the tree primarily
+          attributible to AI Co authors for maximum end user comfort. Please adjust your workflow, or
+          the commit messages, as needed, then open a new PR. Thanks for your understanding.
+          EOF
+
+          gh pr comment "$PR" --repo "$REPO" --body-file /tmp/comment.md
+          gh pr close "$PR" --repo "$REPO"
+
+      - name: Fail the check
+        if: steps.scan.outputs.found == 'true'
+        run: exit 1

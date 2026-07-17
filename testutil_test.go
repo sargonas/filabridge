@@ -108,7 +108,8 @@ type fakeSpoolman struct {
 	mu     sync.Mutex
 	Spools map[int]*fakeSpool
 
-	PatchCalls []int // spool IDs that received usage updates
+	PatchCalls []int    // spool IDs that received usage updates
+	Locations  []string // location names that exist in Spoolman (for FindLocationByName)
 
 	srv *httptest.Server
 }
@@ -119,6 +120,7 @@ type fakeSpool struct {
 	RemainingWeight float64
 	UsedWeight      float64
 	Archived        bool
+	Location        string
 }
 
 func newFakeSpoolman(t *testing.T) *fakeSpoolman {
@@ -137,6 +139,7 @@ func (f *fakeSpoolman) spoolJSON(s *fakeSpool) map[string]interface{} {
 		"remaining_weight": s.RemainingWeight,
 		"used_weight":      s.UsedWeight,
 		"archived":         s.Archived,
+		"location":         s.Location,
 		"filament": map[string]interface{}{
 			"id": s.ID, "name": s.Name, "material": "PLA",
 			"vendor": map[string]interface{}{"id": 1, "name": "TestVendor"},
@@ -180,13 +183,20 @@ func (f *fakeSpoolman) handle(w http.ResponseWriter, r *http.Request) {
 			s.RemainingWeight -= delta
 			f.PatchCalls = append(f.PatchCalls, id)
 		}
+		if v, ok := body["location"].(string); ok {
+			s.Location = v
+		}
 		writeJSON(w, f.spoolJSON(s))
 
 	case r.URL.Path == "/api/v1/filament":
 		writeJSON(w, []interface{}{})
 
 	case r.URL.Path == "/api/v1/location":
-		writeJSON(w, []string{})
+		locs := make([]map[string]interface{}, 0, len(f.Locations))
+		for i, name := range f.Locations {
+			locs = append(locs, map[string]interface{}{"id": i + 1, "name": name})
+		}
+		writeJSON(w, locs)
 
 	case r.URL.Path == "/api/v1/info":
 		writeJSON(w, map[string]interface{}{"version": "fake"})

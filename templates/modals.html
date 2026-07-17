@@ -5,7 +5,7 @@
             <h3>Add Printer</h3>
             <button class="close" onclick="closeAddPrinterModal()">&times;</button>
         </div>
-        <form id="addPrinterForm" onsubmit="addPrinter(event)">
+        <form id="addPrinterForm">
             <div class="form-group">
                 <label for="printerName">Printer Name *</label>
                 <input type="text" id="printerName" name="name" required placeholder="e.g., Prusa MK3S+">
@@ -29,6 +29,11 @@
                     <option value="3">3 Toolheads</option>
                     <option value="4">4 Toolheads</option>
                     <option value="5">5 Toolheads</option>
+                    <option value="6">6 Toolheads</option>
+                    <option value="7">7 Toolheads</option>
+                    <option value="8">8 Toolheads</option>
+                    <option value="9">9 Toolheads</option>
+                    <option value="10">10 Toolheads</option>
                 </select>
                 <small>How many toolheads does your printer have?</small>
             </div>
@@ -70,6 +75,11 @@
                     <option value="3">3 Toolheads</option>
                     <option value="4">4 Toolheads</option>
                     <option value="5">5 Toolheads</option>
+                    <option value="6">6 Toolheads</option>
+                    <option value="7">7 Toolheads</option>
+                    <option value="8">8 Toolheads</option>
+                    <option value="9">9 Toolheads</option>
+                    <option value="10">10 Toolheads</option>
                 </select>
             </div>
             <div class="modal-actions">
@@ -77,27 +87,5 @@
                 <button type="submit" class="btn">Update Printer</button>
             </div>
         </form>
-    </div>
-</div>
-
-<!-- NFC QR Code Modal -->
-<div id="nfcQrModal" class="nfc-qr-modal">
-    <div class="nfc-qr-content">
-        <h3 id="nfcQrTitle">NFC QR Code</h3>
-        <div class="nfc-qr-modal-code">
-            <img id="nfcQrImage" src="" alt="QR Code">
-        </div>
-        <div class="nfc-url" id="nfcQrUrl"></div>
-        <div class="nfc-instructions">
-            <h4>How to use this QR code:</h4>
-            <ol>
-                <li>Open NFC Tools Pro on your phone</li>
-                <li>Tap "Write" and then "Add a record"</li>
-                <li>Select "URL" and scan this QR code</li>
-                <li>Write the tag to your NFC sticker</li>
-                <li>Test by scanning the tag with your phone</li>
-            </ol>
-        </div>
-        <button class="btn" onclick="closeNfcQrModal()">Close</button>
     </div>
 </div>

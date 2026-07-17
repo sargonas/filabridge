@@ -23,33 +23,7 @@ type PrusaLinkClient struct {
 // PrusaLinkStatus represents the status response from PrusaLink
 type PrusaLinkStatus struct {
 	Printer struct {
-		State       string `json:"state"`
-		Temperature struct {
-			Bed struct {
-				Actual float64 `json:"actual"`
-				Target float64 `json:"target"`
-			} `json:"bed"`
-			Tool0 struct {
-				Actual float64 `json:"actual"`
-				Target float64 `json:"target"`
-			} `json:"tool0"`
-			Tool1 struct {
-				Actual float64 `json:"actual"`
-				Target float64 `json:"target"`
-			} `json:"tool1,omitempty"`
-			Tool2 struct {
-				Actual float64 `json:"actual"`
-				Target float64 `json:"target"`
-			} `json:"tool2,omitempty"`
-			Tool3 struct {
-				Actual float64 `json:"actual"`
-				Target float64 `json:"target"`
-			} `json:"tool3,omitempty"`
-			Tool4 struct {
-				Actual float64 `json:"actual"`
-				Target float64 `json:"target"`
-			} `json:"tool4,omitempty"`
-		} `json:"temperature"`
+		State     string `json:"state"`
 		Telemetry struct {
 			PrintTime     int     `json:"print_time"`
 			PrintTimeLeft int     `json:"print_time_left"`
@@ -60,16 +34,12 @@ type PrusaLinkStatus struct {
 
 // PrusaLinkJob represents the job response from PrusaLink
 type PrusaLinkJob struct {
-	ID            int     `json:"id"`
-	State         string  `json:"state"`
-	Progress      float64 `json:"progress"`
-	TimeRemaining int     `json:"time_remaining"`
-	TimePrinting  int     `json:"time_printing"`
-	File          struct {
+	ID       int     `json:"id"`
+	Progress float64 `json:"progress"`
+	File     struct {
 		Name        string `json:"name"`
 		DisplayName string `json:"display_name"`
 		Path        string `json:"path"`
-		Size        int    `json:"size"`
 		Refs        struct {
 			Download string `json:"download"`
 		} `json:"refs"`
@@ -78,12 +48,6 @@ type PrusaLinkJob struct {
 		// loaded/printing; typically absent once the printer returns to idle.
 		Meta map[string]interface{} `json:"meta,omitempty"`
 	} `json:"file"`
-	// Filament usage data (if available)
-	Filament []struct {
-		ToolheadID int     `json:"toolhead_id"`
-		Length     float64 `json:"length"`
-		Weight     float64 `json:"weight"`
-	} `json:"filament,omitempty"`
 }
 
 // NewPrusaLinkClient creates a new PrusaLink client
@@ -214,114 +178,72 @@ func (c *PrusaLinkClient) ResumeJob(jobID int) error {
 	return c.jobCommand(jobID, "resume")
 }
 
-// GetGcodeFile downloads the G-code file for a completed print job
-func (c *PrusaLinkClient) GetGcodeFile(filename string) ([]byte, error) {
-	// Use the correct PrusaLink API format: /{filename}
-	// The filename should already include the full path (e.g., "usb/SHAPE-~1.BGC")
-	req, err := http.NewRequest("GET", c.baseURL+"/"+filename, nil)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create G-code request: %w", err)
-	}
-
-	c.addAPIKey(req)
-
-	resp, err := c.httpClient.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get G-code file from PrusaLink: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("PrusaLink API error: %d - %s", resp.StatusCode, string(body))
-	}
-
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read G-code file: %w", err)
-	}
-
-	return body, nil
-}
-
 // GetGcodeFileWithRetry downloads the G-code file with retry logic and exponential backoff
 func (c *PrusaLinkClient) GetGcodeFileWithRetry(filename string, fileDownloadTimeout int) ([]byte, error) {
-	const maxRetries = 3
 	backoffDelays := []time.Duration{2 * time.Second, 4 * time.Second, 8 * time.Second}
+	maxRetries := len(backoffDelays)
 
-	var lastErr error
+	// A dedicated client with an extended timeout for file downloads, using the
+	// same DNS timeout configuration as the regular client for consistency.
+	fileDialer := &net.Dialer{
+		Timeout:   5 * time.Second, // DNS resolution timeout
+		KeepAlive: 30 * time.Second,
+	}
+	fileClient := &http.Client{
+		Timeout: time.Duration(fileDownloadTimeout) * time.Second,
+		Transport: &http.Transport{
+			DialContext:           fileDialer.DialContext,
+			MaxIdleConns:          10,
+			MaxIdleConnsPerHost:   2,
+			IdleConnTimeout:       90 * time.Second,
+			ResponseHeaderTimeout: 30 * time.Second,
+			ExpectContinueTimeout: 1 * time.Second,
+		},
+	}
 
-	for attempt := 0; attempt < maxRetries; attempt++ {
-		log.Printf("Downloading G-code file attempt %d/%d: %s", attempt+1, maxRetries, filename)
-
-		// Create a new client with extended timeout for file downloads
-		// Use the same DNS timeout configuration for consistency
-		fileDialer := &net.Dialer{
-			Timeout:   5 * time.Second, // DNS resolution timeout
-			KeepAlive: 30 * time.Second,
-		}
-
-		fileClient := &http.Client{
-			Timeout: time.Duration(fileDownloadTimeout) * time.Second,
-			Transport: &http.Transport{
-				DialContext:           fileDialer.DialContext,
-				MaxIdleConns:          10,
-				MaxIdleConnsPerHost:   2,
-				IdleConnTimeout:       90 * time.Second,
-				ResponseHeaderTimeout: 30 * time.Second,
-				ExpectContinueTimeout: 1 * time.Second,
-			},
-		}
-
-		// Use the correct PrusaLink API format: /{filename}
+	// Single download attempt. The filename should already include the full
+	// path (e.g., "usb/SHAPE-~1.BGC").
+	attemptDownload := func() ([]byte, error) {
 		req, err := http.NewRequest("GET", c.baseURL+"/"+filename, nil)
 		if err != nil {
-			lastErr = fmt.Errorf("failed to create G-code request: %w", err)
-			log.Printf("Attempt %d failed: %v", attempt+1, lastErr)
-			if attempt < maxRetries-1 {
-				time.Sleep(backoffDelays[attempt])
-			}
-			continue
+			return nil, fmt.Errorf("failed to create G-code request: %w", err)
 		}
-
 		c.addAPIKey(req)
 
 		resp, err := fileClient.Do(req)
 		if err != nil {
-			lastErr = fmt.Errorf("failed to get G-code file from PrusaLink: %w", err)
-			log.Printf("Attempt %d failed: %v", attempt+1, lastErr)
-			if attempt < maxRetries-1 {
-				time.Sleep(backoffDelays[attempt])
-			}
-			continue
+			return nil, fmt.Errorf("failed to get G-code file from PrusaLink: %w", err)
 		}
+		defer resp.Body.Close()
 
 		if resp.StatusCode != http.StatusOK {
 			body, _ := io.ReadAll(resp.Body)
-			resp.Body.Close()
-			lastErr = fmt.Errorf("PrusaLink API error: %d - %s", resp.StatusCode, string(body))
-			log.Printf("Attempt %d failed: %v", attempt+1, lastErr)
-			if attempt < maxRetries-1 {
-				time.Sleep(backoffDelays[attempt])
-			}
-			continue
+			return nil, fmt.Errorf("PrusaLink API error: %d - %s", resp.StatusCode, string(body))
 		}
 
 		body, err := io.ReadAll(resp.Body)
-		resp.Body.Close()
 		if err != nil {
-			lastErr = fmt.Errorf("failed to read G-code file: %w", err)
-			log.Printf("Attempt %d failed: %v", attempt+1, lastErr)
-			if attempt < maxRetries-1 {
-				time.Sleep(backoffDelays[attempt])
-			}
-			continue
+			return nil, fmt.Errorf("failed to read G-code file: %w", err)
+		}
+		return body, nil
+	}
+
+	var lastErr error
+	for attempt := 0; attempt < maxRetries; attempt++ {
+		log.Printf("Downloading G-code file attempt %d/%d: %s", attempt+1, maxRetries, filename)
+
+		body, err := attemptDownload()
+		if err == nil {
+			log.Printf("Successfully downloaded G-code file on attempt %d: %s (%d bytes)",
+				attempt+1, filename, len(body))
+			return body, nil
 		}
 
-		// Success!
-		log.Printf("Successfully downloaded G-code file on attempt %d: %s (%d bytes)",
-			attempt+1, filename, len(body))
-		return body, nil
+		lastErr = err
+		log.Printf("Attempt %d failed: %v", attempt+1, lastErr)
+		if attempt < maxRetries-1 {
+			time.Sleep(backoffDelays[attempt])
+		}
 	}
 
 	return nil, fmt.Errorf("failed to download G-code file after %d attempts: %w", maxRetries, lastErr)
@@ -484,10 +406,4 @@ func filamentUsageFromMeta(meta map[string]interface{}) map[int]float64 {
 	}
 
 	return usage
-}
-
-// TestConnection tests the connection to PrusaLink
-func (c *PrusaLinkClient) TestConnection() error {
-	_, err := c.GetStatus()
-	return err
 }

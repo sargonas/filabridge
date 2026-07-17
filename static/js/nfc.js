@@ -38,17 +38,22 @@ function switchNfcTab(tabName, clickedElement) {
     }
 }
 
-async function loadNfcData() {
-    await loadSpoolTags();
-    await loadFilamentTags();
-    await loadLocationTags();
+// fetchNfcUrls fetches all NFC tag URLs (spools, filaments, locations) in one call
+async function fetchNfcUrls() {
+    const response = await fetch('/api/nfc/urls');
+    return response.json();
 }
 
-async function loadSpoolTags() {
+async function loadNfcData() {
+    // One shared fetch for all three panes instead of three identical requests
+    const shared = fetchNfcUrls();
+    await Promise.all([loadSpoolTags(shared), loadFilamentTags(shared), loadLocationTags(shared)]);
+}
+
+async function loadSpoolTags(dataPromise) {
     try {
-        const response = await fetch('/api/nfc/urls');
-        const data = await response.json();
-        
+        const data = await (dataPromise || fetchNfcUrls());
+
         const container = document.getElementById('spool-list-container');
         const spoolUrls = data.urls.filter(url => url.type === 'spool');
         
@@ -90,19 +95,18 @@ async function loadSpoolTags() {
         });
         
         // Initialize search functionality
-        initializeSpoolSearch(spoolUrls);
-        
+        initNfcSearch('spool-search', 'spool-list-container');
+
     } catch (error) {
         console.error('Error loading spool tags:', error);
         document.getElementById('spool-list-container').innerHTML = '<p>Error loading spools</p>';
     }
 }
 
-async function loadFilamentTags() {
+async function loadFilamentTags(dataPromise) {
     try {
-        const response = await fetch('/api/nfc/urls');
-        const data = await response.json();
-        
+        const data = await (dataPromise || fetchNfcUrls());
+
         const container = document.getElementById('filament-list-container');
         const filamentUrls = data.urls.filter(url => url.type === 'filament');
         
@@ -144,19 +148,18 @@ async function loadFilamentTags() {
         });
         
         // Initialize search functionality
-        initializeFilamentSearch(filamentUrls);
-        
+        initNfcSearch('filament-search', 'filament-list-container');
+
     } catch (error) {
         console.error('Error loading filament tags:', error);
         document.getElementById('filament-list-container').innerHTML = '<p>Error loading filaments</p>';
     }
 }
 
-async function loadLocationTags() {
+async function loadLocationTags(dataPromise) {
     try {
-        const response = await fetch('/api/nfc/urls');
-        const data = await response.json();
-        
+        const data = await (dataPromise || fetchNfcUrls());
+
         const container = document.getElementById('location-list-container');
         const locationUrls = data.urls.filter(url => url.type === 'location');
         
@@ -239,8 +242,8 @@ async function loadLocationTags() {
         });
         
         // Initialize search functionality
-        initializeLocationSearch(locationUrls);
-        
+        initNfcSearch('location-search', 'location-list-container');
+
     } catch (error) {
         console.error('Error loading location tags:', error);
         document.getElementById('location-list-container').innerHTML = '<p>Error loading locations</p>';
@@ -274,35 +277,31 @@ function renderLocationActions(url) {
 
 // Copy URL to clipboard
 async function copyUrlToClipboard(urlElementId, buttonElement) {
-    try {
-        const urlElement = document.getElementById(urlElementId);
-        const url = urlElement.textContent;
-        
-        if (!url) {
-            console.warn('No URL to copy');
-            return;
-        }
-        
-        // Use the Clipboard API
-        await navigator.clipboard.writeText(url);
-        
-        // Visual feedback - change icon temporarily
+    const url = document.getElementById(urlElementId).textContent;
+    if (!url) {
+        console.warn('No URL to copy');
+        return;
+    }
+
+    // Visual feedback - change icon temporarily
+    const showCopiedFeedback = () => {
         const icon = buttonElement.querySelector('.nfc-copy-icon');
         const originalIcon = icon.textContent;
         icon.textContent = '✓';
         buttonElement.style.background = 'rgba(76, 175, 80, 0.3)';
-        
-        // Reset after 2 seconds
         setTimeout(() => {
             icon.textContent = originalIcon;
             buttonElement.style.background = '';
         }, 2000);
-        
+    };
+
+    try {
+        await navigator.clipboard.writeText(url);
+        showCopiedFeedback();
     } catch (err) {
+        // Fallback: navigator.clipboard is unavailable on plain-HTTP LAN
+        // origins, which is FilaBridge's normal deployment
         console.error('Failed to copy URL:', err);
-        // Fallback for older browsers
-        const urlElement = document.getElementById(urlElementId);
-        const url = urlElement.textContent;
         const textArea = document.createElement('textarea');
         textArea.value = url;
         textArea.style.position = 'fixed';
@@ -311,14 +310,7 @@ async function copyUrlToClipboard(urlElementId, buttonElement) {
         textArea.select();
         try {
             document.execCommand('copy');
-            const icon = buttonElement.querySelector('.nfc-copy-icon');
-            const originalIcon = icon.textContent;
-            icon.textContent = '✓';
-            buttonElement.style.background = 'rgba(76, 175, 80, 0.3)';
-            setTimeout(() => {
-                icon.textContent = originalIcon;
-                buttonElement.style.background = '';
-            }, 2000);
+            showCopiedFeedback();
         } catch (fallbackErr) {
             console.error('Fallback copy failed:', fallbackErr);
             alert('Failed to copy URL. Please copy manually.');
@@ -398,91 +390,28 @@ function displayLocationQR(locationData) {
     document.getElementById('location-url-text').textContent = locationData.url;
 }
 
-// Initialize search functionality for spools
-function initializeSpoolSearch(spoolUrls) {
-    const searchInput = document.getElementById('spool-search');
-    const container = document.getElementById('spool-list-container');
-    
-    searchInput.addEventListener('input', (e) => {
-        const searchTerm = e.target.value.toLowerCase();
-        const items = container.querySelectorAll('.nfc-list-item');
-        
-        items.forEach(item => {
-            const name = item.querySelector('.item-name').textContent.toLowerCase();
-            const details = item.querySelector('.item-details').textContent.toLowerCase();
-            
-            if (name.includes(searchTerm) || details.includes(searchTerm)) {
-                item.style.display = 'flex';
-            } else {
-                item.style.display = 'none';
-            }
-        });
-    });
-}
+// Shared search filter for the NFC list panes: filters items in the container
+// by name/details as the user types. The listener is attached once per input
+// (guarded by a data attribute) so repeated tab loads don't stack handlers.
+function initNfcSearch(searchId, containerId) {
+    const searchInput = document.getElementById(searchId);
+    if (!searchInput || searchInput.dataset.searchInit) {
+        return;
+    }
+    searchInput.dataset.searchInit = 'true';
+    const container = document.getElementById(containerId);
 
-// Initialize search functionality for filaments
-function initializeFilamentSearch(filamentUrls) {
-    const searchInput = document.getElementById('filament-search');
-    const container = document.getElementById('filament-list-container');
-    
     searchInput.addEventListener('input', (e) => {
         const searchTerm = e.target.value.toLowerCase();
-        const items = container.querySelectorAll('.nfc-list-item');
-        
-        items.forEach(item => {
-            const name = item.querySelector('.item-name').textContent.toLowerCase();
-            const details = item.querySelector('.item-details').textContent.toLowerCase();
-            
-            if (name.includes(searchTerm) || details.includes(searchTerm)) {
-                item.style.display = 'flex';
-            } else {
-                item.style.display = 'none';
-            }
-        });
-    });
-}
-
-// Initialize search functionality for locations
-function initializeLocationSearch(locationUrls) {
-    const searchInput = document.getElementById('location-search');
-    const container = document.getElementById('location-list-container');
-    
-    searchInput.addEventListener('input', (e) => {
-        const searchTerm = e.target.value.toLowerCase();
-        const items = container.querySelectorAll('.nfc-list-item');
-        
-        items.forEach(item => {
-            const name = item.querySelector('.item-name').textContent.toLowerCase();
-            const details = item.querySelector('.item-details').textContent.toLowerCase();
-            
-            if (name.includes(searchTerm) || details.includes(searchTerm)) {
-                item.style.display = 'flex';
-            } else {
-                item.style.display = 'none';
-            }
+        container.querySelectorAll('.nfc-list-item').forEach(item => {
+            const name = item.querySelector('.item-name')?.textContent.toLowerCase() || '';
+            const details = item.querySelector('.item-details')?.textContent.toLowerCase() || '';
+            item.style.display = (name.includes(searchTerm) || details.includes(searchTerm)) ? 'flex' : 'none';
         });
     });
 }
 
 // Location Management Functions
-async function addLocation() {
-    const nameEl = document.getElementById('newLocationName');
-    const name = (nameEl.value || '').trim();
-    if (!name) { alert('Please enter a location name'); return; }
-    try {
-        const url = apiUrl('/api/locations');
-        const res = await fetch(url, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
-            mode: 'same-origin', credentials: 'same-origin',
-            body: JSON.stringify({ name })
-        });
-        if (!res.ok) throw new Error(await res.text());
-        nameEl.value = '';
-        await loadLocationTags();
-    } catch (e) { console.error(e); alert(e.message || 'Network error'); }
-}
-
 async function renameLocation(currentName) {
     const newName = prompt('Rename location', currentName || '');
     if (!newName || newName.trim() === '' || newName === currentName) return;
@@ -523,75 +452,9 @@ async function deleteLocation(name) {
         }
         const result = await res.json();
         await loadLocationTags();
-    } catch (e) { 
-        console.error('Delete error:', e); 
-        alert(e.message || 'Network error'); 
-    }
-}
-
-
-// QR Code Modal Functions
-function showQrCode(url, title, qrCodeBase64) {
-    // Create modal if it doesn't exist
-    let modal = document.getElementById('nfc-qr-modal');
-    if (!modal) {
-        modal = document.createElement('div');
-        modal.id = 'nfc-qr-modal';
-        modal.className = 'nfc-qr-modal';
-        modal.innerHTML = `
-            <div class="nfc-qr-content">
-                <h3 id="qr-title"></h3>
-                <div class="nfc-qr-modal-code" id="qr-code"></div>
-                <div class="nfc-url" id="qr-url"></div>
-                <div class="nfc-instructions">
-                    <h4>Instructions:</h4>
-                    <ol>
-                        <li>Open NFC Tools Pro on your phone</li>
-                        <li>Scan this QR code to copy the URL</li>
-                        <li>Write the URL to your NFC tag</li>
-                    </ol>
-                </div>
-                <button class="btn" onclick="closeQrModal()">Close</button>
-            </div>
-        `;
-        document.body.appendChild(modal);
-    }
-    
-    // Update modal content
-    document.getElementById('qr-title').textContent = title;
-    document.getElementById('qr-url').textContent = url;
-    
-    // Display real QR code or placeholder
-    const qrCodeDiv = document.getElementById('qr-code');
-    if (qrCodeBase64 && qrCodeBase64 !== '') {
-        qrCodeDiv.innerHTML = `<img src="data:image/png;base64,${qrCodeBase64}" alt="QR Code" style="width: 256px; height: 256px; border-radius: 8px; box-shadow: 0 4px 12px rgba(0,0,0,0.15);">`;
-    } else {
-        // Fallback placeholder if QR code generation failed
-        qrCodeDiv.innerHTML = `<div style="width: 256px; height: 256px; background: #f0f0f0; display: flex; align-items: center; justify-content: center; border: 2px dashed #ccc; border-radius: 8px;">
-            <div style="text-align: center;">
-                <div style="font-size: 48px; margin-bottom: 10px;">⚠️</div>
-                <div style="font-size: 12px; color: #666;">QR Code Error</div>
-                <div style="font-size: 10px; color: #999;">Copy URL manually</div>
-            </div>
-        </div>`;
-    }
-    
-    // Show modal
-    modal.style.display = 'block';
-}
-
-function closeQrModal() {
-    const modal = document.getElementById('nfc-qr-modal');
-    if (modal) {
-        modal.style.display = 'none';
-    }
-}
-
-// Close modal when clicking outside
-window.onclick = function(event) {
-    const modal = document.getElementById('nfc-qr-modal');
-    if (event.target === modal) {
-        closeQrModal();
+    } catch (e) {
+        console.error('Delete error:', e);
+        alert(e.message || 'Network error');
     }
 }
 

@@ -273,22 +273,24 @@ func (b *FilamentBridge) initDatabase() error {
 
 // initializeDefaultConfig sets up default configuration values
 func (b *FilamentBridge) initializeDefaultConfig() error {
-	defaultConfigs := map[string]string{
-		ConfigKeyPrinterIPs:                      "", // Comma-separated list of printer IP addresses
-		ConfigKeyAPIKey:                          "", // PrusaLink API key for authentication
-		ConfigKeySpoolmanURL:                     DefaultSpoolmanURL,
-		ConfigKeySpoolmanUsername:                "", // Spoolman basic auth username (optional)
-		ConfigKeySpoolmanPassword:                "", // Spoolman basic auth password (optional)
-		ConfigKeyPollInterval:                    fmt.Sprintf("%d", DefaultPollInterval),
-		ConfigKeyWebPort:                         DefaultWebPort,
-		ConfigKeyPrusaLinkTimeout:                fmt.Sprintf("%d", PrusaLinkTimeout),
-		ConfigKeyPrusaLinkFileDownloadTimeout:    fmt.Sprintf("%d", PrusaLinkFileDownloadTimeout),
-		ConfigKeySpoolmanTimeout:                 fmt.Sprintf("%d", SpoolmanTimeout),
-		ConfigKeyAutoAssignPreviousSpoolEnabled:  "false", // Enable auto-assignment of previous spool to default location
-		ConfigKeyAutoAssignPreviousSpoolLocation: "",      // Default location name for auto-assigned previous spools
-		ConfigKeyPrintHistoryEnabled:             "true",  // Keep a local record of prints for the history tab
-		ConfigKeyRunoutWarningEnabled:            "true",  // Warn when the mapped spool has less filament than the print needs
-		ConfigKeyRunoutPauseEnabled:              "false", // Also pause the print when a low-filament warning fires
+	type defaultConfig struct {
+		value       string
+		description string
+	}
+	defaultConfigs := map[string]defaultConfig{
+		ConfigKeySpoolmanURL:                     {DefaultSpoolmanURL, "URL of Spoolman instance"},
+		ConfigKeySpoolmanUsername:                {"", "Spoolman basic auth username (optional, leave empty if not using basic auth)"},
+		ConfigKeySpoolmanPassword:                {"", "Spoolman basic auth password (optional, leave empty if not using basic auth)"},
+		ConfigKeyPollInterval:                    {fmt.Sprintf("%d", DefaultPollInterval), "Polling interval in seconds"},
+		ConfigKeyWebPort:                         {DefaultWebPort, "Port for web interface"},
+		ConfigKeyPrusaLinkTimeout:                {fmt.Sprintf("%d", PrusaLinkTimeout), "PrusaLink API timeout in seconds"},
+		ConfigKeyPrusaLinkFileDownloadTimeout:    {fmt.Sprintf("%d", PrusaLinkFileDownloadTimeout), "PrusaLink file download timeout in seconds"},
+		ConfigKeySpoolmanTimeout:                 {fmt.Sprintf("%d", SpoolmanTimeout), "Spoolman API timeout in seconds"},
+		ConfigKeyAutoAssignPreviousSpoolEnabled:  {"false", "Enable automatic assignment of previous spool to default location when assigning new spool to toolhead"},
+		ConfigKeyAutoAssignPreviousSpoolLocation: {"", "Default location name where previous spools will be automatically assigned (must exist as a location)"},
+		ConfigKeyPrintHistoryEnabled:             {"true", "Keep a local record of prints and show the Print History tab (usage is recorded in Spoolman either way)"},
+		ConfigKeyRunoutWarningEnabled:            {"true", "Show a dashboard warning when the mapped spool has less filament remaining than the print requires"},
+		ConfigKeyRunoutPauseEnabled:              {"false", "Also pause the print when a low-filament warning fires (acknowledging resumes it)"},
 	}
 
 	// Check if this is a fresh installation by checking if any config exists
@@ -300,10 +302,10 @@ func (b *FilamentBridge) initializeDefaultConfig() error {
 
 	// Only insert defaults if this is a fresh installation
 	if totalCount == 0 {
-		for key, value := range defaultConfigs {
+		for key, cfg := range defaultConfigs {
 			_, err := b.db.Exec(
 				"INSERT INTO configuration (key, value, description) VALUES (?, ?, ?)",
-				key, value, getConfigDescription(key),
+				key, cfg.value, cfg.description,
 			)
 			if err != nil {
 				return fmt.Errorf("failed to insert default config %s: %w", key, err)
@@ -312,31 +314,6 @@ func (b *FilamentBridge) initializeDefaultConfig() error {
 	}
 
 	return nil
-}
-
-// getConfigDescription returns a description for a configuration key
-func getConfigDescription(key string) string {
-	descriptions := map[string]string{
-		ConfigKeyPrinterIPs:                      "Comma-separated list of printer IP addresses for PrusaLink",
-		ConfigKeyAPIKey:                          "PrusaLink API key for authentication",
-		ConfigKeySpoolmanURL:                     "URL of Spoolman instance",
-		ConfigKeySpoolmanUsername:                "Spoolman basic auth username (optional, leave empty if not using basic auth)",
-		ConfigKeySpoolmanPassword:                "Spoolman basic auth password (optional, leave empty if not using basic auth)",
-		ConfigKeyPollInterval:                    "Polling interval in seconds",
-		ConfigKeyWebPort:                         "Port for web interface",
-		ConfigKeyPrusaLinkTimeout:                "PrusaLink API timeout in seconds",
-		ConfigKeyPrusaLinkFileDownloadTimeout:    "PrusaLink file download timeout in seconds",
-		ConfigKeySpoolmanTimeout:                 "Spoolman API timeout in seconds",
-		ConfigKeyAutoAssignPreviousSpoolEnabled:  "Enable automatic assignment of previous spool to default location when assigning new spool to toolhead",
-		ConfigKeyAutoAssignPreviousSpoolLocation: "Default location name where previous spools will be automatically assigned (must exist as a location)",
-		ConfigKeyPrintHistoryEnabled:             "Keep a local record of prints and show the Print History tab (usage is recorded in Spoolman either way)",
-		ConfigKeyRunoutWarningEnabled:            "Show a dashboard warning when the mapped spool has less filament remaining than the print requires",
-		ConfigKeyRunoutPauseEnabled:              "Also pause the print when a low-filament warning fires (acknowledging resumes it)",
-	}
-	if desc, exists := descriptions[key]; exists {
-		return desc
-	}
-	return "Configuration value"
 }
 
 // GetConfigValue gets a configuration value from the database
@@ -835,27 +812,15 @@ func (b *FilamentBridge) GetConfigSnapshot() *Config {
 		return nil
 	}
 
-	// Create a shallow copy of the config
-	configCopy := &Config{
-		SpoolmanURL:                  b.config.SpoolmanURL,
-		SpoolmanUsername:             b.config.SpoolmanUsername,
-		SpoolmanPassword:             b.config.SpoolmanPassword,
-		PollInterval:                 b.config.PollInterval,
-		LocationSyncInterval:         b.config.LocationSyncInterval,
-		DBFile:                       b.config.DBFile,
-		WebPort:                      b.config.WebPort,
-		PrusaLinkTimeout:             b.config.PrusaLinkTimeout,
-		PrusaLinkFileDownloadTimeout: b.config.PrusaLinkFileDownloadTimeout,
-		SpoolmanTimeout:              b.config.SpoolmanTimeout,
-		Printers:                     make(map[string]PrinterConfig),
-	}
-
-	// Copy printer configs
+	// Copy the config value, then replace the shared Printers map with a copy
+	// (all other fields are value types).
+	configCopy := *b.config
+	configCopy.Printers = make(map[string]PrinterConfig, len(b.config.Printers))
 	for id, printer := range b.config.Printers {
 		configCopy.Printers[id] = printer
 	}
 
-	return configCopy
+	return &configCopy
 }
 
 // ReloadConfig reloads the configuration from the database
@@ -971,45 +936,71 @@ func (b *FilamentBridge) SetToolheadMapping(printerName string, toolheadID int, 
 
 	log.Printf("Mapped %s toolhead %d to spool %d", printerName, toolheadID, spoolID)
 
-	// Check if auto-assign feature is enabled and we have a previous spool to assign
-	enabled, err := b.GetAutoAssignPreviousSpoolEnabled()
-	if err != nil {
-		log.Printf("Warning: Failed to check auto-assign previous spool setting: %v", err)
-		b.mutex.Unlock()
-		return nil // Don't fail the assignment if we can't check the setting
-	}
-
-	// Unlock before potentially calling AssignSpoolToLocation (which may need locks)
+	// Unlock before the Spoolman calls below (which may need locks)
 	b.mutex.Unlock()
 
-	if enabled && previousSpoolID > 0 && previousSpoolID != spoolID {
-		// Get the configured default location
-		locationName, err := b.GetAutoAssignPreviousSpoolLocation()
-		if err != nil {
-			log.Printf("Warning: Failed to get auto-assign previous spool location setting: %v", err)
-			return nil // Don't fail the assignment
-		}
+	// Sync Spoolman: the loaded spool moves to this toolhead's location...
+	locationName := b.toolheadLocationName(printerName, toolheadID)
+	if err := b.spoolman.UpdateSpoolLocation(spoolID, locationName); err != nil {
+		// Log but don't fail the mapping - the FilaBridge mapping is more critical
+		log.Printf("Warning: Failed to update Spoolman location for spool %d to '%s': %v", spoolID, locationName, err)
+	}
 
-		if locationName != "" {
-			// Verify the location exists in Spoolman
-			location, err := b.spoolman.FindLocationByName(locationName)
-			if err != nil || location == nil {
-				log.Printf("Warning: Auto-assign previous spool location '%s' does not exist, skipping auto-assignment of spool %d", locationName, previousSpoolID)
-				return nil // Don't fail the assignment
-			}
-
-			// Assign the previous spool to the default location
-			// Use isPrinterLocation = false since this is a storage location
-			if err := b.AssignSpoolToLocation(previousSpoolID, "", 0, locationName, false); err != nil {
-				log.Printf("Warning: Failed to auto-assign previous spool %d to location '%s': %v", previousSpoolID, locationName, err)
-				// Don't fail the original assignment if auto-assignment fails
-			} else {
-				log.Printf("Auto-assigned previous spool %d to location '%s'", previousSpoolID, locationName)
-			}
-		}
+	// ...and the spool it displaced returns to storage (or has its location cleared)
+	if previousSpoolID > 0 && previousSpoolID != spoolID {
+		b.relocateSpool(previousSpoolID)
 	}
 
 	return nil
+}
+
+// toolheadLocationName returns the Spoolman location string for a toolhead:
+// "PrinterName - DisplayName" (e.g. "Core One - Toolhead 0"). Spoolman
+// auto-creates text locations when a spool is assigned to them.
+func (b *FilamentBridge) toolheadLocationName(printerName string, toolheadID int) string {
+	displayName := fmt.Sprintf("Toolhead %d", toolheadID)
+	if configs, err := b.GetAllPrinterConfigs(); err == nil {
+		for printerID, cfg := range configs {
+			if cfg.Name == printerName {
+				if name, err := b.GetToolheadName(printerID, toolheadID); err == nil {
+					displayName = name
+				}
+				break
+			}
+		}
+	}
+	return fmt.Sprintf("%s - %s", printerName, displayName)
+}
+
+// relocateSpool updates the Spoolman location of a spool that is no longer
+// loaded on a toolhead: it moves to the configured auto-assign storage
+// location when that feature is enabled and the location exists in Spoolman,
+// otherwise its location is cleared. Failures are logged, never propagated.
+func (b *FilamentBridge) relocateSpool(spoolID int) {
+	dest := ""
+	enabled, err := b.GetAutoAssignPreviousSpoolEnabled()
+	if err != nil {
+		log.Printf("Warning: Failed to check auto-assign previous spool setting: %v", err)
+	} else if enabled {
+		name, err := b.GetAutoAssignPreviousSpoolLocation()
+		if err != nil {
+			log.Printf("Warning: Failed to get auto-assign previous spool location: %v", err)
+		} else if name != "" {
+			if loc, err := b.spoolman.FindLocationByName(name); err == nil && loc != nil {
+				dest = name
+			} else {
+				log.Printf("Warning: Auto-assign location '%s' does not exist in Spoolman, clearing spool %d location instead", name, spoolID)
+			}
+		}
+	}
+
+	if err := b.spoolman.UpdateSpoolLocation(spoolID, dest); err != nil {
+		log.Printf("Warning: Failed to update Spoolman location for spool %d: %v", spoolID, err)
+	} else if dest != "" {
+		log.Printf("Moved spool %d to storage location '%s'", spoolID, dest)
+	} else {
+		log.Printf("Cleared Spoolman location for spool %d", spoolID)
+	}
 }
 
 // GetToolheadMappings gets all toolhead mappings for a printer
@@ -1078,17 +1069,33 @@ func (b *FilamentBridge) GetAllToolheadMappings() (map[string]map[int]ToolheadMa
 // UnmapToolhead removes a spool mapping from a toolhead
 func (b *FilamentBridge) UnmapToolhead(printerName string, toolheadID int) error {
 	b.mutex.Lock()
-	defer b.mutex.Unlock()
 
-	_, err := b.db.Exec(
+	// Capture the mapped spool so its Spoolman location can be updated below
+	var spoolID int
+	err := b.db.QueryRow(
+		"SELECT spool_id FROM toolhead_mappings WHERE printer_name = ? AND toolhead_id = ?",
+		printerName, toolheadID,
+	).Scan(&spoolID)
+	if err != nil && err != sql.ErrNoRows {
+		b.mutex.Unlock()
+		return fmt.Errorf("failed to get toolhead mapping: %w", err)
+	}
+
+	_, err = b.db.Exec(
 		"DELETE FROM toolhead_mappings WHERE printer_name = ? AND toolhead_id = ?",
 		printerName, toolheadID,
 	)
+	b.mutex.Unlock()
 	if err != nil {
 		return fmt.Errorf("failed to unmap toolhead: %w", err)
 	}
 
 	log.Printf("Unmapped %s toolhead %d", printerName, toolheadID)
+
+	// Sync Spoolman: the unloaded spool returns to storage (or its location is cleared)
+	if spoolID > 0 {
+		b.relocateSpool(spoolID)
+	}
 	return nil
 }
 

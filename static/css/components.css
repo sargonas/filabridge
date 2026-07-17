@@ -172,19 +172,6 @@
 }
 
 /* Toolhead Specific Styles */
-.toolhead-select {
-    background: rgba(255,255,255,0.1) !important;
-    color: #fff !important;
-    border: 1px solid rgba(255,255,255,0.2) !important;
-    padding: 8px !important;
-    border-radius: 4px !important;
-}
-
-.toolhead-select option {
-    background: #1a1a1a !important;
-    color: #fff !important;
-}
-
 .toolhead-label {
     color: #fff !important;
 }
