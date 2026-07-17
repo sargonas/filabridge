@@ -170,8 +170,7 @@ async function loadLocationTags() {
         messageBanner.style.cssText = 'background: #fff3cd; border: 1px solid #ffeaa7; color: #856404; padding: 15px; margin-bottom: 15px; border-radius: 8px;';
         
         let bannerHTML = '<strong>ℹ️ Location Management:</strong><br>';
-        bannerHTML += 'It is not possible via the Spoolman API to add locations automatically. ';
-        bannerHTML += 'To create locations, please do so via Spoolman. Then they will show up here.';
+        bannerHTML += 'Locations are managed in Spoolman. Create and edit locations there, and they will appear here.';
         
         if (spoolmanURL) {
             // Append /locations to the Spoolman URL

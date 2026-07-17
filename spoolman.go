@@ -378,9 +378,10 @@ type SpoolmanLocation struct {
 	Archived bool   `json:"archived"`
 }
 
-// GetLocations gets all locations from Spoolman
+// GetLocations gets all defined locations from Spoolman via the settings
+// endpoint, which includes locations that have no spools assigned.
 func (c *SpoolmanClient) GetLocations() ([]SpoolmanLocation, error) {
-	req, err := http.NewRequest("GET", c.baseURL+"/api/v1/location", nil)
+	req, err := http.NewRequest("GET", c.baseURL+"/api/v1/setting/locations", nil)
 	if err != nil {
 		return nil, fmt.Errorf("error creating request: %w", err)
 	}
@@ -396,48 +397,23 @@ func (c *SpoolmanClient) GetLocations() ([]SpoolmanLocation, error) {
 		return nil, c.handleAPIError(resp)
 	}
 
-	// Read full body so we can retry alternative shapes and log on error
-	bodyBytes, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, fmt.Errorf("error reading locations response from Spoolman: %w", err)
+	var setting struct {
+		Value string `json:"value"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&setting); err != nil {
+		return nil, fmt.Errorf("error decoding locations setting from Spoolman: %w", err)
 	}
 
-	// 1) Try standard array of objects
-	var locations []SpoolmanLocation
-	if err := json.Unmarshal(bodyBytes, &locations); err == nil {
-		return locations, nil
-	}
-
-	// 2) Try { data: [...] } wrapper
-	var dataWrapper struct {
-		Data    []SpoolmanLocation `json:"data"`
-		Results []SpoolmanLocation `json:"results"`
-	}
-	if err := json.Unmarshal(bodyBytes, &dataWrapper); err == nil {
-		if len(dataWrapper.Data) > 0 {
-			return dataWrapper.Data, nil
-		}
-		if len(dataWrapper.Results) > 0 {
-			return dataWrapper.Results, nil
-		}
-	}
-
-	// 3) Try simple array of names like ["Testing", ...]
 	var names []string
-	if err := json.Unmarshal(bodyBytes, &names); err == nil {
-		for _, n := range names {
-			locations = append(locations, SpoolmanLocation{Name: n})
-		}
-		return locations, nil
+	if err := json.Unmarshal([]byte(setting.Value), &names); err != nil {
+		return nil, fmt.Errorf("error parsing locations array from Spoolman: %w", err)
 	}
 
-	// Log snippet for diagnostics and return error
-	snippet := string(bodyBytes)
-	if len(snippet) > 300 {
-		snippet = snippet[:300] + "..."
+	locations := make([]SpoolmanLocation, 0, len(names))
+	for _, n := range names {
+		locations = append(locations, SpoolmanLocation{Name: n})
 	}
-	log.Printf("Spoolman /location unexpected JSON. Snippet: %s", snippet)
-	return nil, fmt.Errorf("error decoding locations from Spoolman: unexpected JSON shape")
+	return locations, nil
 }
 
 // GetOrCreateLocation gets an existing location by name
