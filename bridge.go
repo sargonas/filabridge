@@ -991,6 +991,13 @@ func (b *FilamentBridge) SetToolheadMapping(printerName string, toolheadID int, 
 		}
 
 		if locationName != "" {
+			// Verify the location exists in Spoolman
+			location, err := b.spoolman.FindLocationByName(locationName)
+			if err != nil || location == nil {
+				log.Printf("Warning: Auto-assign previous spool location '%s' does not exist, skipping auto-assignment of spool %d", locationName, previousSpoolID)
+				return nil // Don't fail the assignment
+			}
+
 			// Assign the previous spool to the default location
 			// Use isPrinterLocation = false since this is a storage location
 			if err := b.AssignSpoolToLocation(previousSpoolID, "", 0, locationName, false); err != nil {

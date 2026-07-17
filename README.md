@@ -167,6 +167,7 @@ The system stores all configuration in the SQLite database. For Docker deploymen
 6. Choose the number of toolheads your printer has.
 7. Click "Save Configuration"
 8. Settings are applied immediately, no restart needed
+9. (Optional) Create a locating in Spoolman that matches your toolhead name. e.g. `CORE_One - Toolhead_0`
 
 ## Updating and Backups
 
@@ -298,6 +299,10 @@ filabridge/
    - Use a mobile NFC app such as NFC Tools Pro to verify tag is properly formatted
    - QR codes encode the full URL - scan with NFC Tools Pro to program tags
    - Sessions expire after 5 minutes - complete both scans within that timeout
+
+7. **Spoolman not tracking spools in Printer**:
+   - Ensure you have manually created a location in spoolman that matches your toolhead location name. (e.g. `CORE_One - Toolhead_0`)
+   - Check the option to automatically move spools back to a default location when a new spool is loaded
 
 ### Logs
 
