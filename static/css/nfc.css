@@ -160,6 +160,16 @@
     max-height: 500px;
 }
 
+/* The 450px list column overflows a phone; stack the two panels and let the
+   content set the height instead of a fixed 500px viewport. */
+@media (max-width: 768px) {
+    .nfc-side-by-side {
+        grid-template-columns: 1fr;
+        height: auto;
+        max-height: none;
+    }
+}
+
 .nfc-list-panel {
     background: rgba(255,255,255,0.03);
     border-radius: 8px;

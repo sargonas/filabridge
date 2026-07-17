@@ -172,8 +172,27 @@
 }
 
 /* Toolhead Specific Styles */
+.toolhead-mapping-row {
+    display: flex;
+    align-items: center;
+    gap: 15px;
+    margin-bottom: 10px;
+    padding: 10px;
+    background: rgba(255,255,255,0.05);
+    border-radius: 5px;
+}
+
 .toolhead-label {
     color: #fff !important;
+    min-width: 100px;
+    font-weight: bold;
+}
+
+/* Let the dropdown shrink below its content width so a long spool name can't
+   push the row wider than the card. */
+.toolhead-dropdown {
+    flex: 1;
+    min-width: 0;
 }
 
 .edit-spool-btn {
@@ -251,4 +270,64 @@
 .history-status-cancelled {
     background: #fdecea;
     color: #c62828;
+}
+
+/* WebSocket connection indicator (badge text/colour are set inline by
+   websocket.js; layout lives here so it can adapt on mobile). */
+.ws-status {
+    position: fixed;
+    top: 10px;
+    right: 10px;
+    padding: 8px 12px;
+    border-radius: 4px;
+    font-size: 12px;
+    font-weight: bold;
+    z-index: 1000;
+    transition: all 0.3s ease;
+}
+
+/* Mobile / narrow viewports */
+@media (max-width: 600px) {
+    /* Two side-by-side fields don't fit a phone; stack them. */
+    .form-row {
+        grid-template-columns: 1fr;
+        gap: 15px;
+    }
+
+    /* Desktop buttons are padded for a mouse; trim so a stack of them doesn't
+       dominate the screen, while keeping a comfortable tap target. */
+    .btn {
+        padding: 12px 20px;
+        margin: 8px 4px;
+    }
+
+    /* Stack the row: label, then a full-width dropdown, then the edit button
+       each on their own line, so a mapped spool's long name can't overflow or
+       collide with the ✏️ button. */
+    .toolhead-mapping-row {
+        flex-wrap: wrap;
+        gap: 10px;
+    }
+
+    .toolhead-label {
+        min-width: 0;
+        flex-basis: 100%;
+    }
+
+    .toolhead-dropdown {
+        flex-basis: 100%;
+    }
+
+    .edit-spool-btn {
+        margin-left: 0;
+    }
+
+    /* Docked top-right, the badge overlaps the centred header title on a
+       narrow screen; move it to the bottom corner instead. */
+    .ws-status {
+        top: auto;
+        bottom: 10px;
+        padding: 6px 10px;
+        font-size: 11px;
+    }
 }
