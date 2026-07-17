@@ -113,6 +113,56 @@ func TestMapAndUnmapToolhead(t *testing.T) {
 	}
 }
 
+// TestToolheadMappingSyncsSpoolmanLocation: assigning a spool to a toolhead
+// (via any path) sets its Spoolman location to "PrinterName - ToolheadName";
+// the spool it displaces, and any spool that is later unmapped, is relocated to
+// the configured storage location, or has its location cleared when none is set.
+func TestToolheadMappingSyncsSpoolmanLocation(t *testing.T) {
+	ws, _, spoolman := newTestServer(t)
+	spoolman.Spools[1] = &fakeSpool{ID: 1, Name: "Red", RemainingWeight: 500}
+	spoolman.Spools[2] = &fakeSpool{ID: 2, Name: "Blue", RemainingWeight: 500}
+
+	// Assign spool 1 -> its location becomes the toolhead location
+	rec, _ := doJSON(t, ws, http.MethodPost, "/api/map_toolhead", `{"printer_name":"TestPrinter","toolhead_id":0,"spool_id":1}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("map spool 1: %d %s", rec.Code, rec.Body.String())
+	}
+	if got := spoolman.Spools[1].Location; got != "TestPrinter - Toolhead 0" {
+		t.Fatalf("spool 1 location = %q, want %q", got, "TestPrinter - Toolhead 0")
+	}
+
+	// Assign spool 2 to the same toolhead. Auto-assign is off, so the displaced
+	// spool 1 has its location cleared rather than moved to storage.
+	rec, _ = doJSON(t, ws, http.MethodPost, "/api/map_toolhead", `{"printer_name":"TestPrinter","toolhead_id":0,"spool_id":2}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("map spool 2: %d %s", rec.Code, rec.Body.String())
+	}
+	if got := spoolman.Spools[2].Location; got != "TestPrinter - Toolhead 0" {
+		t.Fatalf("spool 2 location = %q, want toolhead location", got)
+	}
+	if got := spoolman.Spools[1].Location; got != "" {
+		t.Fatalf("displaced spool 1 location = %q, want cleared", got)
+	}
+
+	// With auto-assign enabled and the storage location present in Spoolman,
+	// unmapping moves the spool there instead of clearing it.
+	spoolman.Locations = []string{"Storage"}
+	if err := ws.bridge.SetAutoAssignPreviousSpoolEnabled(true); err != nil {
+		t.Fatal(err)
+	}
+	if err := ws.bridge.SetAutoAssignPreviousSpoolLocation("Storage"); err != nil {
+		t.Fatal(err)
+	}
+
+	rec, _ = doJSON(t, ws, http.MethodPost, "/api/map_toolhead", `{"printer_name":"TestPrinter","toolhead_id":0,"spool_id":0}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("unmap: %d %s", rec.Code, rec.Body.String())
+	}
+	if got := spoolman.Spools[2].Location; got != "Storage" {
+		t.Fatalf("unmapped spool 2 location = %q, want %q", got, "Storage")
+	}
+}
+
 // TestMapToolheadRejectsInvalidTargets: mappings to toolheads beyond the
 // printer's configured count (or to unknown printers) must be rejected, not
 // silently stored.
