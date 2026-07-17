@@ -167,7 +167,6 @@ func (ws *WebServer) setupRoutes() {
 		api.POST("/printers", ws.addPrinterHandler)
 		api.PUT("/printers/:id", ws.updatePrinterHandler)
 		api.DELETE("/printers/:id", ws.deletePrinterHandler)
-		api.GET("/printers/:id/toolheads", ws.getToolheadNamesHandler)
 		api.PUT("/printers/:id/toolheads/:toolhead_id", ws.updateToolheadNameHandler)
 		api.GET("/print-errors", ws.getPrintErrorsHandler)
 		api.POST("/print-errors/:id/acknowledge", ws.acknowledgePrintErrorHandler)
@@ -179,7 +178,6 @@ func (ws *WebServer) setupRoutes() {
 		api.GET("/nfc/urls", ws.nfcUrlsHandler)
 		api.GET("/nfc/session/status", ws.nfcSessionStatusHandler)
 		api.GET("/locations", ws.getLocationsHandler)
-		api.GET("/locations/:name/status", ws.getLocationStatusHandler)
 		api.POST("/locations", ws.createLocationHandler)
 		api.PUT("/locations/:name", ws.updateLocationHandler)
 		api.DELETE("/locations/:name", ws.deleteLocationHandler)
@@ -654,7 +652,7 @@ func (ws *WebServer) availableSpoolsHandler(c *gin.Context) {
 // overwritten when a non-empty value is submitted (empty means "keep current").
 var sensitiveConfigKeys = map[string]bool{
 	ConfigKeySpoolmanPassword: true,
-	ConfigKeyAPIKey:           true, // legacy global PrusaLink key
+	"prusalink_api_key":       true, // removed key, but old installs may still hold a real credential in this row
 }
 
 // getConfigHandler returns current configuration. Credentials are masked:
@@ -915,43 +913,6 @@ func (ws *WebServer) deletePrinterHandler(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{"message": "Printer deleted successfully"})
-}
-
-// getToolheadNamesHandler returns all toolhead names for a printer
-func (ws *WebServer) getToolheadNamesHandler(c *gin.Context) {
-	printerID := c.Param("id")
-
-	// Verify printer exists
-	printerConfigs, err := ws.bridge.GetAllPrinterConfigs()
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-		return
-	}
-
-	printerConfig, exists := printerConfigs[printerID]
-	if !exists {
-		c.JSON(http.StatusNotFound, gin.H{"error": "Printer not found"})
-		return
-	}
-
-	// Get all toolhead names
-	toolheadNames, err := ws.bridge.GetAllToolheadNames(printerID)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-		return
-	}
-
-	// Build response with all toolheads (including defaults for unnamed ones)
-	result := make(map[int]string)
-	for toolheadID := 0; toolheadID < printerConfig.Toolheads; toolheadID++ {
-		if name, exists := toolheadNames[toolheadID]; exists {
-			result[toolheadID] = name
-		} else {
-			result[toolheadID] = fmt.Sprintf("Toolhead %d", toolheadID)
-		}
-	}
-
-	c.JSON(http.StatusOK, gin.H{"toolhead_names": result})
 }
 
 // updateToolheadNameHandler updates a toolhead's display name
@@ -1715,34 +1676,6 @@ func (ws *WebServer) getLocationsHandler(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{
 		"locations":    allLocations,
 		"spoolman_url": spoolmanURL,
-	})
-}
-
-// getLocationStatusHandler returns detailed status information for a specific location
-func (ws *WebServer) getLocationStatusHandler(c *gin.Context) {
-	name := c.Param("name")
-	if name == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Location name is required"})
-		return
-	}
-
-	// Check if location exists in Spoolman
-	location, err := ws.bridge.spoolman.FindLocationByName(name)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-		return
-	}
-
-	if location == nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "Location not found"})
-		return
-	}
-
-	c.JSON(http.StatusOK, gin.H{
-		"name":     location.Name,
-		"id":       location.ID,
-		"comment":  location.Comment,
-		"archived": location.Archived,
 	})
 }
 

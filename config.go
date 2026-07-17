@@ -17,25 +17,12 @@ type PrinterConfig struct {
 	Toolheads int    `json:"toolheads"`
 }
 
-// FilamentSpool represents a filament spool from Spoolman
-type FilamentSpool struct {
-	ID              int     `json:"id"`
-	Name            string  `json:"name"`
-	Brand           string  `json:"brand"`
-	Material        string  `json:"material"`
-	Color           string  `json:"color"`
-	RemainingLength float64 `json:"remaining_length"`
-	TotalLength     float64 `json:"total_length"`
-	ToolheadMapping *int    `json:"toolhead_mapping,omitempty"`
-}
-
 // Config holds all configuration for the application
 type Config struct {
 	SpoolmanURL                  string
 	SpoolmanUsername             string
 	SpoolmanPassword             string
 	PollInterval                 time.Duration
-	LocationSyncInterval         time.Duration
 	DBFile                       string
 	WebPort                      string
 	PrusaLinkTimeout             int
@@ -57,14 +44,6 @@ func LoadConfig(bridge *FilamentBridge) (*Config, error) {
 	if pollStr, exists := configValues[ConfigKeyPollInterval]; exists {
 		if parsed, err := strconv.Atoi(pollStr); err == nil {
 			pollInterval = parsed
-		}
-	}
-
-	// Parse location sync interval
-	locationSyncInterval := DefaultLocationSyncInterval
-	if syncStr, exists := configValues[ConfigKeyLocationSyncInterval]; exists {
-		if parsed, err := strconv.Atoi(syncStr); err == nil {
-			locationSyncInterval = parsed
 		}
 	}
 
@@ -95,7 +74,6 @@ func LoadConfig(bridge *FilamentBridge) (*Config, error) {
 		SpoolmanUsername:             configValues[ConfigKeySpoolmanUsername],
 		SpoolmanPassword:             configValues[ConfigKeySpoolmanPassword],
 		PollInterval:                 time.Duration(pollInterval) * time.Second,
-		LocationSyncInterval:         time.Duration(locationSyncInterval) * time.Minute,
 		DBFile:                       getDBFilePath(),
 		WebPort:                      configValues[ConfigKeyWebPort],
 		PrusaLinkTimeout:             prusaLinkTimeout,

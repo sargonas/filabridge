@@ -34,16 +34,12 @@ type PrusaLinkStatus struct {
 
 // PrusaLinkJob represents the job response from PrusaLink
 type PrusaLinkJob struct {
-	ID            int     `json:"id"`
-	State         string  `json:"state"`
-	Progress      float64 `json:"progress"`
-	TimeRemaining int     `json:"time_remaining"`
-	TimePrinting  int     `json:"time_printing"`
-	File          struct {
+	ID       int     `json:"id"`
+	Progress float64 `json:"progress"`
+	File     struct {
 		Name        string `json:"name"`
 		DisplayName string `json:"display_name"`
 		Path        string `json:"path"`
-		Size        int    `json:"size"`
 		Refs        struct {
 			Download string `json:"download"`
 		} `json:"refs"`
@@ -52,12 +48,6 @@ type PrusaLinkJob struct {
 		// loaded/printing; typically absent once the printer returns to idle.
 		Meta map[string]interface{} `json:"meta,omitempty"`
 	} `json:"file"`
-	// Filament usage data (if available)
-	Filament []struct {
-		ToolheadID int     `json:"toolhead_id"`
-		Length     float64 `json:"length"`
-		Weight     float64 `json:"weight"`
-	} `json:"filament,omitempty"`
 }
 
 // NewPrusaLinkClient creates a new PrusaLink client
@@ -186,36 +176,6 @@ func (c *PrusaLinkClient) PauseJob(jobID int) error {
 // ResumeJob resumes the given paused print job
 func (c *PrusaLinkClient) ResumeJob(jobID int) error {
 	return c.jobCommand(jobID, "resume")
-}
-
-// GetGcodeFile downloads the G-code file for a completed print job
-func (c *PrusaLinkClient) GetGcodeFile(filename string) ([]byte, error) {
-	// Use the correct PrusaLink API format: /{filename}
-	// The filename should already include the full path (e.g., "usb/SHAPE-~1.BGC")
-	req, err := http.NewRequest("GET", c.baseURL+"/"+filename, nil)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create G-code request: %w", err)
-	}
-
-	c.addAPIKey(req)
-
-	resp, err := c.httpClient.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get G-code file from PrusaLink: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("PrusaLink API error: %d - %s", resp.StatusCode, string(body))
-	}
-
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read G-code file: %w", err)
-	}
-
-	return body, nil
 }
 
 // GetGcodeFileWithRetry downloads the G-code file with retry logic and exponential backoff
@@ -458,10 +418,4 @@ func filamentUsageFromMeta(meta map[string]interface{}) map[int]float64 {
 	}
 
 	return usage
-}
-
-// TestConnection tests the connection to PrusaLink
-func (c *PrusaLinkClient) TestConnection() error {
-	_, err := c.GetStatus()
-	return err
 }

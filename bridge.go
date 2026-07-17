@@ -274,8 +274,6 @@ func (b *FilamentBridge) initDatabase() error {
 // initializeDefaultConfig sets up default configuration values
 func (b *FilamentBridge) initializeDefaultConfig() error {
 	defaultConfigs := map[string]string{
-		ConfigKeyPrinterIPs:                      "", // Comma-separated list of printer IP addresses
-		ConfigKeyAPIKey:                          "", // PrusaLink API key for authentication
 		ConfigKeySpoolmanURL:                     DefaultSpoolmanURL,
 		ConfigKeySpoolmanUsername:                "", // Spoolman basic auth username (optional)
 		ConfigKeySpoolmanPassword:                "", // Spoolman basic auth password (optional)
@@ -317,8 +315,6 @@ func (b *FilamentBridge) initializeDefaultConfig() error {
 // getConfigDescription returns a description for a configuration key
 func getConfigDescription(key string) string {
 	descriptions := map[string]string{
-		ConfigKeyPrinterIPs:                      "Comma-separated list of printer IP addresses for PrusaLink",
-		ConfigKeyAPIKey:                          "PrusaLink API key for authentication",
 		ConfigKeySpoolmanURL:                     "URL of Spoolman instance",
 		ConfigKeySpoolmanUsername:                "Spoolman basic auth username (optional, leave empty if not using basic auth)",
 		ConfigKeySpoolmanPassword:                "Spoolman basic auth password (optional, leave empty if not using basic auth)",
@@ -841,7 +837,6 @@ func (b *FilamentBridge) GetConfigSnapshot() *Config {
 		SpoolmanUsername:             b.config.SpoolmanUsername,
 		SpoolmanPassword:             b.config.SpoolmanPassword,
 		PollInterval:                 b.config.PollInterval,
-		LocationSyncInterval:         b.config.LocationSyncInterval,
 		DBFile:                       b.config.DBFile,
 		WebPort:                      b.config.WebPort,
 		PrusaLinkTimeout:             b.config.PrusaLinkTimeout,

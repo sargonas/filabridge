@@ -467,13 +467,6 @@ func (c *SpoolmanClient) GetOrCreateLocation(name string) (*SpoolmanLocation, er
 	}, nil
 }
 
-// CreateLocation is deprecated - Spoolman API does not support creating locations via POST.
-// Locations must be created manually in Spoolman UI or are auto-created when referenced in spools.
-// This function is kept for backward compatibility but will always return an error.
-func (c *SpoolmanClient) CreateLocation(name string) (*SpoolmanLocation, error) {
-	return nil, fmt.Errorf("spoolman API does not support creating locations via POST. Locations must be created manually in Spoolman UI or will be auto-created when referenced in a spool")
-}
-
 // FindLocationByName searches for an existing location by name
 func (c *SpoolmanClient) FindLocationByName(name string) (*SpoolmanLocation, error) {
 	locations, err := c.GetLocations()
@@ -488,47 +481,6 @@ func (c *SpoolmanClient) FindLocationByName(name string) (*SpoolmanLocation, err
 	}
 
 	return nil, nil // Location not found
-}
-
-// LocationExistsInSpoolman checks if a location exists in Spoolman
-func (c *SpoolmanClient) LocationExistsInSpoolman(name string) (bool, error) {
-	location, err := c.FindLocationByName(name)
-	if err != nil {
-		return false, err
-	}
-	return location != nil, nil
-}
-
-// RenameLocation renames a location in Spoolman using the PATCH API
-func (c *SpoolmanClient) RenameLocation(oldName, newName string) error {
-	updateData := map[string]interface{}{
-		"name": newName,
-	}
-
-	jsonData, err := json.Marshal(updateData)
-	if err != nil {
-		return fmt.Errorf("failed to marshal location rename data: %w", err)
-	}
-
-	req, err := http.NewRequest("PATCH", fmt.Sprintf("%s/api/v1/location/%s", c.baseURL, oldName), bytes.NewBuffer(jsonData))
-	if err != nil {
-		return fmt.Errorf("error creating PATCH request: %w", err)
-	}
-	req.Header.Set("Content-Type", "application/json")
-	c.addAuthHeader(req)
-
-	resp, err := c.httpClient.Do(req)
-	if err != nil {
-		return fmt.Errorf("error renaming location in Spoolman: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return c.handleAPIError(resp)
-	}
-
-	log.Printf("Successfully renamed Spoolman location from '%s' to '%s'", oldName, newName)
-	return nil
 }
 
 // UpdateSpoolLocation updates a spool's location in Spoolman using text-based location field
@@ -656,26 +608,5 @@ func (c *SpoolmanClient) updateSpoolLocationText(spoolID int, locationName strin
 	}
 
 	log.Printf("Successfully updated spool %d to location '%s' (text-based)", spoolID, locationName)
-	return nil
-}
-
-// UpdateSpoolmanLocationReferences renames the location in Spoolman using the location rename API
-func (c *SpoolmanClient) UpdateSpoolmanLocationReferences(oldName, newName string) error {
-	// Check if the old location exists in Spoolman
-	exists, err := c.LocationExistsInSpoolman(oldName)
-	if err != nil {
-		return fmt.Errorf("failed to check if location exists in Spoolman: %w", err)
-	}
-
-	if !exists {
-		log.Printf("Location '%s' does not exist in Spoolman, skipping rename", oldName)
-		return nil
-	}
-
-	// RenameLocation logs the rename on success
-	if err := c.RenameLocation(oldName, newName); err != nil {
-		return fmt.Errorf("failed to rename location in Spoolman: %w", err)
-	}
-
 	return nil
 }
