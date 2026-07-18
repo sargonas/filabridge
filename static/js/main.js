@@ -240,6 +240,11 @@ function loadConfiguration() {
                         </label>
                         <small>Also pause the print when the warning fires. Acknowledging the warning resumes the print (or continues as normal if you already resumed it at the printer).</small>
                     </div>
+                    <div class="form-group">
+                        <label><strong>Notification webhook URL (optional):</strong></label>
+                        <input type="text" id="notify_webhook_url" value="${config.notify_webhook_url || ''}" placeholder="https://ntfy.example/filabridge">
+                        <small>POST a JSON notification here on a low-filament warning (noting if it auto-paused the print) or an unexpected loss of connection during a print. Point it at ntfy, Gotify, Home Assistant, a Discord/Slack relay, or an Apprise API instance. Leave empty to disable.</small>
+                    </div>
                     <div style="margin-top: 20px; text-align: center;">
                         <button class="btn" onclick="saveConfiguration()">💾 Save Configuration</button>
                     </div>
@@ -275,7 +280,8 @@ function saveConfiguration() {
         spoolman_username: document.getElementById('spoolman_username').value,
         poll_interval: document.getElementById('poll_interval').value,
         runout_warning_enabled: document.getElementById('runout_warning_enabled').checked ? 'true' : 'false',
-        runout_pause_enabled: document.getElementById('runout_pause_enabled').checked ? 'true' : 'false'
+        runout_pause_enabled: document.getElementById('runout_pause_enabled').checked ? 'true' : 'false',
+        notify_webhook_url: document.getElementById('notify_webhook_url').value.trim()
     };
     
     const password = document.getElementById('spoolman_password').value;

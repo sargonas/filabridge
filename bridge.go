@@ -291,6 +291,7 @@ func (b *FilamentBridge) initializeDefaultConfig() error {
 		ConfigKeyPrintHistoryEnabled:             {"true", "Keep a local record of prints and show the Print History tab (usage is recorded in Spoolman either way)"},
 		ConfigKeyRunoutWarningEnabled:            {"true", "Show a dashboard warning when the mapped spool has less filament remaining than the print requires"},
 		ConfigKeyRunoutPauseEnabled:              {"false", "Also pause the print when a low-filament warning fires (acknowledging resumes it)"},
+		ConfigKeyNotifyWebhookURL:                {"", "Webhook URL to POST a JSON notification to on a low-filament warning or an unexpected loss of connection during a print (leave empty to disable)"},
 	}
 
 	// Check if this is a fresh installation by checking if any config exists
@@ -600,6 +601,9 @@ func (b *FilamentBridge) checkRunoutWarnings(printerID string, config PrinterCon
 
 		log.Printf("Low filament warning for %s toolhead %d: spool %d (%s) has %.1fg remaining, print needs ~%.1fg",
 			printerName, toolheadID, spoolID, spool.Name, spool.RemainingWeight, needed)
+
+		// Push an external notification (no-op unless a webhook is configured).
+		go b.sendNotification(lowFilamentPayload(warning, time.Now()))
 	}
 }
 
@@ -1302,6 +1306,13 @@ func (b *FilamentBridge) noteConnectivity(printerID, ipAddress, name string, err
 			log.Printf("Printer %s (%s - %s) is offline, suppressing further offline warnings until it returns: %v",
 				ipAddress, printerID, name, err)
 			b.offlinePrinters[printerID] = true
+
+			// Only an unexpected drop mid-print is worth a notification; a printer
+			// going offline while idle/finished is a normal power-off. The last
+			// observed state is held under this same lock by noteStateChange.
+			if isActivePrintState(b.printerStates[printerID]) {
+				go b.sendNotification(printerOfflinePayload(name, b.printerStates[printerID], time.Now()))
+			}
 		}
 		return
 	}
