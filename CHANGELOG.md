@@ -5,6 +5,28 @@ All notable changes to FilaBridge will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v1.0.0] - 2026-07-18
+
+### Other
+
+- Merge pull request #30 from sargonas/v1-final-prep
+- documentation update for release prep
+- added webhook field for low filament notifications in settings as well as related CI tests.
+- added persistence to tabs when refreshing
+- couple of regression tests to back stop my recent clean up, and a printer name uniqueness check
+- more cruft clean up, second pass
+- first pass at cleaning up mobile rendering to fix frame overflows
+- Merge pull request #29 from sargonas/v1-final-prep
+- Add new PR scan workflow
+- properly moves an in use spool to a toolhead location in all use cases now, instead of only some.
+- Add files via upload
+- added favicon, courtesy of @knobunc
+- further refactoring of old foundational code, mostly removing duplicative loops
+- pre 1.0 refactor and cruft sweep. Pulled out lots of orphaned code from the original base that is no longer used, eithe rby my changes or prior to 1v0.9
+- proper INDX support for tool heads above 5
+- updated readme with better instructions on printer head loc tracking in spoolm,an
+- added gh link
+
 ## [v0.9.6]
 
 ### Added
