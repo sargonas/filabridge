@@ -5,6 +5,27 @@ All notable changes to FilaBridge will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v0.9.6]
+
+### Added
+
+- Webhook notifications: set a **Notification webhook URL** in Settings to POST a JSON payload on a low-filament warning (noting when it auto-paused the print) and on an unexpected loss of connection while a print is active. Point it at ntfy, Gotify, Home Assistant, a Discord/Slack relay, or an Apprise API instance. Idle disconnects (normal power-offs) stay silent, and each event is sent once — no per-poll spam.
+- The active dashboard tab is now remembered across page reloads.
+
+### Changed
+
+- Printer names must now be unique, keeping toolhead-location strings (`"Name - Toolhead"`) unambiguous.
+- Responsive/mobile layout pass: the tab bar, forms, printer cards, and NFC panels now reflow cleanly on narrow screens instead of overflowing.
+
+### Fixed
+
+- An in-use spool is now moved to its toolhead's Spoolman location in all cases, not just some.
+
+- INDX toolhead support above 5
+### Internal
+
+- Removed unreferenced legacy code carried over from the original project and de-duplicated repeated logic (find-printer-by-name, toolhead display-name fallback, config int-parsing, and error responses), with regression tests added. No user-facing behavior change.
+
 ## [v0.9.5] - 2026-07-16
 
 ### Added

@@ -27,6 +27,7 @@ Spoolman is an excellent tool to track one's filament inventory. However, manual
 - **Web-based Config**: No config files needed - manage everything through the web UI
 - **Smart Spool Search**: Search and filter spools by ID, material, brand, or name with real-time filtering
 - **Error Handling**: Print error detection with acknowledgment system for failed filament tracking
+- **Webhook Notifications**: Optional outgoing webhook for low-filament warnings (noting an auto-pause) and unexpected printer disconnects during a print. Point it at ntfy, Gotify, Home Assistant, Discord/Slack, or Apprise
 - **Auto-mapping**: Automatic spool assignment when selecting from dropdown menus
 - **NFC Tag Support**: Generate QR codes and program NFC tags for spools, filaments, and locations
 - **Smart Scanning**: Two-step NFC workflow - scan spool + location for instant assignment
@@ -214,9 +215,9 @@ The web interface provides:
 
 #### Spoolman Location Sync
 
-FilaBridge keeps each spool's Spoolman location in step with its toolhead assignment automatically — whether you assign via the dashboard dropdown, NFC, or QR code:
+FilaBridge keeps each spool's Spoolman location in step with its toolhead assignment automatically, whether you assign via the dashboard dropdown, NFC, or QR code:
 
-- **Assigning a spool** sets its Spoolman location to `"PrinterName - ToolheadName"` (e.g. `CORE One - Toolhead 0`), where `ToolheadName` is the custom name you gave the toolhead or the default `Toolhead N`. Spoolman creates the location automatically the first time it's used — no need to pre-create it.
+- **Assigning a spool** sets its Spoolman location to `"PrinterName - ToolheadName"` (e.g. `CORE One - Toolhead 0`), where `ToolheadName` is the custom name you gave the toolhead or the default `Toolhead N`. Spoolman creates the location automatically the first time it's used, no need to pre-create it.
 - **Unassigning a spool**, or loading a new spool over an existing one, moves the displaced spool to your configured default storage location (see the auto-assign setting in Advanced Settings). If no default is configured, the spool's location is simply cleared.
 
 ### NFC Tag / QR Code Management
@@ -230,6 +231,41 @@ FilaBridge keeps each spool's Spoolman location in step with its toolhead assign
 4. **Assign Spools**: Tap spool tag, then location tag (location then spool works as well) to instantly assign and update inventory
 
 If you have exactly one printer with one toolhead configured, the Spool Tags screen also offers a Quick-Assign variant for each spool: a single tag that assigns the spool directly to your printer in one scan, with no location tag needed. Multi-toolhead users can build the same thing manually by appending `&location=<location name>` to a spool URL.
+
+## Notifications
+
+FilaBridge can POST to a webhook of your choice for the two events it uniquely knows about. Your printer's own app already handles print-started/finished alerts, so FilaBridge doesn't duplicate them... it only notifies about things that depend on Spoolman data or on its own view of the printer. Set a **Notification webhook URL** in Settings → Basic Configuration to enable it or leave it empty to disable.
+
+Two events fire:
+
+- **Low filament** - when the mapped spool has less filament remaining than the print still needs (the same check that raises the dashboard warning). If you've enabled *Pause print on low filament warning*, the notification says the print was paused and how to resume.
+- **Unexpected disconnect** - when a printer drops offline **while a print is active** (printing, paused, or awaiting attention). A printer going offline while idle is treated as a normal power-off and stays silent.
+
+Each event is sent once, the low-filament check fires once per print/toolhead/spool, and the disconnect alert is edge-triggered, so you won't get repeat alerts on every poll.
+
+The webhook receives a JSON `POST` with both a human-readable `title`/`message` and structured fields:
+
+```json
+{
+  "event": "low_filament",
+  "title": "Print auto-paused on CORE One (low filament)",
+  "message": "Spool \"Galaxy Black\" (ID 7) on CORE One toolhead 0 is short by 42.0g: 78.0g remaining, print needs ~120.0g. The print has been paused; swap the spool, then acknowledge the warning in FilaBridge (or resume at the printer).",
+  "printer": "CORE One",
+  "timestamp": "2026-07-18T11:20:00Z",
+  "spool_id": 7,
+  "spool_name": "Galaxy Black",
+  "toolhead_id": 0,
+  "required_weight_g": 120,
+  "remaining_weight_g": 78,
+  "auto_paused": true
+}
+```
+
+The `printer_offline` event carries `event`, `title`, `message`, `printer`, `timestamp`, and `last_state`; the spool fields are omitted.
+
+Because it's a plain webhook, point it at whatever you already run: [ntfy](https://ntfy.sh), [Gotify](https://gotify.net), Home Assistant, a Discord/Slack incoming webhook, or an [Apprise API](https://github.com/caronc/apprise-api) instance if you want to fan out to countless services. Targets that expect a specific body shape (Discord, Slack) are best reached through Apprise API or a small relay.
+
+> **Tip:** many webhook URLs embed a token (Discord, Slack, ntfy). Use a single-purpose, revocable webhook so the URL grants nothing beyond posting these notifications, like other settings, it is stored and shown in the config UI.
 
 ## API Endpoints
 
