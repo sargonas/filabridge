@@ -199,6 +199,46 @@ func TestSpoolConflictRejected(t *testing.T) {
 	}
 }
 
+// TestAddPrinterRejectsDuplicateName: printer names must be unique so that
+// toolhead-location strings ("Name - Toolhead") stay unambiguous. Adding a
+// second printer with an existing name is rejected; renaming a printer onto
+// another's name is rejected; keeping a printer's own name on update is allowed.
+func TestAddPrinterRejectsDuplicateName(t *testing.T) {
+	ws, _, _ := newTestServer(t) // newTestBridge already registered "TestPrinter"
+
+	// Adding another printer with the same name is a conflict.
+	rec, _ := doJSON(t, ws, http.MethodPost, "/api/printers",
+		`{"name":"TestPrinter","ip_address":"127.0.0.1:9","api_key":"k","toolheads":1}`)
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("duplicate add must 409, got %d %s", rec.Code, rec.Body.String())
+	}
+
+	// A distinct name is accepted.
+	rec, body := doJSON(t, ws, http.MethodPost, "/api/printers",
+		`{"name":"SecondPrinter","ip_address":"127.0.0.1:9","api_key":"k","toolheads":1}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("distinct add must 200, got %d %s", rec.Code, rec.Body.String())
+	}
+	secondID, _ := body["printer_id"].(string)
+	if secondID == "" {
+		t.Fatalf("no printer_id returned: %v", body)
+	}
+
+	// Renaming SecondPrinter onto the existing "TestPrinter" is a conflict.
+	rec, _ = doJSON(t, ws, http.MethodPut, "/api/printers/"+secondID,
+		`{"name":"TestPrinter","ip_address":"127.0.0.1:9","api_key":"k","toolheads":1}`)
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("rename onto existing name must 409, got %d %s", rec.Code, rec.Body.String())
+	}
+
+	// Updating SecondPrinter while keeping its own name is allowed.
+	rec, _ = doJSON(t, ws, http.MethodPut, "/api/printers/"+secondID,
+		`{"name":"SecondPrinter","ip_address":"127.0.0.1:10","api_key":"k","toolheads":2}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("self-name update must 200, got %d %s", rec.Code, rec.Body.String())
+	}
+}
+
 // TestDashboardSpoolmanLink: the tab bar links out to the configured Spoolman
 // instance, and hides the link when no URL is configured.
 func TestDashboardSpoolmanLink(t *testing.T) {

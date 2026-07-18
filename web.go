@@ -808,6 +808,16 @@ func (ws *WebServer) addPrinterHandler(c *gin.Context) {
 		return
 	}
 
+	// Reject a duplicate name: printer IDs are unique, but two printers sharing
+	// a name make toolhead-location strings ("Name - Toolhead") ambiguous.
+	if _, _, exists, err := ws.bridge.findPrinterByName(printerConfig.Name); err != nil {
+		internalError(c, err)
+		return
+	} else if exists {
+		c.JSON(http.StatusConflict, gin.H{"error": "A printer with this name already exists"})
+		return
+	}
+
 	// Generate a unique printer ID using nanosecond timestamp + random component
 	printerID := fmt.Sprintf("printer_%d_%d", time.Now().UnixNano(), time.Now().Nanosecond()%1000)
 
@@ -849,6 +859,16 @@ func (ws *WebServer) updatePrinterHandler(c *gin.Context) {
 	// Validate address
 	if err := validateAddress(printerConfig.IPAddress); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	// Reject renaming onto another printer's name (same ambiguity as add);
+	// keeping this printer's own name is fine.
+	if existingID, _, exists, err := ws.bridge.findPrinterByName(printerConfig.Name); err != nil {
+		internalError(c, err)
+		return
+	} else if exists && existingID != printerID {
+		c.JSON(http.StatusConflict, gin.H{"error": "A printer with this name already exists"})
 		return
 	}
 
