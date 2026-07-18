@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -196,6 +197,88 @@ func TestSpoolConflictRejected(t *testing.T) {
 	rec, _ := doJSON(t, ws, http.MethodPost, "/api/map_toolhead", `{"printer_name":"Second","toolhead_id":0,"spool_id":1}`)
 	if rec.Code != http.StatusConflict {
 		t.Fatalf("same spool on two printers must 409, got %d", rec.Code)
+	}
+}
+
+// TestAddPrinterRejectsDuplicateName: printer names must be unique so that
+// toolhead-location strings ("Name - Toolhead") stay unambiguous. Adding a
+// second printer with an existing name is rejected; renaming a printer onto
+// another's name is rejected; keeping a printer's own name on update is allowed.
+func TestAddPrinterRejectsDuplicateName(t *testing.T) {
+	ws, _, _ := newTestServer(t) // newTestBridge already registered "TestPrinter"
+
+	// Adding another printer with the same name is a conflict.
+	rec, _ := doJSON(t, ws, http.MethodPost, "/api/printers",
+		`{"name":"TestPrinter","ip_address":"127.0.0.1:9","api_key":"k","toolheads":1}`)
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("duplicate add must 409, got %d %s", rec.Code, rec.Body.String())
+	}
+
+	// A distinct name is accepted.
+	rec, body := doJSON(t, ws, http.MethodPost, "/api/printers",
+		`{"name":"SecondPrinter","ip_address":"127.0.0.1:9","api_key":"k","toolheads":1}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("distinct add must 200, got %d %s", rec.Code, rec.Body.String())
+	}
+	secondID, _ := body["printer_id"].(string)
+	if secondID == "" {
+		t.Fatalf("no printer_id returned: %v", body)
+	}
+
+	// Renaming SecondPrinter onto the existing "TestPrinter" is a conflict.
+	rec, _ = doJSON(t, ws, http.MethodPut, "/api/printers/"+secondID,
+		`{"name":"TestPrinter","ip_address":"127.0.0.1:9","api_key":"k","toolheads":1}`)
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("rename onto existing name must 409, got %d %s", rec.Code, rec.Body.String())
+	}
+
+	// Updating SecondPrinter while keeping its own name is allowed.
+	rec, _ = doJSON(t, ws, http.MethodPut, "/api/printers/"+secondID,
+		`{"name":"SecondPrinter","ip_address":"127.0.0.1:10","api_key":"k","toolheads":2}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("self-name update must 200, got %d %s", rec.Code, rec.Body.String())
+	}
+}
+
+// TestTabButtonsHaveMatchingContent guards the contract the tab-persistence JS
+// relies on: every main tab button carries a data-tab attribute whose value has
+// a matching content div (id="<value>-tab"). If a data-tab is dropped or renamed
+// in the template, restoreActiveTab silently stops restoring that tab on reload;
+// this render test catches it. (The Spoolman entry is an external link with no
+// switchTab call, so it is intentionally excluded.)
+func TestTabButtonsHaveMatchingContent(t *testing.T) {
+	ws, _, _ := newTestServer(t)
+	rec, _ := doJSON(t, ws, http.MethodGet, "/", "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("dashboard: %d", rec.Code)
+	}
+	body := rec.Body.String()
+
+	matches := regexp.MustCompile(`switchTab\('([^']+)'\)`).FindAllStringSubmatch(body, -1)
+	if len(matches) == 0 {
+		t.Fatal("no tab buttons found in rendered page")
+	}
+
+	seen := map[string]bool{}
+	for _, m := range matches {
+		tab := m[1]
+		if seen[tab] {
+			continue
+		}
+		seen[tab] = true
+		if !strings.Contains(body, `data-tab="`+tab+`"`) {
+			t.Errorf("tab %q button is missing its data-tab attribute", tab)
+		}
+		if !strings.Contains(body, `id="`+tab+`-tab"`) {
+			t.Errorf("tab %q has no matching content div id=%q", tab, tab+"-tab")
+		}
+	}
+
+	// The always-present tabs must be among those rendered.
+	for _, tab := range []string{"status", "nfc", "settings"} {
+		if !seen[tab] {
+			t.Errorf("expected tab %q not rendered", tab)
+		}
 	}
 }
 

@@ -67,17 +67,7 @@ function updateConnectionStatus(status) {
     if (!statusIndicator) {
         statusIndicator = document.createElement('div');
         statusIndicator.id = 'ws-status';
-        statusIndicator.style.cssText = `
-            position: fixed;
-            top: 10px;
-            right: 10px;
-            padding: 8px 12px;
-            border-radius: 4px;
-            font-size: 12px;
-            font-weight: bold;
-            z-index: 1000;
-            transition: all 0.3s ease;
-        `;
+        statusIndicator.className = 'ws-status';
         document.body.appendChild(statusIndicator);
     }
 

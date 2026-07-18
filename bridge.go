@@ -291,6 +291,7 @@ func (b *FilamentBridge) initializeDefaultConfig() error {
 		ConfigKeyPrintHistoryEnabled:             {"true", "Keep a local record of prints and show the Print History tab (usage is recorded in Spoolman either way)"},
 		ConfigKeyRunoutWarningEnabled:            {"true", "Show a dashboard warning when the mapped spool has less filament remaining than the print requires"},
 		ConfigKeyRunoutPauseEnabled:              {"false", "Also pause the print when a low-filament warning fires (acknowledging resumes it)"},
+		ConfigKeyNotifyWebhookURL:                {"", "Webhook URL to POST a JSON notification to on a low-filament warning or an unexpected loss of connection during a print (leave empty to disable)"},
 	}
 
 	// Check if this is a fresh installation by checking if any config exists
@@ -600,6 +601,9 @@ func (b *FilamentBridge) checkRunoutWarnings(printerID string, config PrinterCon
 
 		log.Printf("Low filament warning for %s toolhead %d: spool %d (%s) has %.1fg remaining, print needs ~%.1fg",
 			printerName, toolheadID, spoolID, spool.Name, spool.RemainingWeight, needed)
+
+		// Push an external notification (no-op unless a webhook is configured).
+		go b.sendNotification(lowFilamentPayload(warning, time.Now()))
 	}
 }
 
@@ -647,6 +651,22 @@ func (b *FilamentBridge) GetAllPrinterConfigs() (map[string]PrinterConfig, error
 	return configs, nil
 }
 
+// findPrinterByName looks up a configured printer by its display name,
+// returning its printer ID and config. found is false when no printer matches;
+// err is non-nil only when the configs could not be loaded.
+func (b *FilamentBridge) findPrinterByName(name string) (printerID string, config PrinterConfig, found bool, err error) {
+	configs, err := b.GetAllPrinterConfigs()
+	if err != nil {
+		return "", PrinterConfig{}, false, err
+	}
+	for id, cfg := range configs {
+		if cfg.Name == name {
+			return id, cfg, true, nil
+		}
+	}
+	return "", PrinterConfig{}, false, nil
+}
+
 // SavePrinterConfig saves a printer configuration
 func (b *FilamentBridge) SavePrinterConfig(printerID string, config PrinterConfig) error {
 	b.mutex.Lock()
@@ -672,6 +692,16 @@ func (b *FilamentBridge) DeletePrinterConfig(printerID string) error {
 		return fmt.Errorf("failed to delete printer config: %w", err)
 	}
 	return nil
+}
+
+// toolheadDisplayName returns the custom name for a toolhead from a names map
+// (as returned by GetAllToolheadNames), or the default "Toolhead {ID}" when none
+// is set.
+func toolheadDisplayName(names map[int]string, toolheadID int) string {
+	if name, ok := names[toolheadID]; ok {
+		return name
+	}
+	return fmt.Sprintf("Toolhead %d", toolheadID)
 }
 
 // GetToolheadName gets the display name for a toolhead, or returns default "Toolhead {ID}"
@@ -1276,6 +1306,13 @@ func (b *FilamentBridge) noteConnectivity(printerID, ipAddress, name string, err
 			log.Printf("Printer %s (%s - %s) is offline, suppressing further offline warnings until it returns: %v",
 				ipAddress, printerID, name, err)
 			b.offlinePrinters[printerID] = true
+
+			// Only an unexpected drop mid-print is worth a notification; a printer
+			// going offline while idle/finished is a normal power-off. The last
+			// observed state is held under this same lock by noteStateChange.
+			if isActivePrintState(b.printerStates[printerID]) {
+				go b.sendNotification(printerOfflinePayload(name, b.printerStates[printerID], time.Now()))
+			}
 		}
 		return
 	}
@@ -1791,12 +1828,7 @@ func (b *FilamentBridge) GetStatus() (*PrinterStatus, error) {
 		enhancedMappings := make(map[int]ToolheadMapping)
 		for toolheadID := 0; toolheadID < printerConfig.Toolheads; toolheadID++ {
 			// Get display name (custom or default)
-			var displayName string
-			if name, exists := toolheadNames[toolheadID]; exists {
-				displayName = name
-			} else {
-				displayName = fmt.Sprintf("Toolhead %d", toolheadID)
-			}
+			displayName := toolheadDisplayName(toolheadNames, toolheadID)
 
 			// If this toolhead has a mapping, use it and add display name
 			if mapping, exists := mappings[toolheadID]; exists {

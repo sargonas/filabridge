@@ -7,19 +7,34 @@ function switchTab(tabName) {
     tabContents.forEach(content => {
         content.classList.remove('active');
     });
-    
+
     // Remove active class from all tabs
     const tabs = document.querySelectorAll('.tab');
     tabs.forEach(tab => {
         tab.classList.remove('active');
     });
-    
+
     // Show selected tab content
-    document.getElementById(tabName + '-tab').classList.add('active');
-    
-    // Add active class to clicked tab
-    event.target.classList.add('active');
-    
+    const content = document.getElementById(tabName + '-tab');
+    if (content) {
+        content.classList.add('active');
+    }
+
+    // Activate the matching tab button by its data-tab. Looking it up (rather
+    // than relying on a click event) means switchTab works when called
+    // programmatically too — e.g. restoring the tab from the URL on load.
+    const button = document.querySelector('.tab[data-tab="' + tabName + '"]');
+    if (button) {
+        button.classList.add('active');
+    }
+
+    // Remember the tab across reloads without pushing a new history entry
+    if (window.history && window.history.replaceState) {
+        window.history.replaceState(null, '', '#' + tabName);
+    } else {
+        window.location.hash = tabName;
+    }
+
     // Load print history when its tab is opened
     if (tabName === 'history') {
         loadPrintHistory();
@@ -31,6 +46,16 @@ function switchTab(tabName) {
         if (activeTabContent) {
             loadSettingsTabData(activeTabContent.id.replace('-tab', ''));
         }
+    }
+}
+
+// restoreActiveTab reselects the tab from the URL hash after a reload, falling
+// back to the server-rendered default when the hash is absent or names a tab
+// that isn't present (e.g. Print History when history is disabled).
+function restoreActiveTab() {
+    const tabName = (window.location.hash || '').replace(/^#/, '');
+    if (tabName && document.getElementById(tabName + '-tab')) {
+        switchTab(tabName);
     }
 }
 
@@ -215,6 +240,11 @@ function loadConfiguration() {
                         </label>
                         <small>Also pause the print when the warning fires. Acknowledging the warning resumes the print (or continues as normal if you already resumed it at the printer).</small>
                     </div>
+                    <div class="form-group">
+                        <label><strong>Notification webhook URL (optional):</strong></label>
+                        <input type="text" id="notify_webhook_url" value="${config.notify_webhook_url || ''}" placeholder="https://ntfy.example/filabridge">
+                        <small>POST a JSON notification here on a low-filament warning (noting if it auto-paused the print) or an unexpected loss of connection during a print. Point it at ntfy, Gotify, Home Assistant, a Discord/Slack relay, or an Apprise API instance. Leave empty to disable.</small>
+                    </div>
                     <div style="margin-top: 20px; text-align: center;">
                         <button class="btn" onclick="saveConfiguration()">💾 Save Configuration</button>
                     </div>
@@ -250,7 +280,8 @@ function saveConfiguration() {
         spoolman_username: document.getElementById('spoolman_username').value,
         poll_interval: document.getElementById('poll_interval').value,
         runout_warning_enabled: document.getElementById('runout_warning_enabled').checked ? 'true' : 'false',
-        runout_pause_enabled: document.getElementById('runout_pause_enabled').checked ? 'true' : 'false'
+        runout_pause_enabled: document.getElementById('runout_pause_enabled').checked ? 'true' : 'false',
+        notify_webhook_url: document.getElementById('notify_webhook_url').value.trim()
     };
     
     const password = document.getElementById('spoolman_password').value;
@@ -546,4 +577,5 @@ document.addEventListener('DOMContentLoaded', function() {
     initCustomDropdowns();
     initColorSwatches();
     initEditButtonColors();
+    restoreActiveTab();
 });

@@ -107,3 +107,38 @@ body {
     margin: 0;
     color: #fff;
 }
+
+/* Long inline commands (e.g. the Docker run snippet) must not force the page
+   wider than the phone; wrap them instead. */
+.welcome-banner code,
+.config-section code,
+.help-section code {
+    overflow-wrap: anywhere;
+    word-break: break-word;
+}
+
+/* Mobile / narrow viewports */
+@media (max-width: 600px) {
+    body {
+        padding: 10px;
+    }
+
+    .header {
+        padding: 20px 15px;
+    }
+
+    .header h1 {
+        font-size: 1.6em;
+    }
+
+    .header p {
+        font-size: 1em;
+    }
+
+    /* Title and its subtitle stack instead of fighting for one row. */
+    .section-header {
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 8px;
+    }
+}

@@ -136,3 +136,39 @@ a.tab {
     display: block;
     overflow: visible;
 }
+
+/* Mobile / narrow viewports */
+@media (max-width: 600px) {
+    /* Main tabs: let them wrap onto multiple rows rather than crushing each
+       label with flex:1 on a screen too narrow to hold them abreast. */
+    .tabs {
+        flex-wrap: wrap;
+    }
+
+    .tab {
+        flex: 1 0 auto;
+        padding: 12px 14px;
+        font-size: 14px;
+    }
+
+    /* Sub-tab bars can't wrap cleanly (they carry a bottom border), so scroll
+       them horizontally and keep each tab at its natural width. */
+    .nfc-tabs,
+    .settings-tabs {
+        overflow-x: auto;
+        flex-wrap: nowrap;
+        -webkit-overflow-scrolling: touch;
+    }
+
+    .nfc-tab,
+    .settings-tab {
+        flex: 0 0 auto;
+        white-space: nowrap;
+        padding: 10px 14px;
+    }
+
+    /* Reclaim horizontal space eaten by desktop-sized content padding. */
+    .tab-content {
+        padding: 15px;
+    }
+}

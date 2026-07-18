@@ -42,6 +42,7 @@ const (
 	ConfigKeyPrintHistoryEnabled             = "print_history_enabled"
 	ConfigKeyRunoutWarningEnabled            = "runout_warning_enabled"
 	ConfigKeyRunoutPauseEnabled              = "runout_pause_enabled"
+	ConfigKeyNotifyWebhookURL                = "notify_webhook_url"
 )
 
 // HTTP timeouts
