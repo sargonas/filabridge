@@ -7,19 +7,34 @@ function switchTab(tabName) {
     tabContents.forEach(content => {
         content.classList.remove('active');
     });
-    
+
     // Remove active class from all tabs
     const tabs = document.querySelectorAll('.tab');
     tabs.forEach(tab => {
         tab.classList.remove('active');
     });
-    
+
     // Show selected tab content
-    document.getElementById(tabName + '-tab').classList.add('active');
-    
-    // Add active class to clicked tab
-    event.target.classList.add('active');
-    
+    const content = document.getElementById(tabName + '-tab');
+    if (content) {
+        content.classList.add('active');
+    }
+
+    // Activate the matching tab button by its data-tab. Looking it up (rather
+    // than relying on a click event) means switchTab works when called
+    // programmatically too — e.g. restoring the tab from the URL on load.
+    const button = document.querySelector('.tab[data-tab="' + tabName + '"]');
+    if (button) {
+        button.classList.add('active');
+    }
+
+    // Remember the tab across reloads without pushing a new history entry
+    if (window.history && window.history.replaceState) {
+        window.history.replaceState(null, '', '#' + tabName);
+    } else {
+        window.location.hash = tabName;
+    }
+
     // Load print history when its tab is opened
     if (tabName === 'history') {
         loadPrintHistory();
@@ -31,6 +46,16 @@ function switchTab(tabName) {
         if (activeTabContent) {
             loadSettingsTabData(activeTabContent.id.replace('-tab', ''));
         }
+    }
+}
+
+// restoreActiveTab reselects the tab from the URL hash after a reload, falling
+// back to the server-rendered default when the hash is absent or names a tab
+// that isn't present (e.g. Print History when history is disabled).
+function restoreActiveTab() {
+    const tabName = (window.location.hash || '').replace(/^#/, '');
+    if (tabName && document.getElementById(tabName + '-tab')) {
+        switchTab(tabName);
     }
 }
 
@@ -546,4 +571,5 @@ document.addEventListener('DOMContentLoaded', function() {
     initCustomDropdowns();
     initColorSwatches();
     initEditButtonColors();
+    restoreActiveTab();
 });

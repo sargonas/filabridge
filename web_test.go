@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -236,6 +237,48 @@ func TestAddPrinterRejectsDuplicateName(t *testing.T) {
 		`{"name":"SecondPrinter","ip_address":"127.0.0.1:10","api_key":"k","toolheads":2}`)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("self-name update must 200, got %d %s", rec.Code, rec.Body.String())
+	}
+}
+
+// TestTabButtonsHaveMatchingContent guards the contract the tab-persistence JS
+// relies on: every main tab button carries a data-tab attribute whose value has
+// a matching content div (id="<value>-tab"). If a data-tab is dropped or renamed
+// in the template, restoreActiveTab silently stops restoring that tab on reload;
+// this render test catches it. (The Spoolman entry is an external link with no
+// switchTab call, so it is intentionally excluded.)
+func TestTabButtonsHaveMatchingContent(t *testing.T) {
+	ws, _, _ := newTestServer(t)
+	rec, _ := doJSON(t, ws, http.MethodGet, "/", "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("dashboard: %d", rec.Code)
+	}
+	body := rec.Body.String()
+
+	matches := regexp.MustCompile(`switchTab\('([^']+)'\)`).FindAllStringSubmatch(body, -1)
+	if len(matches) == 0 {
+		t.Fatal("no tab buttons found in rendered page")
+	}
+
+	seen := map[string]bool{}
+	for _, m := range matches {
+		tab := m[1]
+		if seen[tab] {
+			continue
+		}
+		seen[tab] = true
+		if !strings.Contains(body, `data-tab="`+tab+`"`) {
+			t.Errorf("tab %q button is missing its data-tab attribute", tab)
+		}
+		if !strings.Contains(body, `id="`+tab+`-tab"`) {
+			t.Errorf("tab %q has no matching content div id=%q", tab, tab+"-tab")
+		}
+	}
+
+	// The always-present tabs must be among those rendered.
+	for _, tab := range []string{"status", "nfc", "settings"} {
+		if !seen[tab] {
+			t.Errorf("expected tab %q not rendered", tab)
+		}
 	}
 }
 

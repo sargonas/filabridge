@@ -29,10 +29,10 @@
         <div class="content">
             <!-- Tab Navigation -->
             <ul class="tabs">
-                <li><button class="tab active" onclick="switchTab('status')">📊 Filament Status</button></li>
-                <li><button class="tab" onclick="switchTab('nfc')">📱 NFC Management</button></li>
-                {{if .HistoryEnabled}}<li><button class="tab" onclick="switchTab('history')">🗒️ Print History</button></li>{{end}}
-                <li><button class="tab" onclick="switchTab('settings')">⚙️ Settings</button></li>
+                <li><button class="tab active" data-tab="status" onclick="switchTab('status')">📊 Filament Status</button></li>
+                <li><button class="tab" data-tab="nfc" onclick="switchTab('nfc')">📱 NFC Management</button></li>
+                {{if .HistoryEnabled}}<li><button class="tab" data-tab="history" onclick="switchTab('history')">🗒️ Print History</button></li>{{end}}
+                <li><button class="tab" data-tab="settings" onclick="switchTab('settings')">⚙️ Settings</button></li>
                 {{if .SpoolmanBaseURL}}<li><a class="tab" href="{{.SpoolmanBaseURL}}" target="_blank" rel="noopener">🧵 Spoolman ↗</a></li>{{end}}
             </ul>
             
