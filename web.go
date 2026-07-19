@@ -1341,12 +1341,16 @@ func (ws *WebServer) nfcUrlsHandler(c *gin.Context) {
 
 		// Safely get color hex
 		colorHex := ""
-		if spool.Filament != nil && spool.Filament.ColorHex != "" {
-			colorHex = spool.Filament.ColorHex
-			// Ensure it starts with #
-			if !strings.HasPrefix(colorHex, "#") {
-				colorHex = "#" + colorHex
+		multiColorHexes := ""
+		if spool.Filament != nil {
+			if spool.Filament.ColorHex != "" {
+				colorHex = spool.Filament.ColorHex
+				// Ensure it starts with #
+				if !strings.HasPrefix(colorHex, "#") {
+					colorHex = "#" + colorHex
+				}
 			}
+			multiColorHexes = spool.Filament.MultiColorHexes
 		}
 
 		// Generate QR code (leave it empty and keep going if generation fails)
@@ -1364,6 +1368,7 @@ func (ws *WebServer) nfcUrlsHandler(c *gin.Context) {
 			"material":             spool.Material,
 			"brand":                spool.Brand,
 			"color_hex":            colorHex,
+			"multi_color_hexes":    multiColorHexes,
 			"remaining_weight":     spool.RemainingWeight,
 			"url":                  url,
 			"qr_code_base64":       qrCodeBase64,
@@ -1409,18 +1414,19 @@ func (ws *WebServer) nfcUrlsHandler(c *gin.Context) {
 		}
 
 		urls = append(urls, gin.H{
-			"type":           "filament",
-			"filament_id":    filament.ID,
-			"filament_name":  filament.Name,
-			"material":       filament.Material,
-			"brand":          brand,
-			"color_hex":      colorHex,
-			"extruder_temp":  filament.SettingsExtruderTemp,
-			"bed_temp":       filament.SettingsBedTemp,
-			"diameter":       filament.Diameter,
-			"density":        filament.Density,
-			"url":            url,
-			"qr_code_base64": qrCodeBase64,
+			"type":              "filament",
+			"filament_id":       filament.ID,
+			"filament_name":     filament.Name,
+			"material":          filament.Material,
+			"brand":             brand,
+			"color_hex":         colorHex,
+			"multi_color_hexes": filament.MultiColorHexes,
+			"extruder_temp":     filament.SettingsExtruderTemp,
+			"bed_temp":          filament.SettingsBedTemp,
+			"diameter":          filament.Diameter,
+			"density":           filament.Density,
+			"url":               url,
+			"qr_code_base64":    qrCodeBase64,
 		})
 	}
 

@@ -71,10 +71,9 @@ async function loadSpoolTags(dataPromise) {
             item.dataset.color = url.color_hex;
             item.dataset.url = url.url;
             item.dataset.qr = url.qr_code_base64;
-            
-            const colorHex = url.color_hex || '#ccc';
+
             item.innerHTML = `
-                <div class="color-swatch" style="background-color: ${colorHex}"></div>
+                <div class="color-swatch" style="background: ${swatchBackground(url.color_hex, url.multi_color_hexes)}"></div>
                 <div class="item-info">
                     <div class="item-name">[${url.spool_id}] ${url.spool_name}</div>
                     <div class="item-details">${url.material} - ${url.brand}${url.remaining_weight != null ? ` - ${Math.round(url.remaining_weight)}g remaining` : ''}</div>
@@ -124,10 +123,9 @@ async function loadFilamentTags(dataPromise) {
             item.dataset.color = url.color_hex;
             item.dataset.url = url.url;
             item.dataset.qr = url.qr_code_base64;
-            
-            const colorHex = url.color_hex || '#ccc';
+
             item.innerHTML = `
-                <div class="color-swatch" style="background-color: ${colorHex}"></div>
+                <div class="color-swatch" style="background: ${swatchBackground(url.color_hex, url.multi_color_hexes)}"></div>
                 <div class="item-info">
                     <div class="item-name">${url.filament_name}</div>
                     <div class="item-details">${url.material} - ${url.brand}</div>
