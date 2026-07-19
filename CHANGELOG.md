@@ -5,6 +5,15 @@ All notable changes to FilaBridge will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v1.1.0] - 2026-07-19
+
+### Other
+
+- Update CHANGELOG for v1.1.0 features
+- Merge pull request #33 from sargonas/v1-final-prep
+- added resync buttons per printer config to syncrhonize with spoolman
+- added support for multi-colored filament, as read from Spoolman's data, and added color swatches to history table
+
 ## [v1.1.0] - 7/19/2026
 
 - Added Filament swatches to history and multi-color filament support
