@@ -532,6 +532,32 @@ function clearPrintHistory() {
     });
 }
 
+// refreshPrinterMappings imports a printer's toolhead mappings from the spool
+// locations recorded in Spoolman, then reloads so the mappings show. Additive:
+// toolheads Spoolman has no spool for are reported so the user can set them up
+// in Spoolman.
+async function refreshPrinterMappings(printerName) {
+    try {
+        const data = await apiRequest('/api/import-mappings', {
+            method: 'POST',
+            body: { printer_name: printerName }
+        });
+
+        let msg = `Imported ${data.imported} mapping(s) for "${printerName}" from Spoolman.`;
+        if (data.conflicts && data.conflicts.length) {
+            msg += `\n\n⚠️ Skipped (more than one spool at the location):\n- ${data.conflicts.join('\n- ')}`;
+        }
+        if (data.unmatched && data.unmatched.length) {
+            msg += `\n\n⚠️ No spool is at these locations in Spoolman:\n- ${data.unmatched.join('\n- ')}\n\n`
+                + 'Assign a spool to each of these locations in Spoolman, then Refresh again.';
+        }
+        alert(msg);
+        location.reload();
+    } catch (error) {
+        alert('Error importing mappings: ' + error.message);
+    }
+}
+
 // Utility Functions
 function apiUrl(path) {
     // Ensure path starts with / if not already

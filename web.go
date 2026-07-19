@@ -172,6 +172,7 @@ func (ws *WebServer) setupRoutes() {
 		api.POST("/runout-warnings/:id/acknowledge", ws.acknowledgeRunoutWarningHandler)
 		api.GET("/print-history", ws.getPrintHistoryHandler)
 		api.DELETE("/print-history", ws.clearPrintHistoryHandler)
+		api.POST("/import-mappings", ws.importMappingsHandler)
 		api.GET("/nfc/assign", ws.nfcAssignHandler)
 		api.GET("/nfc/urls", ws.nfcUrlsHandler)
 		api.GET("/nfc/session/status", ws.nfcSessionStatusHandler)
@@ -1101,6 +1102,24 @@ func (ws *WebServer) getPrintHistoryHandler(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{"history": history})
+}
+
+// importMappingsHandler rebuilds a printer's toolhead mappings from the spool
+// locations recorded in Spoolman and returns a summary.
+func (ws *WebServer) importMappingsHandler(c *gin.Context) {
+	var req struct {
+		PrinterName string `json:"printer_name" binding:"required"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid JSON"})
+		return
+	}
+	summary, err := ws.bridge.ImportMappingsFromSpoolman(req.PrinterName)
+	if err != nil {
+		internalError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, summary)
 }
 
 // clearPrintHistoryHandler deletes all stored print history entries

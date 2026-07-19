@@ -340,13 +340,10 @@ async function autoMapSpool(dropdown, selectedValue, selectedText, selectedColor
         if (selectedValue !== '0') {
             // Immediately remove the mapped spool from all other dropdowns
             removeSpoolFromOtherDropdowns(selectedValue);
-            
-            // Refresh all other dropdowns to update available spools
-            refreshAllDropdowns();
-        } else {
-            // If unmapping, just refresh all dropdowns to show the newly available spool
-            refreshAllDropdowns();
         }
+        // Refresh all other dropdowns to update available spools (debounced so a
+        // burst of mappings doesn't fire a request storm)
+        debouncedRefreshAllDropdowns();
         
     } catch (error) {
         console.error('Error mapping spool:', error);
@@ -371,6 +368,14 @@ function removeSpoolFromOtherDropdowns(spoolId) {
             optionToRemove.remove();
         }
     });
+}
+
+// Debounce refreshAllDropdowns so a burst of map/unmap operations collapses to a
+// single refresh instead of one /api/available_spools sweep per operation.
+let refreshDropdownsTimer = null;
+function debouncedRefreshAllDropdowns() {
+    clearTimeout(refreshDropdownsTimer);
+    refreshDropdownsTimer = setTimeout(refreshAllDropdowns, 300);
 }
 
 // Refresh all dropdowns to update available spools
