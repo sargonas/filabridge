@@ -63,6 +63,8 @@ type SpoolmanFilament struct {
 	SettingsExtruderTemp int                    `json:"settings_extruder_temp"`
 	SettingsBedTemp      int                    `json:"settings_bed_temp"`
 	ColorHex             string                 `json:"color_hex"`
+	MultiColorHexes      string                 `json:"multi_color_hexes"`     // comma-separated hex list (no #) for multi-color filament; color_hex still holds a primary color
+	MultiColorDirection  string                 `json:"multi_color_direction"` // "coaxial" | "longitudinal" (not currently used for rendering)
 	ExternalID           string                 `json:"external_id"`
 	Extra                map[string]interface{} `json:"extra"`
 	Archived             bool                   `json:"archived"`

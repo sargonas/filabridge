@@ -91,9 +91,13 @@ async function loadPrintHistory() {
         const historyData = await historyRes.json();
 
         const spoolNames = {};
+        const spoolColors = {};
         if (spoolsRes && spoolsRes.ok) {
             const spools = await spoolsRes.json();
-            spools.forEach(s => { spoolNames[s.id] = s.name; });
+            spools.forEach(s => {
+                spoolNames[s.id] = s.name;
+                spoolColors[s.id] = { color: s.filament?.color_hex, multi: s.filament?.multi_color_hexes };
+            });
         }
 
         const history = historyData.history || [];
@@ -109,6 +113,8 @@ async function loadPrintHistory() {
             const spoolLabel = spoolNames[h.spool_id]
                 ? `[${h.spool_id}] ${spoolNames[h.spool_id]}`
                 : `Spool #${h.spool_id}`;
+            const sc = spoolColors[h.spool_id] || {};
+            const spoolCell = `<span style="display:inline-flex;align-items:center;gap:8px;"><span class="color-swatch" style="background:${swatchBackground(sc.color, sc.multi)}"></span>${escapeHtml(spoolLabel)}</span>`;
             const statusClass = h.status === 'completed' ? 'history-status-completed' : 'history-status-cancelled';
             const statusLabel = h.status === 'completed' ? '✅ Completed' : '🛑 Cancelled/Failed';
             return `
@@ -116,7 +122,7 @@ async function loadPrintHistory() {
                     <td class="history-job">${escapeHtml(h.job_name)}</td>
                     <td>${escapeHtml(h.printer_name)}</td>
                     <td><span class="history-status ${statusClass}">${statusLabel}</span></td>
-                    <td>${escapeHtml(spoolLabel)}</td>
+                    <td>${spoolCell}</td>
                     <td>${h.filament_used.toFixed(1)}g</td>
                     <td>${finished.toLocaleString()}</td>
                     <td>${formatDuration(durationMs)}</td>
@@ -526,6 +532,32 @@ function clearPrintHistory() {
     });
 }
 
+// refreshPrinterMappings imports a printer's toolhead mappings from the spool
+// locations recorded in Spoolman, then reloads so the mappings show. Additive:
+// toolheads Spoolman has no spool for are reported so the user can set them up
+// in Spoolman.
+async function refreshPrinterMappings(printerName) {
+    try {
+        const data = await apiRequest('/api/import-mappings', {
+            method: 'POST',
+            body: { printer_name: printerName }
+        });
+
+        let msg = `Imported ${data.imported} mapping(s) for "${printerName}" from Spoolman.`;
+        if (data.conflicts && data.conflicts.length) {
+            msg += `\n\n⚠️ Skipped (more than one spool at the location):\n- ${data.conflicts.join('\n- ')}`;
+        }
+        if (data.unmatched && data.unmatched.length) {
+            msg += `\n\n⚠️ No spool is at these locations in Spoolman:\n- ${data.unmatched.join('\n- ')}\n\n`
+                + 'Assign a spool to each of these locations in Spoolman, then Refresh again.';
+        }
+        alert(msg);
+        location.reload();
+    } catch (error) {
+        alert('Error importing mappings: ' + error.message);
+    }
+}
+
 // Utility Functions
 function apiUrl(path) {
     // Ensure path starts with / if not already
@@ -535,13 +567,37 @@ function apiUrl(path) {
     return `${window.location.origin}${path}`;
 }
 
-// Initialize color swatches based on data-color attributes
+// swatchBackground returns a CSS background value for a filament swatch: a
+// hard-stop gradient for multi-color filament (equal slices, matching how
+// Spoolman renders them), a solid color otherwise, or a neutral gray fallback.
+// Accepts hex values with or without a leading '#'.
+function swatchBackground(colorHex, multiColorHexes) {
+    const withHash = h => {
+        h = (h || '').trim();
+        return h ? (h[0] === '#' ? h : '#' + h) : '';
+    };
+    const multi = (multiColorHexes || '').split(',').map(s => s.trim()).filter(Boolean);
+    if (multi.length > 1) {
+        const n = multi.length;
+        const stops = multi.map((c, i) =>
+            `${withHash(c)} ${(i * 100 / n).toFixed(2)}% ${((i + 1) * 100 / n).toFixed(2)}%`
+        ).join(', ');
+        return `linear-gradient(90deg, ${stops})`;
+    }
+    return withHash(multi[0] || colorHex) || '#ccc';
+}
+
+// applySwatch sets an element's background from a filament's color info.
+function applySwatch(el, colorHex, multiColorHexes) {
+    if (el) {
+        el.style.background = swatchBackground(colorHex, multiColorHexes);
+    }
+}
+
+// Initialize color swatches based on data-color / data-multi-color attributes
 function initColorSwatches() {
     document.querySelectorAll('.color-swatch[data-color]').forEach(swatch => {
-        const color = swatch.getAttribute('data-color');
-        if (color) {
-            swatch.style.backgroundColor = '#' + color;
-        }
+        applySwatch(swatch, swatch.getAttribute('data-color'), swatch.getAttribute('data-multi-color'));
     });
 }
 

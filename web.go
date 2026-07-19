@@ -172,6 +172,7 @@ func (ws *WebServer) setupRoutes() {
 		api.POST("/runout-warnings/:id/acknowledge", ws.acknowledgeRunoutWarningHandler)
 		api.GET("/print-history", ws.getPrintHistoryHandler)
 		api.DELETE("/print-history", ws.clearPrintHistoryHandler)
+		api.POST("/import-mappings", ws.importMappingsHandler)
 		api.GET("/nfc/assign", ws.nfcAssignHandler)
 		api.GET("/nfc/urls", ws.nfcUrlsHandler)
 		api.GET("/nfc/session/status", ws.nfcSessionStatusHandler)
@@ -1103,6 +1104,24 @@ func (ws *WebServer) getPrintHistoryHandler(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"history": history})
 }
 
+// importMappingsHandler rebuilds a printer's toolhead mappings from the spool
+// locations recorded in Spoolman and returns a summary.
+func (ws *WebServer) importMappingsHandler(c *gin.Context) {
+	var req struct {
+		PrinterName string `json:"printer_name" binding:"required"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid JSON"})
+		return
+	}
+	summary, err := ws.bridge.ImportMappingsFromSpoolman(req.PrinterName)
+	if err != nil {
+		internalError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, summary)
+}
+
 // clearPrintHistoryHandler deletes all stored print history entries
 func (ws *WebServer) clearPrintHistoryHandler(c *gin.Context) {
 	if err := ws.bridge.ClearPrintHistory(); err != nil {
@@ -1341,12 +1360,16 @@ func (ws *WebServer) nfcUrlsHandler(c *gin.Context) {
 
 		// Safely get color hex
 		colorHex := ""
-		if spool.Filament != nil && spool.Filament.ColorHex != "" {
-			colorHex = spool.Filament.ColorHex
-			// Ensure it starts with #
-			if !strings.HasPrefix(colorHex, "#") {
-				colorHex = "#" + colorHex
+		multiColorHexes := ""
+		if spool.Filament != nil {
+			if spool.Filament.ColorHex != "" {
+				colorHex = spool.Filament.ColorHex
+				// Ensure it starts with #
+				if !strings.HasPrefix(colorHex, "#") {
+					colorHex = "#" + colorHex
+				}
 			}
+			multiColorHexes = spool.Filament.MultiColorHexes
 		}
 
 		// Generate QR code (leave it empty and keep going if generation fails)
@@ -1364,6 +1387,7 @@ func (ws *WebServer) nfcUrlsHandler(c *gin.Context) {
 			"material":             spool.Material,
 			"brand":                spool.Brand,
 			"color_hex":            colorHex,
+			"multi_color_hexes":    multiColorHexes,
 			"remaining_weight":     spool.RemainingWeight,
 			"url":                  url,
 			"qr_code_base64":       qrCodeBase64,
@@ -1409,18 +1433,19 @@ func (ws *WebServer) nfcUrlsHandler(c *gin.Context) {
 		}
 
 		urls = append(urls, gin.H{
-			"type":           "filament",
-			"filament_id":    filament.ID,
-			"filament_name":  filament.Name,
-			"material":       filament.Material,
-			"brand":          brand,
-			"color_hex":      colorHex,
-			"extruder_temp":  filament.SettingsExtruderTemp,
-			"bed_temp":       filament.SettingsBedTemp,
-			"diameter":       filament.Diameter,
-			"density":        filament.Density,
-			"url":            url,
-			"qr_code_base64": qrCodeBase64,
+			"type":              "filament",
+			"filament_id":       filament.ID,
+			"filament_name":     filament.Name,
+			"material":          filament.Material,
+			"brand":             brand,
+			"color_hex":         colorHex,
+			"multi_color_hexes": filament.MultiColorHexes,
+			"extruder_temp":     filament.SettingsExtruderTemp,
+			"bed_temp":          filament.SettingsBedTemp,
+			"diameter":          filament.Diameter,
+			"density":           filament.Density,
+			"url":               url,
+			"qr_code_base64":    qrCodeBase64,
 		})
 	}
 

@@ -1033,6 +1033,82 @@ func (b *FilamentBridge) relocateSpool(spoolID int) {
 	}
 }
 
+// ImportSummary reports the result of importing toolhead mappings from Spoolman.
+type ImportSummary struct {
+	Imported  int      `json:"imported"`  // toolheads mapped from a Spoolman spool location
+	Unmatched []string `json:"unmatched"` // toolhead locations with no spool in Spoolman
+	Conflicts []string `json:"conflicts"` // toolhead locations claimed by more than one spool
+}
+
+// ImportMappingsFromSpoolman rebuilds a printer's toolhead mappings from
+// Spoolman: for each of the printer's toolheads, the spool Spoolman shows at the
+// "Printer - Toolhead" location is mapped to that toolhead (and removed from any
+// other toolhead it was on). It is additive — toolheads with no matching spool
+// in Spoolman keep their current mapping and are reported so the user can assign
+// one in Spoolman. Pull-only: Spoolman is never written to.
+func (b *FilamentBridge) ImportMappingsFromSpoolman(printerName string) (ImportSummary, error) {
+	var summary ImportSummary
+
+	_, cfg, found, err := b.findPrinterByName(printerName)
+	if err != nil {
+		return summary, err
+	}
+	if !found {
+		return summary, fmt.Errorf("printer %q not found", printerName)
+	}
+
+	spools, err := b.spoolman.GetAllSpools()
+	if err != nil {
+		return summary, fmt.Errorf("failed to load spools from Spoolman: %w", err)
+	}
+
+	// Group spool IDs by Spoolman location so a location claimed by more than
+	// one spool can be flagged as a conflict instead of guessed at.
+	byLocation := make(map[string][]int)
+	for _, s := range spools {
+		if s.Location != "" {
+			byLocation[s.Location] = append(byLocation[s.Location], s.ID)
+		}
+	}
+
+	for tid := 0; tid < cfg.Toolheads; tid++ {
+		locName := b.toolheadLocationName(printerName, tid)
+		ids := byLocation[locName]
+		switch {
+		case len(ids) == 0:
+			summary.Unmatched = append(summary.Unmatched, locName)
+		case len(ids) > 1:
+			summary.Conflicts = append(summary.Conflicts, fmt.Sprintf("%s (%d spools)", locName, len(ids)))
+		default:
+			if err := b.importSetMapping(printerName, tid, ids[0]); err != nil {
+				summary.Conflicts = append(summary.Conflicts, fmt.Sprintf("%s: %v", locName, err))
+				continue
+			}
+			summary.Imported++
+		}
+	}
+
+	log.Printf("Imported %d mapping(s) for %s from Spoolman (%d unmatched, %d conflict)",
+		summary.Imported, printerName, len(summary.Unmatched), len(summary.Conflicts))
+	return summary, nil
+}
+
+// importSetMapping sets a toolhead mapping directly (no Spoolman write) and first
+// removes the spool from any other toolhead it was on, preserving the
+// one-spool-one-toolhead invariant.
+func (b *FilamentBridge) importSetMapping(printerName string, toolheadID, spoolID int) error {
+	b.mutex.Lock()
+	defer b.mutex.Unlock()
+	if _, err := b.db.Exec("DELETE FROM toolhead_mappings WHERE spool_id = ?", spoolID); err != nil {
+		return err
+	}
+	_, err := b.db.Exec(
+		"INSERT OR REPLACE INTO toolhead_mappings (printer_name, toolhead_id, spool_id, mapped_at) VALUES (?, ?, ?, ?)",
+		printerName, toolheadID, spoolID, time.Now(),
+	)
+	return err
+}
+
 // GetToolheadMappings gets all toolhead mappings for a printer
 func (b *FilamentBridge) GetToolheadMappings(printerName string) (map[int]ToolheadMapping, error) {
 	rows, err := b.db.Query(

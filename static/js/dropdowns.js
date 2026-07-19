@@ -1,10 +1,10 @@
 // FilaBridge Dashboard - Dropdown Functionality
 
 // setDropdownButton renders the standard swatch + label + arrow button content
-function setDropdownButton(button, color, text, arrow) {
+function setDropdownButton(button, color, multiColor, text, arrow) {
     button.innerHTML = `
         <div style="display: flex; align-items: center; gap: 10px;">
-            <div class="color-swatch" style="background-color: #${color || 'ccc'};"></div>
+            <div class="color-swatch" style="background: ${swatchBackground(color, multiColor)};"></div>
             <span>${text}</span>
         </div>
         <span class="dropdown-arrow">${arrow}</span>
@@ -72,14 +72,15 @@ async function loadAvailableSpools(dropdown) {
             option.className = 'dropdown-option';
             option.setAttribute('data-value', spool.id);
             option.setAttribute('data-color', spool.filament?.color_hex || '');
-            
+            option.setAttribute('data-multi-color', spool.filament?.multi_color_hexes || '');
+
             if (currentSpoolId && spool.id.toString() === currentSpoolId) {
                 option.classList.add('selected');
             }
-            
+
             const colorSwatch = document.createElement('div');
             colorSwatch.className = 'color-swatch';
-            colorSwatch.style.backgroundColor = '#' + (spool.filament?.color_hex || 'ccc');
+            applySwatch(colorSwatch, spool.filament?.color_hex, spool.filament?.multi_color_hexes);
             
             const optionText = document.createElement('div');
             optionText.className = 'option-text';
@@ -98,6 +99,7 @@ async function loadAvailableSpools(dropdown) {
                 // Update button text and selected state
                 const selectedText = option.querySelector('.option-text').textContent;
                 const selectedColor = option.dataset.color;
+                const selectedMulti = option.dataset.multiColor;
                 const selectedValue = option.dataset.value;
                 
                 // Update hidden input value
@@ -113,10 +115,10 @@ async function loadAvailableSpools(dropdown) {
 
                 // Auto-map the spool if a spool is selected (not "Empty")
                 if (selectedValue && selectedValue !== '') {
-                    await autoMapSpool(dropdown, selectedValue, selectedText, selectedColor);
+                    await autoMapSpool(dropdown, selectedValue, selectedText, selectedColor, selectedMulti);
                 } else {
                     // Handle empty selection - unmap the toolhead
-                    await autoMapSpool(dropdown, '0', selectedText, '');
+                    await autoMapSpool(dropdown, '0', selectedText, '', '');
                 }
                 
                 // Update edit button after selection
@@ -196,6 +198,7 @@ function initCustomDropdowns() {
                 // Update button text and selected state
                 const selectedText = option.querySelector('.option-text').textContent;
                 const selectedColor = option.dataset.color;
+                const selectedMulti = option.dataset.multiColor;
                 const selectedValue = option.dataset.value;
                 
                 // Update hidden input value
@@ -212,10 +215,10 @@ function initCustomDropdowns() {
 
                 // Auto-map the spool if a spool is selected (not "Empty")
                 if (selectedValue && selectedValue !== '') {
-                    await autoMapSpool(dropdown, selectedValue, selectedText, selectedColor);
+                    await autoMapSpool(dropdown, selectedValue, selectedText, selectedColor, selectedMulti);
                 } else {
                     // Handle empty selection - unmap the toolhead
-                    await autoMapSpool(dropdown, '0', selectedText, '');
+                    await autoMapSpool(dropdown, '0', selectedText, '', '');
                 }
                 
                 // Update edit button after selection
@@ -264,7 +267,7 @@ function initCustomDropdowns() {
 }
 
 // Auto-map spool to toolhead when selected
-async function autoMapSpool(dropdown, selectedValue, selectedText, selectedColor) {
+async function autoMapSpool(dropdown, selectedValue, selectedText, selectedColor, selectedMulti) {
     const toolheadRow = dropdown.closest('.toolhead-mapping-row');
     if (!toolheadRow) {
         console.error('Could not find toolhead mapping row');
@@ -292,7 +295,7 @@ async function autoMapSpool(dropdown, selectedValue, selectedText, selectedColor
     // Show loading state
     const button = dropdown.querySelector('.dropdown-button');
     const originalContent = button.innerHTML;
-    setDropdownButton(button, selectedColor, selectedText, '⏳');
+    setDropdownButton(button, selectedColor, selectedMulti, selectedText, '⏳');
     
     try {
         const response = await fetch('/api/map_toolhead', {
@@ -323,27 +326,24 @@ async function autoMapSpool(dropdown, selectedValue, selectedText, selectedColor
         }
         
         // Success - show brief success indicator
-        setDropdownButton(button, selectedColor, selectedText, '✅');
+        setDropdownButton(button, selectedColor, selectedMulti, selectedText, '✅');
 
         // Update edit button visibility and data
         updateEditButton(toolheadRow, selectedValue, selectedColor);
 
         // Reset to normal state after 2 seconds
         setTimeout(() => {
-            setDropdownButton(button, selectedColor, selectedText, '▼');
+            setDropdownButton(button, selectedColor, selectedMulti, selectedText, '▼');
         }, 2000);
         
         // Only remove spools from other dropdowns if we're mapping a spool (not unmapping)
         if (selectedValue !== '0') {
             // Immediately remove the mapped spool from all other dropdowns
             removeSpoolFromOtherDropdowns(selectedValue);
-            
-            // Refresh all other dropdowns to update available spools
-            refreshAllDropdowns();
-        } else {
-            // If unmapping, just refresh all dropdowns to show the newly available spool
-            refreshAllDropdowns();
         }
+        // Refresh all other dropdowns to update available spools (debounced so a
+        // burst of mappings doesn't fire a request storm)
+        debouncedRefreshAllDropdowns();
         
     } catch (error) {
         console.error('Error mapping spool:', error);
@@ -368,6 +368,14 @@ function removeSpoolFromOtherDropdowns(spoolId) {
             optionToRemove.remove();
         }
     });
+}
+
+// Debounce refreshAllDropdowns so a burst of map/unmap operations collapses to a
+// single refresh instead of one /api/available_spools sweep per operation.
+let refreshDropdownsTimer = null;
+function debouncedRefreshAllDropdowns() {
+    clearTimeout(refreshDropdownsTimer);
+    refreshDropdownsTimer = setTimeout(refreshAllDropdowns, 300);
 }
 
 // Refresh all dropdowns to update available spools
