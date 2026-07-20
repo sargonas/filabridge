@@ -567,18 +567,6 @@ func (c *SpoolmanClient) UpdateLocation(locationID int, newName string) error {
 	return nil
 }
 
-// ArchiveLocation archives a location in Spoolman
-func (c *SpoolmanClient) ArchiveLocation(locationID int) error {
-	err := c.patchJSON(fmt.Sprintf("/api/v1/location/%d", locationID),
-		map[string]interface{}{"archived": true},
-		fmt.Sprintf("archiving location %d", locationID))
-	if err != nil {
-		return err
-	}
-	log.Printf("Successfully archived Spoolman location %d", locationID)
-	return nil
-}
-
 // UpdateLocationByName updates a location in Spoolman by name
 func (c *SpoolmanClient) UpdateLocationByName(oldName, newName string) error {
 	// First, find the location by name

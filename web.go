@@ -178,9 +178,7 @@ func (ws *WebServer) setupRoutes() {
 		api.GET("/nfc/urls", ws.nfcUrlsHandler)
 		api.GET("/nfc/session/status", ws.nfcSessionStatusHandler)
 		api.GET("/locations", ws.getLocationsHandler)
-		api.POST("/locations", ws.createLocationHandler)
 		api.PUT("/locations/:name", ws.updateLocationHandler)
-		api.DELETE("/locations/:name", ws.deleteLocationHandler)
 	}
 
 	// WebSocket endpoint
@@ -1459,10 +1457,6 @@ func (ws *WebServer) nfcUrlsHandler(c *gin.Context) {
 			"brand":             brand,
 			"color_hex":         colorHex,
 			"multi_color_hexes": filament.MultiColorHexes,
-			"extruder_temp":     filament.SettingsExtruderTemp,
-			"bed_temp":          filament.SettingsBedTemp,
-			"diameter":          filament.Diameter,
-			"density":           filament.Density,
 			"url":               url,
 			"qr_code_base64":    qrCodeBase64,
 		})
@@ -1514,7 +1508,6 @@ func (ws *WebServer) nfcUrlsHandler(c *gin.Context) {
 			"display_name":   location.Name,
 			"url":            nfcUrl,
 			"qr_code_base64": qrCodeBase64,
-			"is_local_only":  false, // All Spoolman locations are synced
 		})
 	}
 
@@ -1666,35 +1659,6 @@ func (ws *WebServer) getLocationsHandler(c *gin.Context) {
 	})
 }
 
-// createLocationHandler creates a new location in Spoolman
-func (ws *WebServer) createLocationHandler(c *gin.Context) {
-	var req struct {
-		Name        string `json:"name" binding:"required"`
-		Type        string `json:"type"`
-		PrinterName string `json:"printer_name,omitempty"`
-		ToolheadID  int    `json:"toolhead_id,omitempty"`
-	}
-
-	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-		return
-	}
-
-	location, err := ws.bridge.spoolman.GetOrCreateLocation(req.Name)
-	if err != nil {
-		log.Printf("Error creating location '%s': %v", req.Name, err)
-		internalError(c, err)
-		return
-	}
-
-	c.JSON(http.StatusCreated, gin.H{
-		"name":     location.Name,
-		"id":       location.ID,
-		"comment":  location.Comment,
-		"archived": location.Archived,
-	})
-}
-
 // updateLocationHandler updates a location in Spoolman
 func (ws *WebServer) updateLocationHandler(c *gin.Context) {
 	oldName := c.Param("name")
@@ -1735,35 +1699,4 @@ func (ws *WebServer) updateLocationHandler(c *gin.Context) {
 			"archived": location.Archived,
 		},
 	})
-}
-
-// deleteLocationHandler archives a location in Spoolman (locations are archived, not deleted)
-func (ws *WebServer) deleteLocationHandler(c *gin.Context) {
-	name := c.Param("name")
-	if name == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Location name is required"})
-		return
-	}
-
-	// Find location by name
-	location, err := ws.bridge.spoolman.FindLocationByName(name)
-	if err != nil {
-		log.Printf("Error finding location '%s': %v", name, err)
-		internalError(c, err)
-		return
-	}
-
-	if location == nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "Location not found"})
-		return
-	}
-
-	// Archive the location (Spoolman doesn't support deletion, only archiving)
-	if err := ws.bridge.spoolman.ArchiveLocation(location.ID); err != nil {
-		log.Printf("Error archiving location '%s': %v", name, err)
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to archive location"})
-		return
-	}
-
-	c.JSON(http.StatusOK, gin.H{"message": "Location archived successfully"})
 }
