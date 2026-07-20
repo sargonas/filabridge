@@ -164,6 +164,65 @@ func TestToolheadMappingSyncsSpoolmanLocation(t *testing.T) {
 	}
 }
 
+// TestRelocateToConfiguredEmptyLocation: unmapping moves the displaced spool to
+// the configured auto-assign location even when that location currently holds no
+// spools (so it is absent from Spoolman's /location list). Regression for the
+// bug where an empty default location caused the spool's location to be cleared
+// ("no location") instead of moved.
+func TestRelocateToConfiguredEmptyLocation(t *testing.T) {
+	ws, _, spoolman := newTestServer(t)
+	spoolman.Spools[1] = &fakeSpool{ID: 1, Name: "Red", RemainingWeight: 500}
+
+	// Auto-assign on, pointing at a location that holds no spools (empty), so it
+	// is NOT present in spoolman.Locations / the /location list.
+	if err := ws.bridge.SetAutoAssignPreviousSpoolEnabled(true); err != nil {
+		t.Fatal(err)
+	}
+	if err := ws.bridge.SetAutoAssignPreviousSpoolLocation("Drybox"); err != nil {
+		t.Fatal(err)
+	}
+
+	doJSON(t, ws, http.MethodPost, "/api/map_toolhead", `{"printer_name":"TestPrinter","toolhead_id":0,"spool_id":1}`)
+	rec, _ := doJSON(t, ws, http.MethodPost, "/api/map_toolhead", `{"printer_name":"TestPrinter","toolhead_id":0,"spool_id":0}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("unmap: %d %s", rec.Code, rec.Body.String())
+	}
+
+	if got := spoolman.Spools[1].Location; got != "Drybox" {
+		t.Fatalf("spool location = %q, want %q (should move to the empty configured location, not clear)", got, "Drybox")
+	}
+}
+
+// TestLocationsListEmptyAndTypeToolheads: /api/locations reads the predefined
+// locations setting so empty locations (no spools) still appear, and this
+// instance's toolhead locations are typed "printer" so the storage dropdown
+// filters them out.
+func TestLocationsListEmptyAndTypeToolheads(t *testing.T) {
+	ws, _, spoolman := newTestServer(t)
+	// "Unopened" holds no spools; "TestPrinter - Toolhead 0" is a toolhead location.
+	spoolman.LocationSetting = []string{"Drybox", "Unopened", "TestPrinter - Toolhead 0"}
+
+	rec, body := doJSON(t, ws, http.MethodGet, "/api/locations", "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("locations: %d", rec.Code)
+	}
+	locs, _ := body["locations"].([]interface{})
+	types := map[string]string{}
+	for _, l := range locs {
+		m := l.(map[string]interface{})
+		types[m["name"].(string)] = m["type"].(string)
+	}
+	if types["Unopened"] != "storage" {
+		t.Errorf("empty location 'Unopened' should be listed as storage; got %q (types: %v)", types["Unopened"], types)
+	}
+	if types["Drybox"] != "storage" {
+		t.Errorf("Drybox type = %q, want storage", types["Drybox"])
+	}
+	if types["TestPrinter - Toolhead 0"] != "printer" {
+		t.Errorf("toolhead location should be typed 'printer'; got %q", types["TestPrinter - Toolhead 0"])
+	}
+}
+
 // TestMapToolheadRejectsInvalidTargets: mappings to toolheads beyond the
 // printer's configured count (or to unknown printers) must be rejected, not
 // silently stored.

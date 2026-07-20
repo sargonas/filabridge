@@ -1002,6 +1002,23 @@ func (b *FilamentBridge) toolheadLocationName(printerName string, toolheadID int
 	return fmt.Sprintf("%s - %s", printerName, displayName)
 }
 
+// toolheadLocationSet returns the set of Spoolman location names that correspond
+// to this instance's configured toolheads (e.g. "Core One - Toolhead 0"), so
+// they can be told apart from storage locations.
+func (b *FilamentBridge) toolheadLocationSet() map[string]bool {
+	set := make(map[string]bool)
+	configs, err := b.GetAllPrinterConfigs()
+	if err != nil {
+		return set
+	}
+	for _, cfg := range configs {
+		for tid := 0; tid < cfg.Toolheads; tid++ {
+			set[b.toolheadLocationName(cfg.Name, tid)] = true
+		}
+	}
+	return set
+}
+
 // relocateSpool updates the Spoolman location of a spool that is no longer
 // loaded on a toolhead: it moves to the configured auto-assign storage
 // location when that feature is enabled and the location exists in Spoolman,
@@ -1015,12 +1032,14 @@ func (b *FilamentBridge) relocateSpool(spoolID int) {
 		name, err := b.GetAutoAssignPreviousSpoolLocation()
 		if err != nil {
 			log.Printf("Warning: Failed to get auto-assign previous spool location: %v", err)
-		} else if name != "" {
-			if loc, err := b.spoolman.FindLocationByName(name); err == nil && loc != nil {
-				dest = name
-			} else {
-				log.Printf("Warning: Auto-assign location '%s' does not exist in Spoolman, clearing spool %d location instead", name, spoolID)
-			}
+		} else {
+			// Trust the configured name rather than requiring the location to
+			// already hold a spool: Spoolman accepts any location string and
+			// auto-creates the text location, so a currently-empty storage
+			// location still works as a destination. (Empty locations aren't
+			// returned by the /location list, which is why the old existence
+			// check wrongly cleared the spool's location instead of moving it.)
+			dest = name
 		}
 	}
 
@@ -1091,6 +1110,24 @@ func (b *FilamentBridge) ImportMappingsFromSpoolman(printerName string) (ImportS
 	log.Printf("Imported %d mapping(s) for %s from Spoolman (%d unmatched, %d conflict)",
 		summary.Imported, printerName, len(summary.Unmatched), len(summary.Conflicts))
 	return summary, nil
+}
+
+// ClearToolheadMappings forgets all of a printer's toolhead mappings in
+// FilaBridge without touching Spoolman. It's a recovery action for when
+// FilaBridge's idea of what's loaded has gone stale (e.g. a spool was moved
+// directly in Spoolman): the toolheads read empty afterward, and a Refresh can
+// re-import the real state. Spoolman locations are deliberately left untouched so
+// a manual move there is never undone.
+func (b *FilamentBridge) ClearToolheadMappings(printerName string) (int, error) {
+	b.mutex.Lock()
+	defer b.mutex.Unlock()
+	res, err := b.db.Exec("DELETE FROM toolhead_mappings WHERE printer_name = ?", printerName)
+	if err != nil {
+		return 0, fmt.Errorf("failed to clear toolhead mappings: %w", err)
+	}
+	n, _ := res.RowsAffected()
+	log.Printf("Cleared %d toolhead mapping(s) for %s", n, printerName)
+	return int(n), nil
 }
 
 // importSetMapping sets a toolhead mapping directly (no Spoolman write) and first

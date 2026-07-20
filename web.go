@@ -173,6 +173,7 @@ func (ws *WebServer) setupRoutes() {
 		api.GET("/print-history", ws.getPrintHistoryHandler)
 		api.DELETE("/print-history", ws.clearPrintHistoryHandler)
 		api.POST("/import-mappings", ws.importMappingsHandler)
+		api.POST("/clear-mappings", ws.clearMappingsHandler)
 		api.GET("/nfc/assign", ws.nfcAssignHandler)
 		api.GET("/nfc/urls", ws.nfcUrlsHandler)
 		api.GET("/nfc/session/status", ws.nfcSessionStatusHandler)
@@ -1122,6 +1123,24 @@ func (ws *WebServer) importMappingsHandler(c *gin.Context) {
 	c.JSON(http.StatusOK, summary)
 }
 
+// clearMappingsHandler forgets a printer's toolhead mappings in FilaBridge
+// (without touching Spoolman) — a recovery action for stale "loaded" state.
+func (ws *WebServer) clearMappingsHandler(c *gin.Context) {
+	var req struct {
+		PrinterName string `json:"printer_name" binding:"required"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid JSON"})
+		return
+	}
+	cleared, err := ws.bridge.ClearToolheadMappings(req.PrinterName)
+	if err != nil {
+		internalError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"cleared": cleared})
+}
+
 // clearPrintHistoryHandler deletes all stored print history entries
 func (ws *WebServer) clearPrintHistoryHandler(c *gin.Context) {
 	if err := ws.bridge.ClearPrintHistory(); err != nil {
@@ -1456,27 +1475,11 @@ func (ws *WebServer) nfcUrlsHandler(c *gin.Context) {
 		spoolmanLocations = []SpoolmanLocation{}
 	}
 
-	// Get printer configurations to build a map of printer toolhead location names
-	printerConfigs, err := ws.bridge.GetAllPrinterConfigs()
-	if err != nil {
-		log.Printf("Warning: Failed to get printer configurations: %v", err)
-		printerConfigs = make(map[string]PrinterConfig)
-	}
-
-	printerLocationNames := make(map[string]bool)
-	for printerID, printerConfig := range printerConfigs {
-		toolheadNames, err := ws.bridge.GetAllToolheadNames(printerID)
-		if err != nil {
-			toolheadNames = make(map[int]string)
-		}
-		for toolheadID := 0; toolheadID < printerConfig.Toolheads; toolheadID++ {
-			displayName := toolheadDisplayName(toolheadNames, toolheadID)
-			locationName := fmt.Sprintf("%s - %s", printerConfig.Name, displayName)
-			printerLocationNames[locationName] = true
-		}
-	}
-
-	// Generate location URLs for Spoolman locations only (no virtual printer toolhead locations)
+	// Generate location URLs. Storage locations and this instance's toolhead
+	// locations both get tags; toolhead locations are typed "printer" so the UI
+	// shows them with a printer icon (and no delete action), letting users make a
+	// tag to load filament straight to a toolhead.
+	toolheadLocs := ws.bridge.toolheadLocationSet()
 	for _, location := range spoolmanLocations {
 		// Skip archived locations
 		if location.Archived {
@@ -1486,6 +1489,11 @@ func (ws *WebServer) nfcUrlsHandler(c *gin.Context) {
 		// Skip locations with empty or whitespace-only names
 		if strings.TrimSpace(location.Name) == "" {
 			continue
+		}
+
+		locationType := "storage"
+		if toolheadLocs[location.Name] {
+			locationType = "printer"
 		}
 
 		locationParam := location.Name
@@ -1501,7 +1509,7 @@ func (ws *WebServer) nfcUrlsHandler(c *gin.Context) {
 
 		urls = append(urls, gin.H{
 			"type":           "location",
-			"location_type":  "storage",
+			"location_type":  locationType,
 			"location_name":  location.Name,
 			"display_name":   location.Name,
 			"url":            nfcUrl,
@@ -1622,7 +1630,10 @@ func (ws *WebServer) getLocationsHandler(c *gin.Context) {
 		spoolmanLocations = []SpoolmanLocation{}
 	}
 
-	// Only return Spoolman locations (no virtual printer toolhead locations)
+	// Mark this instance's toolhead locations as "printer" so consumers (e.g. the
+	// auto-assign storage dropdown) can filter them out from storage locations.
+	toolheadLocs := ws.bridge.toolheadLocationSet()
+
 	var allLocations []gin.H
 	for _, loc := range spoolmanLocations {
 		// Skip archived locations
@@ -1635,9 +1646,13 @@ func (ws *WebServer) getLocationsHandler(c *gin.Context) {
 			continue
 		}
 
+		locType := "storage"
+		if toolheadLocs[loc.Name] {
+			locType = "printer"
+		}
 		allLocations = append(allLocations, gin.H{
 			"name":       loc.Name,
-			"type":       "storage",
+			"type":       locType,
 			"is_virtual": false,
 		})
 	}
