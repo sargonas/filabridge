@@ -48,7 +48,7 @@ function loadPrinters() {
                         <div class="printer-info">
                             <div><strong>Toolheads:</strong> ${printer.toolheads || 1}</div>
                             <div><strong>Address:</strong> ${printer.ip_address || 'Not configured'}</div>
-                            <div><strong>API Key:</strong> ${printer.api_key ? '••••••••' : 'Not configured'}</div>
+                            <div><strong>API Key:</strong> ${printer.api_key_set ? '••••••••' : 'Not configured'}</div>
                         </div>
                         <div class="printer-actions">
                             <button class="btn btn-small" onclick="editPrinter('${printerId}')">✏️ Edit</button>

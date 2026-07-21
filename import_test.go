@@ -1,9 +1,37 @@
 package main
 
 import (
+	"net/http"
 	"strings"
 	"testing"
 )
+
+// TestClearToolheadMappings: clearing a printer's mappings forgets FilaBridge's
+// loaded state but must NOT touch Spoolman (a spool the user moved directly in
+// Spoolman stays where they put it).
+func TestClearToolheadMappings(t *testing.T) {
+	ws, _, spoolman := newTestServer(t)
+	spoolman.Spools[1] = &fakeSpool{ID: 1, Name: "Red", RemainingWeight: 500}
+
+	if err := ws.bridge.SetToolheadMapping("TestPrinter", 0, 1); err != nil {
+		t.Fatal(err)
+	}
+	spoolman.Spools[1].Location = "PLA" // user moved it directly in Spoolman
+
+	rec, body := doJSON(t, ws, http.MethodPost, "/api/clear-mappings", `{"printer_name":"TestPrinter"}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("clear: %d %s", rec.Code, rec.Body.String())
+	}
+	if cleared, _ := body["cleared"].(float64); cleared != 1 {
+		t.Errorf("cleared = %v, want 1", body["cleared"])
+	}
+	if id, _ := ws.bridge.GetToolheadMapping("TestPrinter", 0); id != 0 {
+		t.Errorf("mapping not cleared: %d", id)
+	}
+	if got := spoolman.Spools[1].Location; got != "PLA" {
+		t.Errorf("Spoolman location changed to %q, must stay 'PLA' (clear must not touch Spoolman)", got)
+	}
+}
 
 // TestImportMappingsFromSpoolman covers rebuilding a printer's toolhead mappings
 // from Spoolman spool locations: a clean import, a location claimed by two spools

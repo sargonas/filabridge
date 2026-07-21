@@ -558,6 +558,28 @@ async function refreshPrinterMappings(printerName) {
     }
 }
 
+// clearPrinterMappings forgets FilaBridge's toolhead mappings for a printer
+// (Spoolman is untouched), for recovering from stale "loaded" state. Reloads so
+// the toolheads read empty.
+async function clearPrinterMappings(printerName) {
+    if (!confirm(`Clear FilaBridge's loaded-spool state for "${printerName}"?\n\n`
+        + 'This forgets which spools FilaBridge thinks are on the toolheads. It does NOT '
+        + 'change anything in Spoolman. Use "Refresh from Spoolman" afterward to re-import '
+        + 'the current state.')) {
+        return;
+    }
+    try {
+        const data = await apiRequest('/api/clear-mappings', {
+            method: 'POST',
+            body: { printer_name: printerName }
+        });
+        alert(`Cleared ${data.cleared} toolhead mapping(s) for "${printerName}".`);
+        location.reload();
+    } catch (error) {
+        alert('Error clearing mappings: ' + error.message);
+    }
+}
+
 // Utility Functions
 function apiUrl(path) {
     // Ensure path starts with / if not already
