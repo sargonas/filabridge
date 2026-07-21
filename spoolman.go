@@ -9,6 +9,7 @@ import (
 	"log"
 	"net/http"
 	"sort"
+	"strings"
 	"time"
 )
 
@@ -63,6 +64,8 @@ type SpoolmanFilament struct {
 	SettingsExtruderTemp int                    `json:"settings_extruder_temp"`
 	SettingsBedTemp      int                    `json:"settings_bed_temp"`
 	ColorHex             string                 `json:"color_hex"`
+	MultiColorHexes      string                 `json:"multi_color_hexes"`     // comma-separated hex list (no #) for multi-color filament; color_hex still holds a primary color
+	MultiColorDirection  string                 `json:"multi_color_direction"` // "coaxial" | "longitudinal" (not currently used for rendering)
 	ExternalID           string                 `json:"external_id"`
 	Extra                map[string]interface{} `json:"extra"`
 	Archived             bool                   `json:"archived"`
@@ -385,8 +388,57 @@ type SpoolmanLocation struct {
 	Archived bool   `json:"archived"`
 }
 
-// GetLocations gets all locations from Spoolman
+// GetLocations returns Spoolman's predefined locations. It prefers the
+// `locations` setting, which lists ALL created locations (including empty ones);
+// older Spoolman versions without that setting fall back to the /location list,
+// which only reports locations that currently hold a spool.
 func (c *SpoolmanClient) GetLocations() ([]SpoolmanLocation, error) {
+	if locs, err := c.getLocationsFromSetting(); err == nil {
+		return locs, nil
+	}
+	return c.getLocationsFromList()
+}
+
+// getLocationsFromSetting reads the predefined location list from Spoolman's
+// `locations` setting, whose value is a JSON-encoded array of names.
+func (c *SpoolmanClient) getLocationsFromSetting() ([]SpoolmanLocation, error) {
+	req, err := http.NewRequest("GET", c.baseURL+"/api/v1/setting/locations", nil)
+	if err != nil {
+		return nil, err
+	}
+	c.addAuthHeader(req)
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("spoolman setting/locations returned HTTP %d", resp.StatusCode)
+	}
+	var setting struct {
+		Value string `json:"value"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&setting); err != nil {
+		return nil, err
+	}
+	var names []string
+	if strings.TrimSpace(setting.Value) != "" {
+		if err := json.Unmarshal([]byte(setting.Value), &names); err != nil {
+			return nil, fmt.Errorf("parsing locations setting value: %w", err)
+		}
+	}
+	locations := make([]SpoolmanLocation, 0, len(names))
+	for _, n := range names {
+		if strings.TrimSpace(n) != "" {
+			locations = append(locations, SpoolmanLocation{Name: n})
+		}
+	}
+	return locations, nil
+}
+
+// getLocationsFromList reads locations from /api/v1/location — only those that
+// currently hold a spool. Fallback for Spoolman without the locations setting.
+func (c *SpoolmanClient) getLocationsFromList() ([]SpoolmanLocation, error) {
 	req, err := http.NewRequest("GET", c.baseURL+"/api/v1/location", nil)
 	if err != nil {
 		return nil, fmt.Errorf("error creating request: %w", err)
@@ -512,18 +564,6 @@ func (c *SpoolmanClient) UpdateLocation(locationID int, newName string) error {
 		return err
 	}
 	log.Printf("Successfully updated Spoolman location %d to '%s'", locationID, newName)
-	return nil
-}
-
-// ArchiveLocation archives a location in Spoolman
-func (c *SpoolmanClient) ArchiveLocation(locationID int) error {
-	err := c.patchJSON(fmt.Sprintf("/api/v1/location/%d", locationID),
-		map[string]interface{}{"archived": true},
-		fmt.Sprintf("archiving location %d", locationID))
-	if err != nil {
-		return err
-	}
-	log.Printf("Successfully archived Spoolman location %d", locationID)
 	return nil
 }
 

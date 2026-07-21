@@ -108,8 +108,9 @@ type fakeSpoolman struct {
 	mu     sync.Mutex
 	Spools map[int]*fakeSpool
 
-	PatchCalls []int    // spool IDs that received usage updates
-	Locations  []string // location names that exist in Spoolman (for FindLocationByName)
+	PatchCalls      []int    // spool IDs that received usage updates
+	Locations       []string // locations returned by /api/v1/location (only ones with spools)
+	LocationSetting []string // predefined locations setting; nil => endpoint 404s (fall back to /location)
 
 	srv *httptest.Server
 }
@@ -190,6 +191,14 @@ func (f *fakeSpoolman) handle(w http.ResponseWriter, r *http.Request) {
 
 	case r.URL.Path == "/api/v1/filament":
 		writeJSON(w, []interface{}{})
+
+	case r.URL.Path == "/api/v1/setting/locations":
+		if f.LocationSetting == nil {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		value, _ := json.Marshal(f.LocationSetting)
+		writeJSON(w, map[string]interface{}{"value": string(value), "is_set": true, "type": "array"})
 
 	case r.URL.Path == "/api/v1/location":
 		locs := make([]map[string]interface{}, 0, len(f.Locations))

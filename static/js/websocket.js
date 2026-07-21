@@ -151,10 +151,11 @@ function updateSpoolData(spools) {
             option.className = 'dropdown-option';
             option.setAttribute('data-value', spool.id);
             option.setAttribute('data-color', spool.filament?.color_hex || '');
-            
+            option.setAttribute('data-multi-color', spool.filament?.multi_color_hexes || '');
+
             const colorSwatch = document.createElement('div');
             colorSwatch.className = 'color-swatch';
-            colorSwatch.style.backgroundColor = '#' + (spool.filament?.color_hex || 'ccc');
+            applySwatch(colorSwatch, spool.filament?.color_hex, spool.filament?.multi_color_hexes);
             
             const optionText = document.createElement('div');
             optionText.className = 'option-text';
@@ -173,14 +174,15 @@ function updateSpoolData(spools) {
                 // Update button text and selected state
                 const selectedText = option.querySelector('.option-text').textContent;
                 const selectedColor = option.dataset.color;
+                const selectedMulti = option.dataset.multiColor;
                 const selectedValue = option.dataset.value;
-                
+
                 // Update hidden input value
                 const hiddenInput = dropdown.querySelector('input[type="hidden"]');
                 if (hiddenInput) {
                     hiddenInput.value = selectedValue;
                 }
-                
+
                 // Update selected state
                 optionsContainer.querySelectorAll('.dropdown-option').forEach(opt => opt.classList.remove('selected'));
                 option.classList.add('selected');
@@ -189,10 +191,10 @@ function updateSpoolData(spools) {
 
                 // Auto-map the spool if a spool is selected (not "Empty")
                 if (selectedValue && selectedValue !== '') {
-                    await autoMapSpool(dropdown, selectedValue, selectedText, selectedColor);
+                    await autoMapSpool(dropdown, selectedValue, selectedText, selectedColor, selectedMulti);
                 } else {
                     // Handle empty selection - unmap the toolhead
-                    await autoMapSpool(dropdown, '0', selectedText, '');
+                    await autoMapSpool(dropdown, '0', selectedText, '', '');
                 }
                 
                 // Update edit button after selection
@@ -259,9 +261,10 @@ function updateToolheadMappings(mappings) {
                 if (spoolOption) {
                     const selectedText = spoolOption.querySelector('.option-text').textContent;
                     const selectedColor = spoolOption.dataset.color;
-                    
+                    const selectedMulti = spoolOption.dataset.multiColor;
+
                     // Update button display
-                    setDropdownButton(dropdownButton, selectedColor, selectedText, '▼');
+                    setDropdownButton(dropdownButton, selectedColor, selectedMulti, selectedText, '▼');
                     
                     // Mark as selected
                     optionsContainer.querySelectorAll('.dropdown-option').forEach(opt => {

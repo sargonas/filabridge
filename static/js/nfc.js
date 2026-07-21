@@ -71,10 +71,9 @@ async function loadSpoolTags(dataPromise) {
             item.dataset.color = url.color_hex;
             item.dataset.url = url.url;
             item.dataset.qr = url.qr_code_base64;
-            
-            const colorHex = url.color_hex || '#ccc';
+
             item.innerHTML = `
-                <div class="color-swatch" style="background-color: ${colorHex}"></div>
+                <div class="color-swatch" style="background: ${swatchBackground(url.color_hex, url.multi_color_hexes)}"></div>
                 <div class="item-info">
                     <div class="item-name">[${url.spool_id}] ${url.spool_name}</div>
                     <div class="item-details">${url.material} - ${url.brand}${url.remaining_weight != null ? ` - ${Math.round(url.remaining_weight)}g remaining` : ''}</div>
@@ -124,10 +123,9 @@ async function loadFilamentTags(dataPromise) {
             item.dataset.color = url.color_hex;
             item.dataset.url = url.url;
             item.dataset.qr = url.qr_code_base64;
-            
-            const colorHex = url.color_hex || '#ccc';
+
             item.innerHTML = `
-                <div class="color-swatch" style="background-color: ${colorHex}"></div>
+                <div class="color-swatch" style="background: ${swatchBackground(url.color_hex, url.multi_color_hexes)}"></div>
                 <div class="item-info">
                     <div class="item-name">${url.filament_name}</div>
                     <div class="item-details">${url.material} - ${url.brand}</div>
@@ -233,8 +231,7 @@ async function loadLocationTags(dataPromise) {
                     name: url.display_name,
                     is_printer_location: url.location_type === 'printer',
                     url: url.url,
-                    qr_code_base64: url.qr_code_base64,
-                    description: url.description || ''
+                    qr_code_base64: url.qr_code_base64
                 });
             });
             
@@ -257,17 +254,11 @@ function renderLocationActions(url) {
         if (url.location_type === 'printer') return '';
         
         const nameAttr = (url.display_name || '').replace(/'/g, "\\'").replace(/"/g, '&quot;');
-        
-        // Show rename for all FilaBridge locations
-        let actions = `<a href="javascript:void(0)" onclick="event.preventDefault(); event.stopPropagation(); renameLocation('${nameAttr}');">Rename</a>`;
-        
-        // Show delete for local-only locations (not synced to Spoolman)
-        if (url.is_local_only) {
-            actions += ` • <a href="javascript:void(0)" onclick="event.preventDefault(); event.stopPropagation(); deleteLocation('${nameAttr}');" style="color: #ff6b6b;">Delete</a>`;
-        } else {
-            actions += ` <span style="color: #666; font-size: 0.9em;">(Synced to Spoolman)</span>`;
-        }
-        
+
+        // Rename is the only in-app location action; locations are created and
+        // deleted in Spoolman.
+        const actions = `<a href="javascript:void(0)" onclick="event.preventDefault(); event.stopPropagation(); renameLocation('${nameAttr}');">Rename</a>`;
+
         return `<span style="margin-left:8px; font-weight:normal;">${actions}</span>`;
     } catch (error) {
         console.error('Error rendering location actions:', error);
@@ -384,7 +375,6 @@ function displayLocationQR(locationData) {
     document.getElementById('location-selected-name').textContent = locationData.name;
     document.getElementById('location-selected-details').innerHTML = `
         <strong>Type:</strong> ${locationData.is_printer_location ? 'Printer Location' : 'Custom Location'}<br>
-        ${locationData.description ? `<strong>Description:</strong> ${locationData.description}<br>` : ''}
     `;
     document.getElementById('location-qr-large').src = `data:image/png;base64,${locationData.qr_code_base64}`;
     document.getElementById('location-url-text').textContent = locationData.url;
@@ -435,26 +425,6 @@ async function renameLocation(currentName) {
     } catch (e) { 
         console.error('Rename error:', e); 
         alert(e.message || 'Network error'); 
-    }
-}
-
-async function deleteLocation(name) {
-    try {
-        const url = apiUrl(`/api/locations/${encodeURIComponent(name)}`);
-        const res = await fetch(url, {
-            method: 'DELETE',
-            headers: { 'Accept': 'application/json' },
-            mode: 'same-origin', credentials: 'same-origin'
-        });
-        if (!res.ok) {
-            const errorText = await res.text();
-            throw new Error(errorText);
-        }
-        const result = await res.json();
-        await loadLocationTags();
-    } catch (e) {
-        console.error('Delete error:', e);
-        alert(e.message || 'Network error');
     }
 }
 

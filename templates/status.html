@@ -76,6 +76,10 @@
             <div class="mapping-section">
                 <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
                     <h3>Toolhead Mappings</h3>
+                    <div style="display: flex; gap: 8px;">
+                        <button class="btn btn-small" onclick="refreshPrinterMappings('{{$printerData.Name}}')" title="Import toolhead mappings from the spool locations recorded in Spoolman">🔄 Refresh from Spoolman</button>
+                        <button class="btn btn-small btn-secondary" onclick="clearPrinterMappings('{{$printerData.Name}}')" title="Forget FilaBridge's loaded-spool state for this printer (Spoolman is not changed)">🧹 Clear Loaded</button>
+                    </div>
                 </div>
                 <h4>Map Spools to Toolheads</h4>
                 <div style="margin-top: 15px;">
@@ -96,7 +100,7 @@
                                     {{if $mappedSpool.SpoolID}}
                                     {{range $.Spools}}
                                     {{if eq .ID $mappedSpool.SpoolID}}
-                                    <div class="color-swatch" data-color="{{.Filament.ColorHex}}"></div>
+                                    <div class="color-swatch" data-color="{{.Filament.ColorHex}}" data-multi-color="{{.Filament.MultiColorHexes}}"></div>
                                     <span>[{{.ID}}] {{if .Material}}{{.Material}}{{else}}Unknown Material{{end}} - {{if .Brand}}{{.Brand}}{{else}}Unknown Brand{{end}} - {{if .Name}}{{.Name}}{{else}}Unnamed Spool{{end}}{{if .RemainingWeight}} ({{printf "%.0f" .RemainingWeight}}g remaining){{end}}</span>
                                     {{end}}
                                     {{end}}
@@ -118,7 +122,7 @@
                                     </div>
                                     {{range $.Spools}}
                                     <div class="dropdown-option" data-value="{{.ID}}" data-color="{{.Filament.ColorHex}}" {{if $mappedSpool.SpoolID}}{{if eq .ID $mappedSpool.SpoolID}}class="selected"{{end}}{{end}}>
-                                        <div class="color-swatch" data-color="{{.Filament.ColorHex}}"></div>
+                                        <div class="color-swatch" data-color="{{.Filament.ColorHex}}" data-multi-color="{{.Filament.MultiColorHexes}}"></div>
                                         <div class="option-text">[{{.ID}}] {{if .Material}}{{.Material}}{{else}}Unknown Material{{end}} - {{if .Brand}}{{.Brand}}{{else}}Unknown Brand{{end}} - {{if .Name}}{{.Name}}{{else}}Unnamed Spool{{end}}{{if .RemainingWeight}} ({{printf "%.0f" .RemainingWeight}}g remaining){{end}}</div>
                                     </div>
                                     {{end}}

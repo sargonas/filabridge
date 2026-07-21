@@ -5,6 +5,27 @@ All notable changes to FilaBridge will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v1.1.0] - 2026-07-19
+
+### Other
+
+- Update CHANGELOG for v1.1.0 features
+- Merge pull request #33 from sargonas/v1-final-prep
+- added resync buttons per printer config to syncrhonize with spoolman
+- added support for multi-colored filament, as read from Spoolman's data, and added color swatches to history table
+
+## [v1.1.0] - 7/19/2026
+
+- Added Filament swatches to history and multi-color filament support
+- Added a per-printer "Refresh from Spoolman" button in each printer's Toolhead Mappings. It:
+  - Reads Spoolman's spool locations and, for each of that printer's toolheads, maps the spool Spoolman shows at "Printer - Toolhead" and is scoped to that printer only (other printers' locations ignored).
+  - Is additive, so a spool with no match keeps its current mapping and the toolhead is reported.
+  - Moves a spool off any stale toolhead it was on (keeps one-spool-one-toolhead).
+  - Pull-only, does not write to Spoolman to avoid unexpected overwritings.
+  - Popup summary listing imported count, any conflicts (a location with 2+ spools, skipped), and a clear warning of the toolhead locations Spoolman has no entry for, telling you to go assign them in Spoolman and Refresh again.
+
+
+
 ## [v1.0.0] - 2026-07-18
 
 ### Other
