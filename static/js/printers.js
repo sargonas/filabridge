@@ -43,12 +43,15 @@ function loadPrinters() {
                         `;
                     }
                     
+                    const isBambu = printer.type === 'bambu';
                     printerCard.innerHTML = `
                         <h3>${printer.name || 'Unknown Printer'}</h3>
                         <div class="printer-info">
+                            ${isBambu ? '<div><strong>Type:</strong> Bambu Lab</div>' : ''}
                             <div><strong>Toolheads:</strong> ${printer.toolheads || 1}</div>
                             <div><strong>Address:</strong> ${printer.ip_address || 'Not configured'}</div>
-                            <div><strong>API Key:</strong> ${printer.api_key ? '••••••••' : 'Not configured'}</div>
+                            <div><strong>${isBambu ? 'Access Code' : 'API Key'}:</strong> ${printer.api_key_set ? '••••••••' : 'Not configured'}</div>
+                            ${isBambu && printer.serial ? `<div><strong>Serial:</strong> ${escapeHtmlAttribute(printer.serial)}</div>` : ''}
                         </div>
                         <div class="printer-actions">
                             <button class="btn btn-small" onclick="editPrinter('${printerId}')">✏️ Edit</button>
@@ -76,10 +79,53 @@ function loadPrinters() {
         });
 }
 
+// applyPrinterTypeUI adjusts a printer form for the selected type: it shows the
+// serial field and relabels the credential field ("Access Code" vs "API Key")
+// for Bambu printers. ids names the elements for the add or edit form.
+function applyPrinterTypeUI(type, ids) {
+    const isBambu = type === 'bambu';
+
+    const serialGroup = document.getElementById(ids.serialGroup);
+    if (serialGroup) serialGroup.style.display = isBambu ? 'block' : 'none';
+    const serialInput = document.getElementById(ids.serial);
+    if (serialInput) serialInput.required = isBambu;
+
+    const apiLabel = document.getElementById(ids.apiLabel);
+    if (apiLabel) {
+        const star = ids.apiRequired ? ' *' : '';
+        apiLabel.textContent = (isBambu ? 'Access Code' : 'API Key') + star;
+    }
+    const apiHelp = document.getElementById(ids.apiHelp);
+    if (apiHelp) {
+        apiHelp.textContent = isBambu
+            ? 'LAN access code from the printer (Settings → Network → LAN Only Mode).'
+            : ids.prusaHelp;
+    }
+}
+
+const ADD_PRINTER_IDS = {
+    serialGroup: 'printerSerialGroup', serial: 'printerSerial',
+    apiLabel: 'printerAPIKeyLabel', apiHelp: 'printerAPIKeyHelp',
+    apiRequired: true, prusaHelp: 'Found in PrusaLink settings on your printer'
+};
+const EDIT_PRINTER_IDS = {
+    serialGroup: 'editPrinterSerialGroup', serial: 'editPrinterSerial',
+    apiLabel: 'editPrinterAPIKeyLabel', apiHelp: 'editPrinterAPIKeyHelp',
+    apiRequired: false, prusaHelp: 'Never displayed once saved. Leave blank to keep the current key.'
+};
+
 function showAddPrinterForm() {
     document.getElementById('addPrinterModal').style.display = 'block';
     document.getElementById('addPrinterForm').reset();
-    
+
+    // The printer-type selector (and Bambu support) is only offered in
+    // developer mode; otherwise every printer is a PrusaLink.
+    const typeGroup = document.getElementById('printerTypeGroup');
+    const typeSelect = document.getElementById('printerType');
+    if (typeSelect) typeSelect.value = 'prusalink';
+    if (typeGroup) typeGroup.style.display = (typeof isDeveloperMode === 'function' && isDeveloperMode()) ? 'block' : 'none';
+    applyPrinterTypeUI('prusalink', ADD_PRINTER_IDS);
+
     // Reset button state AFTER form reset with a fresh query
     // Use setTimeout to ensure DOM is updated
     setTimeout(() => {
@@ -128,6 +174,16 @@ function addPrinter(printerConfig) {
     return apiRequest('/api/printers', { method: 'POST', body: printerConfig });
 }
 
+// Toggle the add form's serial/credential fields when the printer type changes.
+(function () {
+    const typeSelect = document.getElementById('printerType');
+    if (typeSelect) {
+        typeSelect.addEventListener('change', function () {
+            applyPrinterTypeUI(this.value, ADD_PRINTER_IDS);
+        });
+    }
+})();
+
 // Handle form submission
 document.getElementById('addPrinterForm').addEventListener('submit', function(e) {
     e.preventDefault();
@@ -143,19 +199,26 @@ document.getElementById('addPrinterForm').addEventListener('submit', function(e)
     const ipAddress = formData.get('ip_address');
     const apiKey = formData.get('api_key');
     const toolheads = parseInt(formData.get('toolheads'));
-    
+    // Type is only selectable in developer mode; default to PrusaLink otherwise.
+    const type = (typeof isDeveloperMode === 'function' && isDeveloperMode())
+        ? (formData.get('type') || 'prusalink') : 'prusalink';
+    const serial = formData.get('serial') || '';
+
     // Show loading state
     const submitButton = this.querySelector('button[type="submit"]');
     const originalText = submitButton.textContent;
     submitButton.disabled = true;
     submitButton.textContent = 'Adding...';
-    
-    addPrinter({
+
+    const config = {
         name: name,
         ip_address: ipAddress,
         api_key: apiKey,
-        toolheads: toolheads
-    })
+        toolheads: toolheads,
+        type: type
+    };
+    if (type === 'bambu') config.serial = serial;
+    addPrinter(config)
     .then(() => {
         // Success - close modal and refresh
         closeAddPrinterModal();
@@ -179,31 +242,37 @@ document.getElementById('editPrinterForm').addEventListener('submit', function(e
     const ipAddress = formData.get('ip_address');
     const apiKey = formData.get('api_key');
     const toolheads = parseInt(formData.get('toolheads'));
-    
+    // Carry the printer's type through the edit so a Bambu printer is not
+    // silently reverted to PrusaLink; serial only matters for Bambu.
+    const type = formData.get('type') || 'prusalink';
+    const serial = formData.get('serial') || '';
+
     // Validate printerId is present
     if (!printerId) {
         alert('Error: Printer ID is missing. Please try again.');
         return;
     }
-    
+
     // Show loading state
     const submitButton = this.querySelector('button[type="submit"]');
     if (!submitButton) {
         alert('Error: Submit button not found.');
         return;
     }
-    
+
     const originalText = submitButton.textContent || 'Update Printer';
     submitButton.disabled = true;
     submitButton.textContent = 'Updating...';
-    
+
     // Create printer config
     const printerConfig = {
         name: name,
         ip_address: ipAddress,
         api_key: apiKey,
-        toolheads: toolheads
+        toolheads: toolheads,
+        type: type
     };
+    if (type === 'bambu') printerConfig.serial = serial;
     
     // Update the printer
     apiRequest(`/api/printers/${printerId}`, { method: 'PUT', body: printerConfig })
@@ -234,12 +303,16 @@ function editPrinter(printerId) {
             }
             
             // Populate the edit form with current data
+            const type = printer.type || 'prusalink';
             document.getElementById('editPrinterId').value = printerId;
+            document.getElementById('editPrinterType').value = type;
             document.getElementById('editPrinterName').value = printer.name || '';
             document.getElementById('editPrinterIP').value = printer.ip_address || '';
+            document.getElementById('editPrinterSerial').value = printer.serial || '';
             document.getElementById('editPrinterAPIKey').value = ''; // keys are never returned by the API
             document.getElementById('editPrinterToolheads').value = printer.toolheads || 1;
-            
+            applyPrinterTypeUI(type, EDIT_PRINTER_IDS);
+
             // Show the edit modal
             document.getElementById('editPrinterModal').style.display = 'block';
         })

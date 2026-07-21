@@ -6,15 +6,25 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"time"
+)
+
+// Printer types. PrusaLink is the default and only production type; Bambu is
+// gated behind developer mode until complete.
+const (
+	PrinterTypePrusaLink = "prusalink"
+	PrinterTypeBambu     = "bambu"
 )
 
 // PrinterConfig represents configuration for a single printer
 type PrinterConfig struct {
 	Name      string `json:"name"`
 	IPAddress string `json:"ip_address"`
-	APIKey    string `json:"api_key,omitempty"`
+	APIKey    string `json:"api_key,omitempty"` // PrusaLink API key, or (for Bambu) the LAN access code
 	Toolheads int    `json:"toolheads"`
+	Type      string `json:"type,omitempty"`   // "prusalink" (default) | "bambu"
+	Serial    string `json:"serial,omitempty"` // Bambu printer serial (MQTT topic id); empty for PrusaLink
 }
 
 // Config holds all configuration for the application
@@ -29,6 +39,7 @@ type Config struct {
 	PrusaLinkFileDownloadTimeout int
 	SpoolmanTimeout              int
 	Printers                     map[string]PrinterConfig // Key is printer ID, value is printer config
+	DeveloperMode                bool                     // Experimental features (e.g. Bambu support) via FILABRIDGE_DEVELOPER_MODE
 }
 
 // LoadConfig loads configuration from database
@@ -55,6 +66,7 @@ func LoadConfig(bridge *FilamentBridge) (*Config, error) {
 		PrusaLinkFileDownloadTimeout: prusaLinkFileDownloadTimeout,
 		SpoolmanTimeout:              spoolmanTimeout,
 		Printers:                     make(map[string]PrinterConfig),
+		DeveloperMode:                developerModeEnabled(),
 	}
 
 	// Load printer configs directly from database without making API calls.
@@ -74,6 +86,18 @@ func LoadConfig(bridge *FilamentBridge) (*Config, error) {
 	}
 
 	return config, nil
+}
+
+// developerModeEnabled reports whether experimental, still-in-development
+// features (currently Bambu Lab printer support) are enabled. It is driven by
+// the FILABRIDGE_DEVELOPER_MODE environment variable so the feature stays hidden
+// in normal deployments until it is complete.
+func developerModeEnabled() bool {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv("FILABRIDGE_DEVELOPER_MODE"))) {
+	case "true", "1", "yes", "on":
+		return true
+	}
+	return false
 }
 
 // parseIntConfig returns the named config value as an int, or the default when

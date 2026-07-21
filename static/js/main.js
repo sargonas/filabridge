@@ -527,6 +527,13 @@ function clearPrintHistory() {
 }
 
 // Utility Functions
+
+// isDeveloperMode reports whether experimental, in-development features (Bambu
+// Lab support) are enabled. Set server-side from FILABRIDGE_DEVELOPER_MODE.
+function isDeveloperMode() {
+    return document.body.dataset.developerMode === 'true';
+}
+
 function apiUrl(path) {
     // Ensure path starts with / if not already
     if (!path.startsWith('/')) {

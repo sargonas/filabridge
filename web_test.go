@@ -38,6 +38,90 @@ func doJSON(t *testing.T, ws *WebServer, method, path, body string) (*httptest.R
 	return rec, parsed
 }
 
+// TestDeveloperModeFlag: the dashboard exposes FILABRIDGE_DEVELOPER_MODE to the
+// frontend via a body data-attribute, off by default and on when the env var is
+// set. This is the gate the (in-development) Bambu support hides behind.
+func TestDeveloperModeFlag(t *testing.T) {
+	t.Run("on", func(t *testing.T) {
+		t.Setenv("FILABRIDGE_DEVELOPER_MODE", "true")
+		ws, _, _ := newTestServer(t)
+		rec, _ := doJSON(t, ws, http.MethodGet, "/", "")
+		if !strings.Contains(rec.Body.String(), `data-developer-mode="true"`) {
+			t.Error("expected developer mode exposed as true when env var is set")
+		}
+	})
+	t.Run("off", func(t *testing.T) {
+		t.Setenv("FILABRIDGE_DEVELOPER_MODE", "")
+		ws, _, _ := newTestServer(t)
+		rec, _ := doJSON(t, ws, http.MethodGet, "/", "")
+		if !strings.Contains(rec.Body.String(), `data-developer-mode="false"`) {
+			t.Error("expected developer mode off by default")
+		}
+	})
+}
+
+// TestPrinterTypePersists: a printer's type and serial round-trip through the
+// schema, and a printer saved without a type reads back as PrusaLink.
+func TestPrinterTypePersists(t *testing.T) {
+	ws, _, _ := newTestServer(t) // registers "printer_test" (no Type set)
+
+	if err := ws.bridge.SavePrinterConfig("printer_bambu", PrinterConfig{
+		Name: "X1C", IPAddress: "192.168.1.9", APIKey: "accesscode", Toolheads: 4,
+		Type: PrinterTypeBambu, Serial: "01S00A1234567890",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	configs, err := ws.bridge.GetAllPrinterConfigs()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := configs["printer_bambu"]; got.Type != PrinterTypeBambu || got.Serial != "01S00A1234567890" {
+		t.Errorf("bambu type/serial not persisted: %+v", got)
+	}
+	if got := configs["printer_test"]; got.Type != PrinterTypePrusaLink {
+		t.Errorf("default printer type = %q, want %q", got.Type, PrinterTypePrusaLink)
+	}
+}
+
+// TestAddPrinterBambuGating: Bambu printers are rejected unless developer mode
+// is on, require a serial number, and are accepted once both hold.
+func TestAddPrinterBambuGating(t *testing.T) {
+	// Developer mode OFF (default): a Bambu printer is forbidden.
+	ws, _, _ := newTestServer(t)
+	rec, _ := doJSON(t, ws, http.MethodPost, "/api/printers",
+		`{"name":"MyA1","ip_address":"192.168.1.9","api_key":"code","toolheads":4,"type":"bambu","serial":"01S00A"}`)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("bambu without developer mode must 403, got %d %s", rec.Code, rec.Body.String())
+	}
+
+	// Developer mode ON.
+	t.Setenv("FILABRIDGE_DEVELOPER_MODE", "true")
+	ws2, _, _ := newTestServer(t)
+
+	// A Bambu printer with no serial is a bad request.
+	rec, _ = doJSON(t, ws2, http.MethodPost, "/api/printers",
+		`{"name":"MyA1","ip_address":"192.168.1.9","api_key":"code","toolheads":4,"type":"bambu"}`)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("bambu without serial must 400, got %d %s", rec.Code, rec.Body.String())
+	}
+
+	// With developer mode and a serial, it is accepted and persists as bambu.
+	rec, body := doJSON(t, ws2, http.MethodPost, "/api/printers",
+		`{"name":"MyA1","ip_address":"192.168.1.9","api_key":"code","toolheads":4,"type":"bambu","serial":"01S00A1234567890"}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("bambu with developer mode + serial must 200, got %d %s", rec.Code, rec.Body.String())
+	}
+	id, _ := body["printer_id"].(string)
+	configs, err := ws2.bridge.GetAllPrinterConfigs()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := configs[id]; got.Type != PrinterTypeBambu || got.Serial != "01S00A1234567890" {
+		t.Errorf("bambu printer not persisted correctly: %+v", got)
+	}
+}
+
 func TestHealthz(t *testing.T) {
 	ws, _, _ := newTestServer(t)
 	rec, body := doJSON(t, ws, http.MethodGet, "/healthz", "")

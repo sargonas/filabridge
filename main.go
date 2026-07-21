@@ -22,11 +22,33 @@ func main() {
 		port        = flag.String("port", DefaultWebPort, "Web interface port")
 		host        = flag.String("host", "0.0.0.0", "Web interface host")
 		showVersion = flag.Bool("version", false, "Print version and exit")
+
+		// Developer probe for Bambu MQTT (experimental). Connects, dumps raw
+		// reports, then exits. Does not touch the database or web server.
+		bambuProbe  = flag.Bool("bambu-probe", false, "Developer: connect to a Bambu printer over MQTT, dump raw reports + FTPS slice_info, then exit")
+		bambuWatch  = flag.Bool("bambu-watch", false, "Developer: watch a Bambu printer's live state until a print ends, then print the grams that would be recorded")
+		bambuWatchS = flag.Int("bambu-watch-seconds", 1800, "Max seconds to watch (with -bambu-watch)")
+		bambuIP     = flag.String("bambu-ip", "", "Bambu printer IP (with -bambu-probe/-bambu-watch)")
+		bambuSerial = flag.String("bambu-serial", "", "Bambu printer serial number (with -bambu-probe/-bambu-watch)")
+		bambuCode   = flag.String("bambu-code", "", "Bambu LAN access code (with -bambu-probe/-bambu-watch)")
 	)
 	flag.Parse()
 
 	if *showVersion {
 		fmt.Printf("FilaBridge %s\n", version)
+		return
+	}
+
+	if *bambuProbe || *bambuWatch {
+		installLogSplitter()
+		if *bambuIP == "" || *bambuSerial == "" || *bambuCode == "" {
+			log.Fatal("bambu-probe/-bambu-watch require -bambu-ip, -bambu-serial, and -bambu-code")
+		}
+		if *bambuWatch {
+			runBambuWatch(*bambuIP, *bambuSerial, *bambuCode, time.Duration(*bambuWatchS)*time.Second)
+		} else {
+			runBambuProbe(*bambuIP, *bambuSerial, *bambuCode, 60*time.Second)
+		}
 		return
 	}
 

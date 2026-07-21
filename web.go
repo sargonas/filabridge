@@ -428,6 +428,7 @@ func (ws *WebServer) dashboardHandler(c *gin.Context) {
 		"SpoolmanConnected": spoolmanConnected,
 		"SpoolmanError":     spoolmanError,
 		"SpoolmanBaseURL":   cfg.SpoolmanURL,
+		"DeveloperMode":     cfg.DeveloperMode,
 	})
 }
 
@@ -501,6 +502,28 @@ func validatePrinterConfig(config PrinterConfig) error {
 	}
 	if config.Toolheads > 10 {
 		return fmt.Errorf("toolheads cannot exceed 10")
+	}
+	switch config.Type {
+	case "", PrinterTypePrusaLink, PrinterTypeBambu:
+		// ok ("" defaults to PrusaLink on save)
+	default:
+		return fmt.Errorf("unknown printer type %q", config.Type)
+	}
+	if config.Type == PrinterTypeBambu && strings.TrimSpace(config.Serial) == "" {
+		return fmt.Errorf("serial number is required for Bambu printers")
+	}
+	return nil
+}
+
+// checkBambuAllowed rejects a Bambu printer configuration unless developer mode
+// is enabled. Bambu support is still under construction; this keeps it hidden in
+// normal deployments even if a client posts a bambu-typed config directly.
+func (ws *WebServer) checkBambuAllowed(config PrinterConfig) error {
+	if config.Type != PrinterTypeBambu {
+		return nil
+	}
+	if cfg := ws.bridge.GetConfigSnapshot(); cfg == nil || !cfg.DeveloperMode {
+		return fmt.Errorf("Bambu printer support is experimental and requires developer mode")
 	}
 	return nil
 }
@@ -759,12 +782,18 @@ func (ws *WebServer) getPrintersHandler(c *gin.Context) {
 	// Enhance printer configs with toolhead names
 	result := make(map[string]interface{})
 	for printerID, printerConfig := range printerConfigs {
+		ptype := printerConfig.Type
+		if ptype == "" {
+			ptype = PrinterTypePrusaLink
+		}
 		printerData := map[string]interface{}{
 			"name":        printerConfig.Name,
 			"ip_address":  printerConfig.IPAddress,
 			"api_key":     "", // never returned; see api_key_set
 			"api_key_set": printerConfig.APIKey != "",
 			"toolheads":   printerConfig.Toolheads,
+			"type":        ptype,
+			"serial":      printerConfig.Serial,
 		}
 
 		// Get toolhead names for this printer
@@ -799,6 +828,12 @@ func (ws *WebServer) addPrinterHandler(c *gin.Context) {
 	// Validate printer configuration
 	if err := validatePrinterConfig(printerConfig); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	// Bambu support is experimental and hidden behind developer mode.
+	if err := ws.checkBambuAllowed(printerConfig); err != nil {
+		c.JSON(http.StatusForbidden, gin.H{"error": err.Error()})
 		return
 	}
 
@@ -853,6 +888,12 @@ func (ws *WebServer) updatePrinterHandler(c *gin.Context) {
 	// Validate printer configuration
 	if err := validatePrinterConfig(printerConfig); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	// Bambu support is experimental and hidden behind developer mode.
+	if err := ws.checkBambuAllowed(printerConfig); err != nil {
+		c.JSON(http.StatusForbidden, gin.H{"error": err.Error()})
 		return
 	}
 
