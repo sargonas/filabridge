@@ -13,11 +13,24 @@ import (
 	"time"
 )
 
-// PrusaLinkClient handles communication with PrusaLink API
+// PrusaLinkClient handles communication with PrusaLink API.
+//
+// A client is expensive to the printer, not to us: PrusaLink runs its HTTP
+// server on a wifi coprocessor with a very small socket pool, and every
+// http.Transport carries its own connection pool. Creating a client per request
+// therefore means a fresh TCP connection per request, with the previous one
+// left idling on the printer until it times out. Clients must be built once per
+// printer and reused for the life of the process - see
+// FilamentBridge.prusaClientFor.
 type PrusaLinkClient struct {
-	baseURL    string
-	apiKey     string
+	baseURL   string
+	apiKey    string
+	transport *http.Transport
+	// httpClient is for the small, frequent API calls (status, job, commands).
 	httpClient *http.Client
+	// fileClient shares httpClient's transport but allows the far longer
+	// deadline a print-file read from USB storage needs.
+	fileClient *http.Client
 }
 
 // PrusaLinkStatus represents the status response from PrusaLink
@@ -50,7 +63,8 @@ type PrusaLinkJob struct {
 	} `json:"file"`
 }
 
-// NewPrusaLinkClient creates a new PrusaLink client
+// NewPrusaLinkClient creates a new PrusaLink client. Build one per printer and
+// keep it: see the type comment for why per-request clients hurt the printer.
 func NewPrusaLinkClient(ipAddress, apiKey string, timeout, fileDownloadTimeout int) *PrusaLinkClient {
 	// Create a custom dialer with timeout for DNS resolution
 	// This ensures hostnames (especially .local domains) have adequate time to resolve
@@ -60,21 +74,45 @@ func NewPrusaLinkClient(ipAddress, apiKey string, timeout, fileDownloadTimeout i
 	}
 
 	transport := &http.Transport{
-		DialContext:           dialer.DialContext,
-		MaxIdleConns:          10,
-		MaxIdleConnsPerHost:   2,
-		IdleConnTimeout:       30 * time.Second,
-		ResponseHeaderTimeout: 10 * time.Second, // Timeout for receiving response headers
+		DialContext:         dialer.DialContext,
+		MaxIdleConns:        MaxPrusaLinkConns,
+		MaxIdleConnsPerHost: MaxPrusaLinkConns,
+		// A hard ceiling on sockets open to the printer at once. Callers that
+		// need a connection beyond this wait for one to free up rather than
+		// making the printer find another socket; their overall client timeout
+		// still bounds the wait.
+		MaxConnsPerHost: MaxPrusaLinkConns,
+		// Long enough that the idle connection survives between poll cycles at
+		// any sane poll interval, so steady-state monitoring reuses a single
+		// socket instead of reconnecting every cycle.
+		IdleConnTimeout: PrusaLinkIdleConnTimeout,
+		// A backstop only. Per-request bounds come from the http.Client
+		// timeouts below, which cover headers and body together.
+		ResponseHeaderTimeout: 30 * time.Second,
 		ExpectContinueTimeout: 1 * time.Second,
 	}
 
 	return &PrusaLinkClient{
-		baseURL: fmt.Sprintf("http://%s", ipAddress),
-		apiKey:  apiKey,
+		baseURL:   fmt.Sprintf("http://%s", ipAddress),
+		apiKey:    apiKey,
+		transport: transport,
 		httpClient: &http.Client{
 			Timeout:   time.Duration(timeout) * time.Second,
 			Transport: transport,
 		},
+		fileClient: &http.Client{
+			Timeout:   time.Duration(fileDownloadTimeout) * time.Second,
+			Transport: transport,
+		},
+	}
+}
+
+// Close releases any connections the client is holding open to the printer.
+// Call it when a client is retired (printer removed, or its address/credentials
+// changed) so the socket is freed on the printer rather than left to time out.
+func (c *PrusaLinkClient) Close() {
+	if c.transport != nil {
+		c.transport.CloseIdleConnections()
 	}
 }
 
@@ -183,22 +221,14 @@ func (c *PrusaLinkClient) GetGcodeFileWithRetry(filename string, fileDownloadTim
 	backoffDelays := []time.Duration{2 * time.Second, 4 * time.Second, 8 * time.Second}
 	maxRetries := len(backoffDelays)
 
-	// A dedicated client with an extended timeout for file downloads, using the
-	// same DNS timeout configuration as the regular client for consistency.
-	fileDialer := &net.Dialer{
-		Timeout:   5 * time.Second, // DNS resolution timeout
-		KeepAlive: 30 * time.Second,
-	}
-	fileClient := &http.Client{
-		Timeout: time.Duration(fileDownloadTimeout) * time.Second,
-		Transport: &http.Transport{
-			DialContext:           fileDialer.DialContext,
-			MaxIdleConns:          10,
-			MaxIdleConnsPerHost:   2,
-			IdleConnTimeout:       90 * time.Second,
-			ResponseHeaderTimeout: 30 * time.Second,
-			ExpectContinueTimeout: 1 * time.Second,
-		},
+	// Downloads go through the client's shared transport on the long-deadline
+	// file client, so they reuse the same connection the poll loop uses rather
+	// than asking the printer for another socket.
+	fileClient := c.fileClient
+	if fileDownloadTimeout > 0 && time.Duration(fileDownloadTimeout)*time.Second != fileClient.Timeout {
+		clone := *fileClient
+		clone.Timeout = time.Duration(fileDownloadTimeout) * time.Second
+		fileClient = &clone
 	}
 
 	// Single download attempt. The filename should already include the full
@@ -297,7 +327,7 @@ const GcodeScanLimit = 16 << 20 // 16 MB
 func (c *PrusaLinkClient) ScanGcodeFilamentUsage(filename string, timeout int) (map[int]float64, error) {
 	client := &http.Client{
 		Timeout:   time.Duration(timeout) * time.Second,
-		Transport: c.httpClient.Transport,
+		Transport: c.transport,
 	}
 
 	req, err := http.NewRequest("GET", c.baseURL+"/"+filename, nil)
@@ -305,6 +335,12 @@ func (c *PrusaLinkClient) ScanGcodeFilamentUsage(filename string, timeout int) (
 		return nil, fmt.Errorf("failed to create G-code scan request: %w", err)
 	}
 	c.addAPIKey(req)
+	// This request is abandoned mid-body by design (see the doc comment), which
+	// leaves PrusaLink holding a socket with a queued send buffer for a
+	// connection we will never read again. Asking for a close up front lets the
+	// printer retire the socket with the response instead of keeping it alive
+	// for a reuse that never comes.
+	req.Close = true
 
 	resp, err := client.Do(req)
 	if err != nil {
