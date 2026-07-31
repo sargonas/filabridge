@@ -2,9 +2,11 @@ package main
 
 import (
 	"bytes"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -178,5 +180,113 @@ func TestScanHTTPError(t *testing.T) {
 
 	if _, err := scanClient(srv).ScanGcodeFilamentUsage("usb/blocked.bgcode", 5); err == nil {
 		t.Fatal("expected error for 409 response")
+	}
+}
+
+// bareBridge creates a bridge with no printers or fakes wired up, for tests
+// that exercise bridge state directly rather than a monitor cycle.
+func bareBridge(t *testing.T) *FilamentBridge {
+	t.Helper()
+	t.Setenv("FILABRIDGE_DB_PATH", t.TempDir())
+
+	bridge, err := NewFilamentBridge(nil)
+	if err != nil {
+		t.Fatalf("NewFilamentBridge: %v", err)
+	}
+	t.Cleanup(func() { bridge.Close() })
+	return bridge
+}
+
+// countingServer reports how many distinct TCP connections it has accepted.
+func countingServer(t *testing.T, handler http.HandlerFunc) (*httptest.Server, func() int) {
+	t.Helper()
+	var mu sync.Mutex
+	conns := make(map[net.Conn]bool)
+
+	srv := httptest.NewUnstartedServer(handler)
+	srv.Config.ConnState = func(c net.Conn, state http.ConnState) {
+		if state == http.StateNew {
+			mu.Lock()
+			conns[c] = true
+			mu.Unlock()
+		}
+	}
+	srv.Start()
+	t.Cleanup(srv.Close)
+
+	return srv, func() int {
+		mu.Lock()
+		defer mu.Unlock()
+		return len(conns)
+	}
+}
+
+// TestClientReusesConnection is the regression guard for issue #35: PrusaLink
+// runs its HTTP server on a wifi coprocessor with a very small socket pool, and
+// a client that opens a fresh connection per request can exhaust it. A reused
+// client must poll over a single connection no matter how many requests it makes.
+func TestClientReusesConnection(t *testing.T) {
+	srv, connCount := countingServer(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(`{"printer":{"state":"IDLE"}}`))
+	})
+
+	client := NewPrusaLinkClient(strings.TrimPrefix(srv.URL, "http://"), "key", 5, 30)
+	for i := 0; i < 20; i++ {
+		if _, err := client.GetStatus(); err != nil {
+			t.Fatalf("status %d: %v", i, err)
+		}
+	}
+
+	if got := connCount(); got != 1 {
+		t.Fatalf("20 polls opened %d connections, want 1", got)
+	}
+}
+
+// TestBridgeReusesClientAcrossCallers pins the bridge-level half of the fix: the
+// monitor loop and the dashboard/broadcast read path must share one pooled
+// client per printer rather than each building their own transport.
+func TestBridgeReusesClientAcrossCallers(t *testing.T) {
+	b := bareBridge(t)
+	cfg := &Config{PrusaLinkTimeout: 5, PrusaLinkFileDownloadTimeout: 30}
+	pc := PrinterConfig{Name: "Core One", IPAddress: "192.0.2.10"}
+
+	first := b.prusaClientFor("p1", pc, cfg)
+	second := b.prusaClientFor("p1", pc, cfg)
+	if first != second {
+		t.Fatal("prusaClientFor returned a new client for unchanged settings")
+	}
+
+	// A changed address must produce a different client, not keep talking to
+	// the old one.
+	moved := b.prusaClientFor("p1", PrinterConfig{Name: "Core One", IPAddress: "192.0.2.11"}, cfg)
+	if moved == first {
+		t.Fatal("prusaClientFor reused the client after the address changed")
+	}
+}
+
+// TestGetStatusServesFreshCache pins that a status read behind a recent monitor
+// poll does not touch the printer at all.
+func TestGetStatusServesFreshCache(t *testing.T) {
+	b := bareBridge(t)
+	b.cachePrinterStatus("p1", StatePrinting, nil)
+
+	cached, fresh := b.cachedPrinterState("p1")
+	if !fresh {
+		t.Fatal("status cached just now reported as stale")
+	}
+	if cached.state != StatePrinting {
+		t.Fatalf("got state %q, want %q", cached.state, StatePrinting)
+	}
+
+	// An entry older than the TTL must fall through to a live poll.
+	b.statusCacheMutex.Lock()
+	b.printerStatusCache["p1"] = cachedPrinterStatus{
+		state:     StatePrinting,
+		fetchedAt: time.Now().Add(-PrinterStatusTTL - time.Second),
+	}
+	b.statusCacheMutex.Unlock()
+
+	if _, fresh := b.cachedPrinterState("p1"); fresh {
+		t.Fatal("expired cache entry reported as fresh")
 	}
 }

@@ -35,6 +35,30 @@ type FilamentBridge struct {
 	warnMutex        sync.RWMutex             // Guards runoutWarnings and runoutChecked
 	errorMutex       sync.RWMutex
 	mutex            sync.RWMutex
+	// prusaClients holds one long-lived PrusaLink client per printer so every
+	// caller shares a single pooled connection to that printer.
+	prusaClients map[string]*pooledPrusaClient
+	clientMutex  sync.Mutex // Guards prusaClients
+	// printerStatusCache lets dashboard and broadcast reads reuse the status
+	// the monitor just fetched instead of polling the printer again.
+	printerStatusCache map[string]cachedPrinterStatus
+	statusCacheMutex   sync.RWMutex // Guards printerStatusCache
+}
+
+// pooledPrusaClient is a cached client plus the fingerprint of the settings it
+// was built from, so a config change rebuilds it instead of silently talking to
+// the old address.
+type pooledPrusaClient struct {
+	client *PrusaLinkClient
+	key    string
+}
+
+// cachedPrinterStatus is the last observed state of a printer. An empty state
+// with err set means the printer was unreachable at that time.
+type cachedPrinterStatus struct {
+	state     string
+	err       error
+	fetchedAt time.Time
 }
 
 // ToolheadMapping represents a mapping between a printer toolhead and a spool
@@ -114,6 +138,9 @@ func NewFilamentBridge(config *Config) (*FilamentBridge, error) {
 		scanInFlight:     make(map[string]bool),
 		runoutWarnings:   make(map[string]RunoutWarning),
 		runoutChecked:    make(map[string]int),
+
+		prusaClients:       make(map[string]*pooledPrusaClient),
+		printerStatusCache: make(map[string]cachedPrinterStatus),
 	}
 
 	// Initialize database
@@ -196,6 +223,14 @@ func (b *FilamentBridge) initDatabase() error {
 			is_printer_location BOOLEAN,
 			created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
 			expires_at TIMESTAMP
+		)`,
+		// spool_home_locations remembers the storage location a spool lived in
+		// before it was loaded onto a toolhead, so it can be returned there
+		// instead of to the single global default location.
+		`CREATE TABLE IF NOT EXISTS spool_home_locations (
+			spool_id INTEGER PRIMARY KEY,
+			location_name TEXT NOT NULL,
+			saved_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 		)`,
 		`CREATE TABLE IF NOT EXISTS toolhead_names (
 			printer_id TEXT,
@@ -288,6 +323,7 @@ func (b *FilamentBridge) initializeDefaultConfig() error {
 		ConfigKeySpoolmanTimeout:                 {fmt.Sprintf("%d", SpoolmanTimeout), "Spoolman API timeout in seconds"},
 		ConfigKeyAutoAssignPreviousSpoolEnabled:  {"false", "Enable automatic assignment of previous spool to default location when assigning new spool to toolhead"},
 		ConfigKeyAutoAssignPreviousSpoolLocation: {"", "Default location name where previous spools will be automatically assigned (must exist as a location)"},
+		ConfigKeyAutoAssignPreviousSpoolRemember: {"false", "Return a spool to the location it came from when it leaves a toolhead, falling back to the default location when that spool has no remembered location"},
 		ConfigKeyPrintHistoryEnabled:             {"true", "Keep a local record of prints and show the Print History tab (usage is recorded in Spoolman either way)"},
 		ConfigKeyRunoutWarningEnabled:            {"true", "Show a dashboard warning when the mapped spool has less filament remaining than the print requires"},
 		ConfigKeyRunoutPauseEnabled:              {"false", "Also pause the print when a low-filament warning fires (acknowledging resumes it)"},
@@ -399,6 +435,30 @@ func (b *FilamentBridge) SetAutoAssignPreviousSpoolLocation(location string) err
 	return b.SetConfigValue(ConfigKeyAutoAssignPreviousSpoolLocation, location)
 }
 
+// GetAutoAssignPreviousSpoolRemember reports whether a spool leaving a toolhead
+// returns to the location it came from rather than to the default location.
+// Defaults to false, including for databases predating the setting.
+func (b *FilamentBridge) GetAutoAssignPreviousSpoolRemember() (bool, error) {
+	value, err := b.GetConfigValue(ConfigKeyAutoAssignPreviousSpoolRemember)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return false, nil
+		}
+		return false, err
+	}
+	return value == "true", nil
+}
+
+// SetAutoAssignPreviousSpoolRemember sets whether spools return to the location
+// they came from when they leave a toolhead.
+func (b *FilamentBridge) SetAutoAssignPreviousSpoolRemember(enabled bool) error {
+	value := "false"
+	if enabled {
+		value = "true"
+	}
+	return b.SetConfigValue(ConfigKeyAutoAssignPreviousSpoolRemember, value)
+}
+
 // GetPrintHistoryEnabled reports whether local print history is kept and the
 // history tab shown. Defaults to true (databases from before this setting
 // existed have no row for it). Spoolman usage recording is unaffected either way.
@@ -488,7 +548,7 @@ func (b *FilamentBridge) AcknowledgeRunoutWarning(id string) error {
 		cfg := b.GetConfigSnapshot()
 		if cfg != nil {
 			if pc, ok := cfg.Printers[w.PrinterID]; ok {
-				client := NewPrusaLinkClient(pc.IPAddress, pc.APIKey, cfg.PrusaLinkTimeout, cfg.PrusaLinkFileDownloadTimeout)
+				client := b.prusaClientFor(w.PrinterID, pc, cfg)
 				status, err := client.GetStatus()
 				if err != nil {
 					return fmt.Errorf("could not check printer state before resuming: %w", err)
@@ -869,6 +929,11 @@ func (b *FilamentBridge) ReloadConfig() error {
 	}
 	b.mutex.Unlock()
 
+	// Release connections to printers that are no longer configured. Printers
+	// whose settings changed are rebuilt lazily by prusaClientFor, which also
+	// closes the client it replaces.
+	b.retireStalePrusaClients(config.Printers)
+
 	return nil
 }
 
@@ -969,8 +1034,10 @@ func (b *FilamentBridge) SetToolheadMapping(printerName string, toolheadID int, 
 	// Unlock before the Spoolman calls below (which may need locks)
 	b.mutex.Unlock()
 
-	// Sync Spoolman: the loaded spool moves to this toolhead's location...
+	// Sync Spoolman: the loaded spool moves to this toolhead's location, after
+	// noting where it came from so it can be sent back there when it unloads...
 	locationName := b.toolheadLocationName(printerName, toolheadID)
+	b.captureSpoolHome(spoolID)
 	if err := b.spoolman.UpdateSpoolLocation(spoolID, locationName); err != nil {
 		// Log but don't fail the mapping - the FilaBridge mapping is more critical
 		log.Printf("Warning: Failed to update Spoolman location for spool %d to '%s': %v", spoolID, locationName, err)
@@ -1019,35 +1086,151 @@ func (b *FilamentBridge) toolheadLocationSet() map[string]bool {
 	return set
 }
 
+// rememberSpoolHome records the storage location a spool lives in while it is
+// not loaded, so relocateSpool can send it back there. Toolhead locations are
+// not homes: a spool moving straight from one toolhead to another keeps whatever
+// home it already had. Failures are logged, never propagated - a home location
+// is a convenience and not worth failing an assignment over.
+func (b *FilamentBridge) rememberSpoolHome(spoolID int, locationName string) {
+	locationName = strings.TrimSpace(locationName)
+	if spoolID <= 0 || locationName == "" {
+		return
+	}
+	// Resolve the toolhead set before locking; it reads config itself.
+	if b.toolheadLocationSet()[locationName] {
+		return
+	}
+
+	b.mutex.Lock()
+	defer b.mutex.Unlock()
+
+	if _, err := b.db.Exec(
+		"INSERT OR REPLACE INTO spool_home_locations (spool_id, location_name, saved_at) VALUES (?, ?, ?)",
+		spoolID, locationName, time.Now(),
+	); err != nil {
+		log.Printf("Warning: Failed to remember location '%s' for spool %d: %v", locationName, spoolID, err)
+		return
+	}
+	log.Printf("Remembered location '%s' for spool %d", locationName, spoolID)
+}
+
+// spoolHomeLocation returns the remembered storage location for a spool, or ""
+// when none is recorded.
+func (b *FilamentBridge) spoolHomeLocation(spoolID int) string {
+	b.mutex.RLock()
+	defer b.mutex.RUnlock()
+
+	var name string
+	err := b.db.QueryRow(
+		"SELECT location_name FROM spool_home_locations WHERE spool_id = ?", spoolID,
+	).Scan(&name)
+	if err != nil {
+		if !errors.Is(err, sql.ErrNoRows) {
+			log.Printf("Warning: Failed to read remembered location for spool %d: %v", spoolID, err)
+		}
+		return ""
+	}
+	return name
+}
+
+// forgetSpoolHome drops a spool's remembered location.
+func (b *FilamentBridge) forgetSpoolHome(spoolID int) {
+	b.mutex.Lock()
+	defer b.mutex.Unlock()
+
+	if _, err := b.db.Exec("DELETE FROM spool_home_locations WHERE spool_id = ?", spoolID); err != nil {
+		log.Printf("Warning: Failed to clear remembered location for spool %d: %v", spoolID, err)
+	}
+}
+
+// captureSpoolHome records a spool's current Spoolman location before a toolhead
+// assignment overwrites it. Only done while the remember-previous-location mode
+// is on, since it costs an extra Spoolman request per assignment.
+func (b *FilamentBridge) captureSpoolHome(spoolID int) {
+	if !b.rememberPreviousLocationEnabled() {
+		return
+	}
+
+	spool, err := b.spoolman.GetSpool(spoolID)
+	if err != nil {
+		log.Printf("Warning: Failed to read spool %d from Spoolman to remember its location: %v", spoolID, err)
+		return
+	}
+	b.rememberSpoolHome(spoolID, spool.Location)
+}
+
+// rememberPreviousLocationEnabled reports whether spools should return to the
+// location they came from. It requires both the auto-assign master switch and
+// the remember mode.
+func (b *FilamentBridge) rememberPreviousLocationEnabled() bool {
+	enabled, err := b.GetAutoAssignPreviousSpoolEnabled()
+	if err != nil {
+		log.Printf("Warning: Failed to check auto-assign previous spool setting: %v", err)
+		return false
+	}
+	if !enabled {
+		return false
+	}
+
+	remember, err := b.GetAutoAssignPreviousSpoolRemember()
+	if err != nil {
+		log.Printf("Warning: Failed to check remember previous location setting: %v", err)
+		return false
+	}
+	return remember
+}
+
 // relocateSpool updates the Spoolman location of a spool that is no longer
-// loaded on a toolhead: it moves to the configured auto-assign storage
-// location when that feature is enabled and the location exists in Spoolman,
-// otherwise its location is cleared. Failures are logged, never propagated.
+// loaded on a toolhead. When auto-assignment is enabled it moves to the location
+// it was loaded from (remember mode only), else to the configured default
+// storage location; otherwise its location is cleared. Failures are logged,
+// never propagated.
 func (b *FilamentBridge) relocateSpool(spoolID int) {
 	dest := ""
+	restoredHome := false
 	enabled, err := b.GetAutoAssignPreviousSpoolEnabled()
 	if err != nil {
 		log.Printf("Warning: Failed to check auto-assign previous spool setting: %v", err)
 	} else if enabled {
-		name, err := b.GetAutoAssignPreviousSpoolLocation()
-		if err != nil {
-			log.Printf("Warning: Failed to get auto-assign previous spool location: %v", err)
-		} else {
-			// Trust the configured name rather than requiring the location to
-			// already hold a spool: Spoolman accepts any location string and
-			// auto-creates the text location, so a currently-empty storage
-			// location still works as a destination. (Empty locations aren't
-			// returned by the /location list, which is why the old existence
-			// check wrongly cleared the spool's location instead of moving it.)
-			dest = name
+		// A remembered location wins over the default one, so a spool goes back
+		// to the drybox or shelf it came from. Spools with nothing remembered
+		// (loaded before the mode was turned on, imported from Spoolman, or
+		// stored nowhere in particular) still fall back to the default.
+		if b.rememberPreviousLocationEnabled() {
+			dest = b.spoolHomeLocation(spoolID)
+			restoredHome = dest != ""
+		}
+
+		if dest == "" {
+			name, err := b.GetAutoAssignPreviousSpoolLocation()
+			if err != nil {
+				log.Printf("Warning: Failed to get auto-assign previous spool location: %v", err)
+			} else {
+				// Trust the configured name rather than requiring the location to
+				// already hold a spool: Spoolman accepts any location string and
+				// auto-creates the text location, so a currently-empty storage
+				// location still works as a destination. (Empty locations aren't
+				// returned by the /location list, which is why the old existence
+				// check wrongly cleared the spool's location instead of moving it.)
+				dest = name
+			}
 		}
 	}
 
 	if err := b.spoolman.UpdateSpoolLocation(spoolID, dest); err != nil {
 		log.Printf("Warning: Failed to update Spoolman location for spool %d: %v", spoolID, err)
-	} else if dest != "" {
+		return
+	}
+
+	switch {
+	case restoredHome:
+		// Cleared only once the spool is actually back home, so a failed move
+		// leaves the location to be retried on the next unload.
+		b.forgetSpoolHome(spoolID)
+		log.Printf("Returned spool %d to its previous location '%s'", spoolID, dest)
+	case dest != "":
 		log.Printf("Moved spool %d to storage location '%s'", spoolID, dest)
-	} else {
+	default:
 		log.Printf("Cleared Spoolman location for spool %d", spoolID)
 	}
 }
@@ -1296,17 +1479,26 @@ func (b *FilamentBridge) MonitorPrinters() {
 		return
 	}
 
-	// Monitor each printer using PrusaLink
+	// Monitor each printer using PrusaLink. Printers are polled concurrently but
+	// the cycle waits for all of them: callers broadcast status immediately
+	// afterwards, and returning early would leave that broadcast reading a
+	// cycle-old cache and polling the printers a second time to catch up. Each
+	// printer's poll is bounded by PrusaLinkTimeout, so the wait cannot outlast
+	// the poll interval by any meaningful margin.
+	var wg sync.WaitGroup
 	for printerID, printerConfig := range configSnapshot.Printers {
 		if printerID == "no_printers" {
 			continue // Skip placeholder
 		}
+		wg.Add(1)
 		go func(printerID string, config PrinterConfig) {
+			defer wg.Done()
 			if err := b.monitorPrusaLink(printerID, config); err != nil {
 				log.Printf("Error monitoring printer %s (%s): %v", config.IPAddress, printerID, err)
 			}
 		}(printerID, printerConfig)
 	}
+	wg.Wait()
 }
 
 // activeJob is the persisted in-flight print for a single printer.
@@ -1503,6 +1695,96 @@ func (b *FilamentBridge) clearScanAttempts(printerID string) {
 	}
 }
 
+// prusaClientFor returns the shared PrusaLink client for a printer, building it
+// on first use and rebuilding it only when the printer's address, key, or
+// timeouts change. Reusing one client per printer is what keeps FilaBridge to a
+// single pooled connection per printer instead of a new socket per request.
+func (b *FilamentBridge) prusaClientFor(printerID string, pc PrinterConfig, cfg *Config) *PrusaLinkClient {
+	key := fmt.Sprintf("%s\x00%s\x00%d\x00%d", pc.IPAddress, pc.APIKey, cfg.PrusaLinkTimeout, cfg.PrusaLinkFileDownloadTimeout)
+
+	b.clientMutex.Lock()
+	defer b.clientMutex.Unlock()
+
+	if b.prusaClients == nil {
+		b.prusaClients = make(map[string]*pooledPrusaClient)
+	}
+	if pooled, ok := b.prusaClients[printerID]; ok {
+		if pooled.key == key {
+			return pooled.client
+		}
+		// Settings changed: retire the old client so its connection is released
+		// rather than left idling on the printer, and drop the status we read
+		// from the old address.
+		pooled.client.Close()
+		b.forgetPrinterStatus(printerID)
+	}
+
+	client := NewPrusaLinkClient(pc.IPAddress, pc.APIKey, cfg.PrusaLinkTimeout, cfg.PrusaLinkFileDownloadTimeout)
+	b.prusaClients[printerID] = &pooledPrusaClient{client: client, key: key}
+	return client
+}
+
+// retireStalePrusaClients closes and drops cached clients for printers that are
+// no longer configured. Called after a config reload so a removed printer does
+// not keep a connection open.
+func (b *FilamentBridge) retireStalePrusaClients(printers map[string]PrinterConfig) {
+	b.clientMutex.Lock()
+	defer b.clientMutex.Unlock()
+
+	for printerID, pooled := range b.prusaClients {
+		if _, stillConfigured := printers[printerID]; !stillConfigured {
+			pooled.client.Close()
+			delete(b.prusaClients, printerID)
+			b.forgetPrinterStatus(printerID)
+		}
+	}
+}
+
+// ClosePrusaClients releases every pooled printer connection. Intended for
+// shutdown.
+func (b *FilamentBridge) ClosePrusaClients() {
+	b.clientMutex.Lock()
+	defer b.clientMutex.Unlock()
+
+	for printerID, pooled := range b.prusaClients {
+		pooled.client.Close()
+		delete(b.prusaClients, printerID)
+	}
+}
+
+// cachePrinterStatus records the outcome of a status poll so other readers can
+// reuse it. A non-nil err caches the printer as unreachable.
+func (b *FilamentBridge) cachePrinterStatus(printerID, state string, err error) {
+	b.statusCacheMutex.Lock()
+	defer b.statusCacheMutex.Unlock()
+
+	if b.printerStatusCache == nil {
+		b.printerStatusCache = make(map[string]cachedPrinterStatus)
+	}
+	b.printerStatusCache[printerID] = cachedPrinterStatus{state: state, err: err, fetchedAt: time.Now()}
+}
+
+// cachedPrinterState returns the last polled state for a printer and whether it
+// is still fresh enough to serve without contacting the printer.
+func (b *FilamentBridge) cachedPrinterState(printerID string) (cachedPrinterStatus, bool) {
+	b.statusCacheMutex.RLock()
+	defer b.statusCacheMutex.RUnlock()
+
+	entry, ok := b.printerStatusCache[printerID]
+	if !ok || time.Since(entry.fetchedAt) > PrinterStatusTTL {
+		return cachedPrinterStatus{}, false
+	}
+	return entry, true
+}
+
+// forgetPrinterStatus drops a printer's cached status, forcing the next reader
+// to poll. Used when a printer's configuration changes underneath us.
+func (b *FilamentBridge) forgetPrinterStatus(printerID string) {
+	b.statusCacheMutex.Lock()
+	defer b.statusCacheMutex.Unlock()
+	delete(b.printerStatusCache, printerID)
+}
+
 // monitorPrusaLink monitors a single printer using PrusaLink API
 func (b *FilamentBridge) monitorPrusaLink(printerID string, config PrinterConfig) error {
 	// Read timeouts from a snapshot: b.config can be swapped by ReloadConfig at
@@ -1511,14 +1793,19 @@ func (b *FilamentBridge) monitorPrusaLink(printerID string, config PrinterConfig
 	if cfg == nil {
 		return nil
 	}
-	client := NewPrusaLinkClient(config.IPAddress, config.APIKey, cfg.PrusaLinkTimeout, cfg.PrusaLinkFileDownloadTimeout)
+	client := b.prusaClientFor(printerID, config, cfg)
 
 	status, err := client.GetStatus()
 	if err != nil {
 		b.noteConnectivity(printerID, config.IPAddress, config.Name, err)
+		// Publish the failure so dashboard and broadcast reads report the
+		// printer offline without each mounting their own poll against a
+		// printer that is already not answering.
+		b.cachePrinterStatus(printerID, StateOffline, err)
 		return nil // Don't fail the entire monitoring cycle for one printer
 	}
 	b.noteConnectivity(printerID, config.IPAddress, config.Name, nil)
+	b.cachePrinterStatus(printerID, status.Printer.State, nil)
 
 	jobInfo, err := client.GetJobInfo()
 	if err != nil {
@@ -1885,10 +2172,27 @@ func (b *FilamentBridge) GetStatus() (*PrinterStatus, error) {
 				continue // Skip placeholder
 			}
 
-			client := NewPrusaLinkClient(printerConfig.IPAddress, printerConfig.APIKey, configSnapshot.PrusaLinkTimeout, configSnapshot.PrusaLinkFileDownloadTimeout)
-
 			// Use the configured printer name, not the hostname from PrusaLink
 			printerName := printerConfig.Name
+
+			// Serve the monitor's most recent poll when it is still fresh. The
+			// monitor runs every poll interval, so in normal operation status
+			// broadcasts and dashboard loads cost the printer nothing; only a
+			// read that arrives with no recent poll behind it (web-only mode, or
+			// a monitor cycle that has not run yet) goes to the printer itself.
+			if cached, fresh := b.cachedPrinterState(printerID); fresh {
+				state := cached.state
+				if cached.err != nil {
+					state = StateOffline
+				}
+				status.Printers[printerID] = PrinterData{
+					Name:  printerName,
+					State: state,
+				}
+				continue
+			}
+
+			client := b.prusaClientFor(printerID, printerConfig, configSnapshot)
 
 			// Get current status
 			printerStatus, err := client.GetStatus()
@@ -1896,6 +2200,7 @@ func (b *FilamentBridge) GetStatus() (*PrinterStatus, error) {
 				// Edge-triggered: logs once on the transition to offline and once
 				// on recovery, rather than on every broadcast/web request.
 				b.noteConnectivity(printerID, printerConfig.IPAddress, printerName, err)
+				b.cachePrinterStatus(printerID, StateOffline, err)
 				status.Printers[printerID] = PrinterData{
 					Name:  printerName,
 					State: StateOffline,
@@ -1903,6 +2208,7 @@ func (b *FilamentBridge) GetStatus() (*PrinterStatus, error) {
 				continue
 			}
 			b.noteConnectivity(printerID, printerConfig.IPAddress, printerName, nil)
+			b.cachePrinterStatus(printerID, printerStatus.Printer.State, nil)
 
 			status.Printers[printerID] = PrinterData{
 				Name:  printerName,
@@ -2022,6 +2328,8 @@ func (b *FilamentBridge) processFilamentUsage(printerName string, filamentUsage 
 
 // Close closes the database connection
 func (b *FilamentBridge) Close() error {
+	// Hand the printers their sockets back before going away.
+	b.ClosePrusaClients()
 	if b.db != nil {
 		return b.db.Close()
 	}
