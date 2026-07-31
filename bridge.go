@@ -35,6 +35,8 @@ type FilamentBridge struct {
 	warnMutex        sync.RWMutex             // Guards runoutWarnings and runoutChecked
 	errorMutex       sync.RWMutex
 	mutex            sync.RWMutex
+	bambuClients     map[string]*bambuClient // Persistent MQTT clients per Bambu printer (developer mode)
+	bambuMutex       sync.Mutex              // Guards bambuClients
 	// prusaClients holds one long-lived PrusaLink client per printer so every
 	// caller shares a single pooled connection to that printer.
 	prusaClients map[string]*pooledPrusaClient
@@ -138,6 +140,7 @@ func NewFilamentBridge(config *Config) (*FilamentBridge, error) {
 		scanInFlight:     make(map[string]bool),
 		runoutWarnings:   make(map[string]RunoutWarning),
 		runoutChecked:    make(map[string]int),
+		bambuClients:     make(map[string]*bambuClient),
 
 		prusaClients:       make(map[string]*pooledPrusaClient),
 		printerStatusCache: make(map[string]cachedPrinterStatus),
@@ -193,6 +196,8 @@ func (b *FilamentBridge) initDatabase() error {
 			ip_address TEXT NOT NULL,
 			api_key TEXT,
 			toolheads INTEGER DEFAULT 1,
+			type TEXT NOT NULL DEFAULT 'prusalink',
+			serial TEXT NOT NULL DEFAULT '',
 			created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
 			updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 		)`,
@@ -296,6 +301,17 @@ func (b *FilamentBridge) initDatabase() error {
 	if _, err := b.db.Exec(`ALTER TABLE print_history ADD COLUMN status TEXT NOT NULL DEFAULT 'completed'`); err != nil &&
 		!strings.Contains(err.Error(), "duplicate column") {
 		return fmt.Errorf("failed to add status column to print_history: %w", err)
+	}
+
+	// Bambu support (developer mode) added a printer type and, for Bambu, a
+	// serial. Databases from before this default to PrusaLink.
+	if _, err := b.db.Exec(`ALTER TABLE printer_configs ADD COLUMN type TEXT NOT NULL DEFAULT 'prusalink'`); err != nil &&
+		!strings.Contains(err.Error(), "duplicate column") {
+		return fmt.Errorf("failed to add type column to printer_configs: %w", err)
+	}
+	if _, err := b.db.Exec(`ALTER TABLE printer_configs ADD COLUMN serial TEXT NOT NULL DEFAULT ''`); err != nil &&
+		!strings.Contains(err.Error(), "duplicate column") {
+		return fmt.Errorf("failed to add serial column to printer_configs: %w", err)
 	}
 
 	// Initialize default configuration
@@ -687,7 +703,7 @@ func (b *FilamentBridge) clearRunoutState(printerID string) {
 
 // GetAllPrinterConfigs gets all printer configurations
 func (b *FilamentBridge) GetAllPrinterConfigs() (map[string]PrinterConfig, error) {
-	rows, err := b.db.Query("SELECT printer_id, name, ip_address, api_key, toolheads FROM printer_configs")
+	rows, err := b.db.Query("SELECT printer_id, name, ip_address, api_key, toolheads, type, serial FROM printer_configs")
 	if err != nil {
 		return nil, fmt.Errorf("failed to get printer configs: %w", err)
 	}
@@ -695,16 +711,21 @@ func (b *FilamentBridge) GetAllPrinterConfigs() (map[string]PrinterConfig, error
 
 	configs := make(map[string]PrinterConfig)
 	for rows.Next() {
-		var printerID, name, ipAddress, apiKey string
+		var printerID, name, ipAddress, apiKey, ptype, serial string
 		var toolheads int
-		if err := rows.Scan(&printerID, &name, &ipAddress, &apiKey, &toolheads); err != nil {
+		if err := rows.Scan(&printerID, &name, &ipAddress, &apiKey, &toolheads, &ptype, &serial); err != nil {
 			return nil, fmt.Errorf("failed to scan printer config row: %w", err)
+		}
+		if ptype == "" {
+			ptype = PrinterTypePrusaLink
 		}
 		configs[printerID] = PrinterConfig{
 			Name:      name,
 			IPAddress: ipAddress,
 			APIKey:    apiKey,
 			Toolheads: toolheads,
+			Type:      ptype,
+			Serial:    serial,
 		}
 	}
 
@@ -732,10 +753,14 @@ func (b *FilamentBridge) SavePrinterConfig(printerID string, config PrinterConfi
 	b.mutex.Lock()
 	defer b.mutex.Unlock()
 
+	ptype := config.Type
+	if ptype == "" {
+		ptype = PrinterTypePrusaLink
+	}
 	_, err := b.db.Exec(`
-		INSERT OR REPLACE INTO printer_configs (printer_id, name, ip_address, api_key, toolheads)
-		VALUES (?, ?, ?, ?, ?)
-	`, printerID, config.Name, config.IPAddress, config.APIKey, config.Toolheads)
+		INSERT OR REPLACE INTO printer_configs (printer_id, name, ip_address, api_key, toolheads, type, serial)
+		VALUES (?, ?, ?, ?, ?, ?, ?)
+	`, printerID, config.Name, config.IPAddress, config.APIKey, config.Toolheads, ptype, config.Serial)
 	if err != nil {
 		return fmt.Errorf("failed to save printer config: %w", err)
 	}
@@ -1479,12 +1504,12 @@ func (b *FilamentBridge) MonitorPrinters() {
 		return
 	}
 
-	// Monitor each printer using PrusaLink. Printers are polled concurrently but
-	// the cycle waits for all of them: callers broadcast status immediately
-	// afterwards, and returning early would leave that broadcast reading a
-	// cycle-old cache and polling the printers a second time to catch up. Each
-	// printer's poll is bounded by PrusaLinkTimeout, so the wait cannot outlast
-	// the poll interval by any meaningful margin.
+	// Monitor each printer with the backend for its type. Printers are polled
+	// concurrently but the cycle waits for all of them: callers broadcast status
+	// immediately afterwards, and returning early would leave that broadcast
+	// reading a cycle-old cache and polling the printers a second time to catch
+	// up. Each printer's poll is bounded by PrusaLinkTimeout, so the wait cannot
+	// outlast the poll interval by any meaningful margin.
 	var wg sync.WaitGroup
 	for printerID, printerConfig := range configSnapshot.Printers {
 		if printerID == "no_printers" {
@@ -1493,12 +1518,22 @@ func (b *FilamentBridge) MonitorPrinters() {
 		wg.Add(1)
 		go func(printerID string, config PrinterConfig) {
 			defer wg.Done()
-			if err := b.monitorPrusaLink(printerID, config); err != nil {
+			if err := b.monitorPrinter(printerID, config); err != nil {
 				log.Printf("Error monitoring printer %s (%s): %v", config.IPAddress, printerID, err)
 			}
 		}(printerID, printerConfig)
 	}
 	wg.Wait()
+}
+
+// monitorPrinter dispatches to the monitoring backend for the printer's type.
+func (b *FilamentBridge) monitorPrinter(printerID string, config PrinterConfig) error {
+	switch config.Type {
+	case PrinterTypeBambu:
+		return b.monitorBambu(printerID, config)
+	default: // "" or PrinterTypePrusaLink
+		return b.monitorPrusaLink(printerID, config)
+	}
 }
 
 // activeJob is the persisted in-flight print for a single printer.
@@ -2188,6 +2223,19 @@ func (b *FilamentBridge) GetStatus() (*PrinterStatus, error) {
 				status.Printers[printerID] = PrinterData{
 					Name:  printerName,
 					State: state,
+				}
+				continue
+			}
+
+			// A Bambu printer has no PrusaLink status endpoint to poll: its state
+			// only ever arrives through the monitor's MQTT client, which caches it
+			// above. With nothing cached yet (monitor has not run, or web-only
+			// mode) the honest answer is offline rather than a failed HTTP poll
+			// against a printer that does not serve one.
+			if printerConfig.Type == PrinterTypeBambu {
+				status.Printers[printerID] = PrinterData{
+					Name:  printerName,
+					State: StateOffline,
 				}
 				continue
 			}
