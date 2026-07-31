@@ -41,6 +41,7 @@ const (
 	ConfigKeySpoolmanPassword                = "spoolman_password"
 	ConfigKeyAutoAssignPreviousSpoolEnabled  = "auto_assign_previous_spool_enabled"
 	ConfigKeyAutoAssignPreviousSpoolLocation = "auto_assign_previous_spool_location"
+	ConfigKeyAutoAssignPreviousSpoolRemember = "auto_assign_previous_spool_remember_location"
 	ConfigKeyPrintHistoryEnabled             = "print_history_enabled"
 	ConfigKeyRunoutWarningEnabled            = "runout_warning_enabled"
 	ConfigKeyRunoutPauseEnabled              = "runout_pause_enabled"

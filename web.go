@@ -713,9 +713,16 @@ func (ws *WebServer) getAutoAssignPreviousSpoolHandler(c *gin.Context) {
 		return
 	}
 
+	remember, err := ws.bridge.GetAutoAssignPreviousSpoolRemember()
+	if err != nil {
+		internalError(c, err)
+		return
+	}
+
 	c.JSON(http.StatusOK, gin.H{
 		"enabled":  enabled,
 		"location": location,
+		"remember": remember,
 	})
 }
 
@@ -726,6 +733,7 @@ func (ws *WebServer) updateAutoAssignPreviousSpoolHandler(c *gin.Context) {
 	var req struct {
 		Enabled  bool   `json:"enabled"`
 		Location string `json:"location"`
+		Remember bool   `json:"remember"`
 	}
 
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -741,6 +749,12 @@ func (ws *WebServer) updateAutoAssignPreviousSpoolHandler(c *gin.Context) {
 
 	// Update location setting
 	if err := ws.bridge.SetAutoAssignPreviousSpoolLocation(req.Location); err != nil {
+		internalError(c, err)
+		return
+	}
+
+	// Update remember-previous-location setting
+	if err := ws.bridge.SetAutoAssignPreviousSpoolRemember(req.Remember); err != nil {
 		internalError(c, err)
 		return
 	}
