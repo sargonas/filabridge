@@ -5,6 +5,22 @@ All notable changes to FilaBridge will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v1.2.0] - 2026-07-31
+
+### Other
+
+- Merge pull request #40 from sargonas/bambu-exploration
+- fix bambu dashboard status to read state from mqtt
+- Merge branch 'main' into bambu-exploration
+- Merge pull request #39 from sargonas/connection-pool-fix
+- New default home for each spool detected from last location
+- fix for too many connections over longer prints
+- Merge branch 'main' into bambu-exploration
+- Merge branch 'v1-final-prep'
+- initial bambu suppost pass
+- fixed printer API key display, and removed dead location code found while auditing for orphaned features
+- fixed Spoolman location handling, and added a clear loaded button
+
 ## [v1.1.0] - 2026-07-19
 
 ### Other
