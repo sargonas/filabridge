@@ -246,6 +246,24 @@ func bambuStateIsTerminal(state string) bool {
 	return false
 }
 
+// bambuDashboardState maps Bambu's gcode_state onto the state vocabulary the
+// rest of FilaBridge speaks, so a Bambu printer's badge reads the same as a
+// PrusaLink one. PREPARE counts as printing: the job is already in flight.
+func bambuDashboardState(state string) string {
+	switch state {
+	case bambuStateRunning, bambuStatePrepare:
+		return StatePrinting
+	case bambuStatePause:
+		return StatePaused
+	case bambuStateFinish:
+		return StateFinished
+	case bambuStateFailed:
+		return StateError
+	default: // IDLE, or anything the printer reports that we do not model
+		return StateIdle
+	}
+}
+
 // bambuToToolheadUsage converts slice_info's 1-based filament ids to
 // FilaBridge's 0-based toolhead numbering (external spool / AMS slot 1 -> 0).
 func bambuToToolheadUsage(byFilament map[int]float64) map[int]float64 {
@@ -312,25 +330,37 @@ func (b *FilamentBridge) fetchBambuUsage(config PrinterConfig, gcodeFile string)
 // scaling a cancelled/failed print by the progress seen. State is read from the
 // persistent MQTT client's cache.
 func (b *FilamentBridge) monitorBambu(printerID string, config PrinterConfig) error {
+	// Every exit below records the printer's state in the shared status cache:
+	// there is no PrusaLink endpoint to fall back on, so the cache is the only
+	// way the dashboard and status broadcasts learn what a Bambu printer is doing.
 	if config.Serial == "" {
-		b.noteConnectivity(printerID, config.IPAddress, config.Name, fmt.Errorf("no serial configured"))
+		err := fmt.Errorf("no serial configured")
+		b.noteConnectivity(printerID, config.IPAddress, config.Name, err)
+		b.cachePrinterStatus(printerID, StateOffline, err)
 		return nil
 	}
 	client := b.ensureBambuClient(printerID, config)
 	if !client.isConnected() {
-		b.noteConnectivity(printerID, config.IPAddress, config.Name, fmt.Errorf("MQTT not connected"))
+		err := fmt.Errorf("MQTT not connected")
+		b.noteConnectivity(printerID, config.IPAddress, config.Name, err)
+		b.cachePrinterStatus(printerID, StateOffline, err)
 		return nil
 	}
 	b.noteConnectivity(printerID, config.IPAddress, config.Name, nil)
 
 	report, ok := client.snapshot()
 	if !ok {
-		return nil // connected, awaiting the first report
+		// Connected, awaiting the first report. Idle is the honest reading: the
+		// printer is reachable, we just do not know what it is doing yet.
+		b.cachePrinterStatus(printerID, StateIdle, nil)
+		return nil
 	}
 	p := report.Print
 	state := p.GcodeState
 	jobName := bambuJobName(report)
 	currentFile := p.GcodeFile
+
+	b.cachePrinterStatus(printerID, bambuDashboardState(state), nil)
 
 	active, err := b.getActiveJob(printerID)
 	if err != nil {

@@ -2227,6 +2227,19 @@ func (b *FilamentBridge) GetStatus() (*PrinterStatus, error) {
 				continue
 			}
 
+			// A Bambu printer has no PrusaLink status endpoint to poll: its state
+			// only ever arrives through the monitor's MQTT client, which caches it
+			// above. With nothing cached yet (monitor has not run, or web-only
+			// mode) the honest answer is offline rather than a failed HTTP poll
+			// against a printer that does not serve one.
+			if printerConfig.Type == PrinterTypeBambu {
+				status.Printers[printerID] = PrinterData{
+					Name:  printerName,
+					State: StateOffline,
+				}
+				continue
+			}
+
 			client := b.prusaClientFor(printerID, printerConfig, configSnapshot)
 
 			// Get current status

@@ -179,6 +179,74 @@ func TestBambuStatePredicates(t *testing.T) {
 	}
 }
 
+func TestBambuDashboardState(t *testing.T) {
+	cases := map[string]string{
+		bambuStateRunning: StatePrinting,
+		bambuStatePrepare: StatePrinting,
+		bambuStatePause:   StatePaused,
+		bambuStateFinish:  StateFinished,
+		bambuStateFailed:  StateError,
+		bambuStateIdle:    StateIdle,
+		"":                StateIdle,
+		"SOMETHING_NEW":   StateIdle,
+	}
+	for state, want := range cases {
+		if got := bambuDashboardState(state); got != want {
+			t.Errorf("bambuDashboardState(%q) = %q, want %q", state, got, want)
+		}
+	}
+}
+
+// TestBambuStatusComesFromCacheNotPrusaLink: a Bambu printer's dashboard state
+// is served from the status cache the MQTT monitor fills, and it is never polled
+// over PrusaLink. The Bambu printer here points at a working PrusaLink server on
+// purpose, so a regression that polls it would report that server's IDLE instead
+// of the offline/cached answer.
+func TestBambuStatusComesFromCacheNotPrusaLink(t *testing.T) {
+	printer := newFakePrusaLink(t)
+	spoolman := newFakeSpoolman(t)
+	b := newTestBridge(t, printer, spoolman)
+
+	if err := b.SavePrinterConfig("printer_bambu", PrinterConfig{
+		Name: "X1C", IPAddress: printer.Addr(), APIKey: "accesscode", Toolheads: 4,
+		Type: PrinterTypeBambu, Serial: "01S00A1234567890",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := LoadConfig(b)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := b.UpdateConfig(cfg); err != nil {
+		t.Fatal(err)
+	}
+
+	// Nothing cached yet, so offline rather than the IDLE the PrusaLink fake
+	// would happily answer with.
+	status, err := b.GetStatus()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := status.Printers["printer_bambu"].State; got != StateOffline {
+		t.Fatalf("uncached Bambu state = %q, want %q", got, StateOffline)
+	}
+
+	// Once the monitor has cached MQTT state, that is what the dashboard shows.
+	b.cachePrinterStatus("printer_bambu", StatePrinting, nil)
+	status, err = b.GetStatus()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := status.Printers["printer_bambu"].State; got != StatePrinting {
+		t.Fatalf("cached Bambu state = %q, want %q", got, StatePrinting)
+	}
+
+	// The PrusaLink printer alongside it is still polled as usual.
+	if got := status.Printers["printer_test"].State; got != StateIdle {
+		t.Fatalf("PrusaLink printer state = %q, want %q", got, StateIdle)
+	}
+}
+
 func TestBambuJobName(t *testing.T) {
 	if n := bambuJobName(bambuReport{}); n != "No active job" {
 		t.Errorf("empty report name = %q", n)
