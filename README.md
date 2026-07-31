@@ -33,7 +33,7 @@ Spoolman is an excellent tool to track one's filament inventory. However, manual
 - **Smart Scanning**: Two-step NFC workflow - scan spool + location for instant assignment
 - **Quick-Assign Tags**: Single-printer setups get one-scan tags that assign a spool straight to the printer, no location tag needed
 - **Location Tracking**: Track spools in custom locations (dryboxes) or printer toolheads
-- **Smart Housekeeping**: If a new spool is "loaded" to a printer, the previous will be returned to a pre-set default location
+- **Smart Housekeeping**: If a new spool is "loaded" to a printer, the previous will be returned to a pre-set default location, or optionally to whichever drybox or shelf it came from
 
 ## Why FilaBridge?
 
@@ -219,6 +219,7 @@ FilaBridge keeps each spool's Spoolman location in step with its toolhead assign
 
 - **Assigning a spool** sets its Spoolman location to `"PrinterName - ToolheadName"` (e.g. `CORE One - Toolhead 0`), where `ToolheadName` is the custom name you gave the toolhead or the default `Toolhead N`. Spoolman creates the location automatically the first time it's used, no need to pre-create it.
 - **Unassigning a spool**, or loading a new spool over an existing one, moves the displaced spool to your configured default storage location (see the auto-assign setting in Advanced Settings). If no default is configured, the spool's location is simply cleared.
+- **Returning a spool to where it came from** is optional, for setups where every spool has its own home rather than one shared bin. Tick "Return each spool to the location it came from" under the auto-assign setting and FilaBridge notes each spool's location as it goes onto a toolhead, then sends it back there when it comes off. Spools it has no location for yet, ones that were already loaded when you turned the option on, or ones imported from Spoolman, fall back to the default location.
 
 ### NFC Tag / QR Code Management
 
@@ -345,6 +346,7 @@ filabridge/
 7. **Spool locations not moving to a default location when unloaded**:
    - Spool locations follow toolhead assignments automatically (see [Spoolman Location Sync](#spoolman-location-sync)); no manual location setup is required.
    - To have unloaded spools return to a storage location instead of having their location cleared, enable "automatically move spools back to a default location" in Advanced Settings and set a location that exists in Spoolman.
+   - To have each spool go back to its own drybox or shelf instead of one shared location, also tick "Return each spool to the location it came from". A spool that FilaBridge has not seen come from anywhere yet still uses the default location.
 
 ### Logs
 

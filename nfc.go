@@ -280,6 +280,12 @@ func (b *FilamentBridge) AssignSpoolToLocation(spoolID int, printerName string, 
 			return fmt.Errorf("failed to update Spoolman location for spool %d: %w", spoolID, err)
 		}
 
+		// Putting a spool somewhere makes that its home, so it comes back here
+		// after its next stint on a toolhead. Recorded even when the
+		// remember-previous-location mode is off (it costs nothing here) so the
+		// mode has locations to work with as soon as it is turned on.
+		b.rememberSpoolHome(spoolID, locationName)
+
 		log.Printf("Successfully assigned spool %d to location '%s'", spoolID, locationName)
 	}
 

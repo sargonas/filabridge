@@ -277,6 +277,150 @@ func TestRelocateToConfiguredEmptyLocation(t *testing.T) {
 	}
 }
 
+// TestRememberPreviousLocationRoundTrip: with the remember mode on, a spool
+// returns to the location it was loaded from rather than to the global default,
+// while a spool with no remembered location still falls back to the default.
+func TestRememberPreviousLocationRoundTrip(t *testing.T) {
+	ws, _, spoolman := newTestServer(t)
+	spoolman.Spools[1] = &fakeSpool{ID: 1, Name: "Red", RemainingWeight: 500, Location: "Drybox 3"}
+	spoolman.Spools[2] = &fakeSpool{ID: 2, Name: "Blue", RemainingWeight: 500} // no location: nothing to remember
+
+	if err := ws.bridge.SetAutoAssignPreviousSpoolEnabled(true); err != nil {
+		t.Fatal(err)
+	}
+	if err := ws.bridge.SetAutoAssignPreviousSpoolLocation("Storage"); err != nil {
+		t.Fatal(err)
+	}
+	if err := ws.bridge.SetAutoAssignPreviousSpoolRemember(true); err != nil {
+		t.Fatal(err)
+	}
+
+	// Spool 1 goes on the toolhead; "Drybox 3" is remembered as where it came from
+	doJSON(t, ws, http.MethodPost, "/api/map_toolhead", `{"printer_name":"TestPrinter","toolhead_id":0,"spool_id":1}`)
+	if got := spoolman.Spools[1].Location; got != "TestPrinter - Toolhead 0" {
+		t.Fatalf("spool 1 location = %q, want toolhead location", got)
+	}
+
+	// Spool 2 displaces it, so spool 1 goes home to Drybox 3, not to Storage
+	rec, _ := doJSON(t, ws, http.MethodPost, "/api/map_toolhead", `{"printer_name":"TestPrinter","toolhead_id":0,"spool_id":2}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("map spool 2: %d %s", rec.Code, rec.Body.String())
+	}
+	if got := spoolman.Spools[1].Location; got != "Drybox 3" {
+		t.Fatalf("displaced spool 1 location = %q, want %q", got, "Drybox 3")
+	}
+
+	// Spool 2 had no location to remember, so unmapping falls back to the default
+	rec, _ = doJSON(t, ws, http.MethodPost, "/api/map_toolhead", `{"printer_name":"TestPrinter","toolhead_id":0,"spool_id":0}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("unmap: %d %s", rec.Code, rec.Body.String())
+	}
+	if got := spoolman.Spools[2].Location; got != "Storage" {
+		t.Fatalf("spool 2 location = %q, want fallback to %q", got, "Storage")
+	}
+}
+
+// TestRememberPreviousLocationNeverRemembersToolhead: a toolhead is not a place
+// a spool can be sent back to, so a spool already sitting at a toolhead location
+// in Spoolman when it is mapped (imported mappings, or a location set by hand)
+// falls back to the default location instead of "returning" to that toolhead.
+func TestRememberPreviousLocationNeverRemembersToolhead(t *testing.T) {
+	ws, _, spoolman := newTestServer(t)
+	spoolman.Spools[1] = &fakeSpool{ID: 1, Name: "Red", RemainingWeight: 500, Location: "TestPrinter - Toolhead 0"}
+
+	if err := ws.bridge.SetAutoAssignPreviousSpoolEnabled(true); err != nil {
+		t.Fatal(err)
+	}
+	if err := ws.bridge.SetAutoAssignPreviousSpoolLocation("Storage"); err != nil {
+		t.Fatal(err)
+	}
+	if err := ws.bridge.SetAutoAssignPreviousSpoolRemember(true); err != nil {
+		t.Fatal(err)
+	}
+
+	doJSON(t, ws, http.MethodPost, "/api/map_toolhead", `{"printer_name":"TestPrinter","toolhead_id":0,"spool_id":1}`)
+	rec, _ := doJSON(t, ws, http.MethodPost, "/api/map_toolhead", `{"printer_name":"TestPrinter","toolhead_id":0,"spool_id":0}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("unmap: %d %s", rec.Code, rec.Body.String())
+	}
+	if got := spoolman.Spools[1].Location; got != "Storage" {
+		t.Fatalf("spool location = %q, want fallback to %q", got, "Storage")
+	}
+}
+
+// TestRememberPreviousLocationSurvivesRepeatedLoads: a spool's home holds up
+// across repeated load/unload cycles rather than drifting to the toolhead.
+func TestRememberPreviousLocationSurvivesRepeatedLoads(t *testing.T) {
+	ws, _, spoolman := newTestServer(t)
+	spoolman.Spools[1] = &fakeSpool{ID: 1, Name: "Red", RemainingWeight: 500, Location: "Drybox 3"}
+
+	if err := ws.bridge.SetAutoAssignPreviousSpoolEnabled(true); err != nil {
+		t.Fatal(err)
+	}
+	if err := ws.bridge.SetAutoAssignPreviousSpoolRemember(true); err != nil {
+		t.Fatal(err)
+	}
+
+	for i := 0; i < 3; i++ {
+		doJSON(t, ws, http.MethodPost, "/api/map_toolhead", `{"printer_name":"TestPrinter","toolhead_id":0,"spool_id":1}`)
+		rec, _ := doJSON(t, ws, http.MethodPost, "/api/map_toolhead", `{"printer_name":"TestPrinter","toolhead_id":0,"spool_id":0}`)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("cycle %d unmap: %d %s", i, rec.Code, rec.Body.String())
+		}
+		if got := spoolman.Spools[1].Location; got != "Drybox 3" {
+			t.Fatalf("cycle %d: spool location = %q, want %q", i, got, "Drybox 3")
+		}
+	}
+}
+
+// TestRememberPreviousLocationOffUsesDefault: leaving the remember mode off
+// keeps the pre-existing behavior of sending every spool to the one default
+// location, even when its previous location is known.
+func TestRememberPreviousLocationOffUsesDefault(t *testing.T) {
+	ws, _, spoolman := newTestServer(t)
+	spoolman.Spools[1] = &fakeSpool{ID: 1, Name: "Red", RemainingWeight: 500, Location: "Drybox 3"}
+
+	if err := ws.bridge.SetAutoAssignPreviousSpoolEnabled(true); err != nil {
+		t.Fatal(err)
+	}
+	if err := ws.bridge.SetAutoAssignPreviousSpoolLocation("Storage"); err != nil {
+		t.Fatal(err)
+	}
+
+	doJSON(t, ws, http.MethodPost, "/api/map_toolhead", `{"printer_name":"TestPrinter","toolhead_id":0,"spool_id":1}`)
+	doJSON(t, ws, http.MethodPost, "/api/map_toolhead", `{"printer_name":"TestPrinter","toolhead_id":0,"spool_id":0}`)
+
+	if got := spoolman.Spools[1].Location; got != "Storage" {
+		t.Fatalf("spool location = %q, want %q", got, "Storage")
+	}
+}
+
+// TestScannedStorageLocationBecomesHome: assigning a spool to a storage location
+// (the NFC/QR path) makes that its home, so it returns there after its next
+// stint on a toolhead.
+func TestScannedStorageLocationBecomesHome(t *testing.T) {
+	ws, _, spoolman := newTestServer(t)
+	spoolman.Spools[1] = &fakeSpool{ID: 1, Name: "Red", RemainingWeight: 500}
+
+	if err := ws.bridge.SetAutoAssignPreviousSpoolEnabled(true); err != nil {
+		t.Fatal(err)
+	}
+	if err := ws.bridge.SetAutoAssignPreviousSpoolRemember(true); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := ws.bridge.AssignSpoolToLocation(1, "", 0, "Shelf A", false); err != nil {
+		t.Fatalf("assign to storage location: %v", err)
+	}
+
+	doJSON(t, ws, http.MethodPost, "/api/map_toolhead", `{"printer_name":"TestPrinter","toolhead_id":0,"spool_id":1}`)
+	doJSON(t, ws, http.MethodPost, "/api/map_toolhead", `{"printer_name":"TestPrinter","toolhead_id":0,"spool_id":0}`)
+
+	if got := spoolman.Spools[1].Location; got != "Shelf A" {
+		t.Fatalf("spool location = %q, want %q", got, "Shelf A")
+	}
+}
+
 // TestLocationsListEmptyAndTypeToolheads: /api/locations reads the predefined
 // locations setting so empty locations (no spools) still appear, and this
 // instance's toolhead locations are typed "printer" so the storage dropdown

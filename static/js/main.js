@@ -374,15 +374,18 @@ function loadAutoAssignSettings() {
             
             const enabled = data.enabled || false;
             const location = data.location || '';
-            
+            const remember = data.remember || false;
+
             document.getElementById('autoAssignPreviousSpoolEnabled').checked = enabled;
-            
-            // Show/hide location dropdown based on checkbox
-            const locationGroup = document.getElementById('autoAssignLocationGroup');
-            if (locationGroup) {
-                locationGroup.style.display = enabled ? 'block' : 'none';
+
+            const rememberCheckbox = document.getElementById('autoAssignPreviousSpoolRemember');
+            if (rememberCheckbox) {
+                rememberCheckbox.checked = remember;
             }
-            
+
+            // Show/hide the dependent options based on the master checkbox
+            setAutoAssignOptionsVisible(enabled);
+
             // Load locations and populate dropdown
             return fetch('/api/locations')
                 .then(response => response.json())
@@ -437,19 +440,18 @@ function loadAutoAssignSettings() {
         .then(() => {
             // Set up checkbox change handler
             const checkbox = document.getElementById('autoAssignPreviousSpoolEnabled');
-            const locationGroup = document.getElementById('autoAssignLocationGroup');
-            
-            if (checkbox && locationGroup) {
+
+            if (checkbox) {
                 // Remove existing event listener if it exists
                 if (autoAssignCheckboxHandler) {
                     checkbox.removeEventListener('change', autoAssignCheckboxHandler);
                 }
-                
+
                 // Create and store the new handler function
                 autoAssignCheckboxHandler = function() {
-                    locationGroup.style.display = this.checked ? 'block' : 'none';
+                    setAutoAssignOptionsVisible(this.checked);
                 };
-                
+
                 // Add the event listener
                 checkbox.addEventListener('change', autoAssignCheckboxHandler);
             }
@@ -459,16 +461,28 @@ function loadAutoAssignSettings() {
         });
 }
 
+// Shows or hides the options that only apply while auto-assignment is enabled
+function setAutoAssignOptionsVisible(visible) {
+    ['autoAssignRememberGroup', 'autoAssignLocationGroup'].forEach(id => {
+        const group = document.getElementById(id);
+        if (group) {
+            group.style.display = visible ? 'block' : 'none';
+        }
+    });
+}
+
 function saveAutoAssignSettings() {
     const enabled = document.getElementById('autoAssignPreviousSpoolEnabled').checked;
     const locationSelect = document.getElementById('autoAssignPreviousSpoolLocation');
     const location = locationSelect ? locationSelect.value.trim() : '';
-    
+    const rememberCheckbox = document.getElementById('autoAssignPreviousSpoolRemember');
+
     const settings = {
         enabled: enabled,
-        location: location
+        location: location,
+        remember: rememberCheckbox ? rememberCheckbox.checked : false
     };
-    
+
     apiRequest('/api/config/auto-assign-previous-spool', { method: 'PUT', body: settings })
     .then(() => {
         alert('Auto-assign settings saved successfully!');
