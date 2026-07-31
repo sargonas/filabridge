@@ -1432,7 +1432,7 @@ func (b *FilamentBridge) UnmapToolhead(printerName string, toolheadID int) error
 		return fmt.Errorf("failed to get toolhead mapping: %w", err)
 	}
 
-	_, err = b.db.Exec(
+	res, err := b.db.Exec(
 		"DELETE FROM toolhead_mappings WHERE printer_name = ? AND toolhead_id = ?",
 		printerName, toolheadID,
 	)
@@ -1441,7 +1441,18 @@ func (b *FilamentBridge) UnmapToolhead(printerName string, toolheadID int) error
 		return fmt.Errorf("failed to unmap toolhead: %w", err)
 	}
 
-	log.Printf("Unmapped %s toolhead %d", printerName, toolheadID)
+	// Only announce an unmap that actually removed something. Unmapping an
+	// already-empty toolhead is a no-op, and logging it made duplicate requests
+	// look like repeated real unmaps.
+	var removed int64
+	if res != nil {
+		if n, err := res.RowsAffected(); err == nil {
+			removed = n
+		}
+	}
+	if removed > 0 {
+		log.Printf("Unmapped %s toolhead %d", printerName, toolheadID)
+	}
 
 	// Sync Spoolman: the unloaded spool returns to storage (or its location is cleared)
 	if spoolID > 0 {

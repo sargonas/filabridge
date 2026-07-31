@@ -1,7 +1,11 @@
 package main
 
 import (
+	"bytes"
 	"database/sql"
+	"log"
+	"os"
+	"strings"
 	"testing"
 )
 
@@ -63,6 +67,40 @@ func TestSchemaMigrations(t *testing.T) {
 	}
 	if len(history) != 1 || history[0].Status != "completed" {
 		t.Errorf("legacy history migration: %+v", history)
+	}
+}
+
+// TestUnmapToolheadLogsOnlyRealUnmaps: unmapping a toolhead that holds nothing
+// is a no-op and stays silent. It used to log a real-looking "Unmapped" line
+// either way, so duplicate unassign requests read as repeated genuine unmaps.
+func TestUnmapToolheadLogsOnlyRealUnmaps(t *testing.T) {
+	printer := newFakePrusaLink(t)
+	spoolman := newFakeSpoolman(t)
+	spoolman.Spools[1] = &fakeSpool{ID: 1, Name: "Red", RemainingWeight: 500}
+	bridge := newTestBridge(t, printer, spoolman)
+
+	if err := bridge.SetToolheadMapping("TestPrinter", 0, 1); err != nil {
+		t.Fatal(err)
+	}
+
+	var logged bytes.Buffer
+	log.SetOutput(&logged)
+	t.Cleanup(func() { log.SetOutput(os.Stderr) })
+
+	if err := bridge.UnmapToolhead("TestPrinter", 0); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(logged.String(), "Unmapped TestPrinter toolhead 0") {
+		t.Fatalf("a real unmap must be logged, got: %q", logged.String())
+	}
+
+	// The same request again removes nothing, so it must not claim otherwise.
+	logged.Reset()
+	if err := bridge.UnmapToolhead("TestPrinter", 0); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(logged.String(), "Unmapped") {
+		t.Errorf("unmapping an empty toolhead logged an unmap: %q", logged.String())
 	}
 }
 

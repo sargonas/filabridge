@@ -59,11 +59,15 @@ async function loadAvailableSpools(dropdown) {
         const optionsContainer = dropdown.querySelector('.dropdown-options-container');
         if (!optionsContainer) return;
         
-        // Clear existing options except "Empty"
+        // Clear existing options except "Empty". A CLONE of the Empty option is
+        // re-appended, never the original node: every rebuild attaches a click
+        // handler to each option below, so reusing the node would stack one more
+        // handler on it per refresh and fire that many unassign requests on a
+        // single click. Clones carry no listeners, so each rebuild starts clean.
         const selectOption = optionsContainer.querySelector('.dropdown-option[data-value=""]');
         optionsContainer.innerHTML = '';
         if (selectOption) {
-            optionsContainer.appendChild(selectOption);
+            optionsContainer.appendChild(selectOption.cloneNode(true));
         }
         
         // Add available spools
@@ -304,7 +308,11 @@ async function autoMapSpool(dropdown, selectedValue, selectedText, selectedColor
             body: JSON.stringify({
                 printer_name: printerName,
                 toolhead_id: parseInt(toolheadId),
-                spool_id: selectedValue === '0' ? 0 : parseInt(selectedValue)
+                // "" (the Empty option) and "0" both mean unassign. parseInt('')
+                // is NaN, which JSON.stringify would send as null, so fold every
+                // non-numeric value to 0 rather than relying on the server
+                // reading null back as the unassign sentinel.
+                spool_id: parseInt(selectedValue, 10) || 0
             })
         });
         
