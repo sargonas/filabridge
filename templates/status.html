@@ -7,7 +7,7 @@
         <div class="welcome-banner">
             <h3>🎉 Welcome to FilaBridge!</h3>
             <p>This appears to be your first time running FilaBridge. Let's get you set up with your printer configuration.</p>
-            <div style="background: rgba(255,255,255,0.1); padding: 20px; border-radius: 8px; margin: 20px 0;">
+            <div class="setup-steps">
                 <h4 style="margin-top: 0;">Quick Setup Steps:</h4>
                 <ol>
                     <li><strong>Start Spoolman:</strong> <code>docker run -d --name spoolman -p 8000:8000 -v spoolman-data:/home/spoolman/data ghcr.io/donkie/spoolman:latest</code></li>
@@ -21,7 +21,7 @@
         {{end}}
 
         {{if not .SpoolmanConnected}}
-        <div style="background: #fff3cd; border: 1px solid #ffeaa7; color: #856404; padding: 20px; margin: 20px 0; border-radius: 8px;">
+        <div class="alert alert-warning">
             <h4 style="margin-top: 0;">⚠️ Spoolman Connection Issue</h4>
             <p>Cannot connect to Spoolman. Please ensure Spoolman is running and the URL is correct.</p>
             {{if .SpoolmanError}}
@@ -33,13 +33,13 @@
         {{if .HasRunoutWarnings}}
         <div id="runout-warnings-container">
             {{range .RunoutWarnings}}
-            <div class="runout-warning" data-warning-id="{{.ID}}" style="background: #fff3cd; border: 1px solid #ffeaa7; color: #856404; padding: 20px; margin: 20px 0; border-radius: 8px;">
+            <div class="runout-warning alert alert-warning" data-warning-id="{{.ID}}">
                 <h4 style="margin-top: 0;">⚠️ Low Filament Warning</h4>
                 <p><strong>Printer:</strong> {{.PrinterName}} (Toolhead {{.ToolheadID}})</p>
                 <p><strong>Spool:</strong> [{{.SpoolID}}] {{.SpoolName}} - {{printf "%.1f" .RemainingWeight}}g remaining</p>
                 <p><strong>Print needs:</strong> ~{{printf "%.1f" .RequiredWeight}}g to finish</p>
                 {{if .AutoPaused}}<p><strong>The print has been paused.</strong> Acknowledging will resume it (or swap the spool first, then acknowledge).</p>{{end}}
-                <button class="btn" onclick="acknowledgeRunoutWarning('{{.ID}}')" style="background: #e0a800; margin-top: 10px;">Acknowledge{{if .AutoPaused}} &amp; Resume{{end}}</button>
+                <button class="btn btn-warning" onclick="acknowledgeRunoutWarning('{{.ID}}')">Acknowledge{{if .AutoPaused}} &amp; Resume{{end}}</button>
             </div>
             {{end}}
         </div>
@@ -48,14 +48,14 @@
         {{if .HasPrintErrors}}
         <div id="print-errors-container">
             {{range .PrintErrors}}
-            <div class="print-error" data-error-id="{{.ID}}" style="background: #f8d7da; border: 1px solid #f5c6cb; color: #721c24; padding: 20px; margin: 20px 0; border-radius: 8px;">
+            <div class="print-error alert alert-danger" data-error-id="{{.ID}}">
                 <h4 style="margin-top: 0;">⚠️ Print Processing Failed</h4>
                 <p><strong>Printer:</strong> {{.PrinterName}}</p>
                 <p><strong>File:</strong> {{.Filename}}</p>
                 <p><strong>Time:</strong> <span class="error-timestamp" data-timestamp="{{.Timestamp.Format "2006-01-02T15:04:05Z07:00"}}">{{.Timestamp.Format "2006-01-02 15:04:05"}}</span></p>
                 <p><strong>Error:</strong> {{.Error}}</p>
                 <p><strong>Action Required:</strong> Please update Spoolman manually with the correct filament usage for this print.</p>
-                <button class="btn" onclick="acknowledgeError('{{.ID}}')" style="background: #dc3545; margin-top: 10px;">Acknowledge</button>
+                <button class="btn btn-danger" onclick="acknowledgeError('{{.ID}}')">Acknowledge</button>
             </div>
             {{end}}
         </div>
@@ -105,7 +105,7 @@
                                     {{end}}
                                     {{end}}
                                     {{else}}
-                                    <div class="color-swatch" style="background-color: #ccc;"></div>
+                                    <div class="color-swatch"></div>
                                     <span>Empty</span>
                                     {{end}}
                                 </div>
@@ -117,7 +117,7 @@
                                 </div>
                                 <div class="dropdown-options-container">
                                     <div class="dropdown-option" data-value="" data-color="">
-                                        <div class="color-swatch" style="background-color: #ccc;"></div>
+                                        <div class="color-swatch"></div>
                                         <div class="option-text">Empty</div>
                                     </div>
                                     {{range $.Spools}}

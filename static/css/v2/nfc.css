@@ -1,0 +1,162 @@
+/*
+ * v2 skin - NFC Management tab. Overrides static/css/nfc.css, which loads first.
+ *
+ * The tab's structure (a list panel beside a display panel) already matches
+ * upstream's list/inspector split, so only the surfaces, borders and type need
+ * re-pointing at the tokens. Layout, grid tracks and the subgrid alignment in
+ * the classic sheet are deliberately left alone.
+ */
+
+.nfc-list-panel,
+.nfc-display-panel {
+    background: var(--v2-surface);
+    border: 1px solid var(--v2-border);
+    border-radius: var(--v2-radius-lg);
+}
+
+.nfc-search-container {
+    border-bottom: 1px solid var(--v2-border-soft);
+    padding: 10px;
+}
+
+.nfc-search-input {
+    background: var(--v2-input-bg);
+    border: 1px solid var(--v2-border-input);
+    border-radius: var(--v2-radius);
+    color: var(--v2-text);
+    font-size: 12.5px;
+    padding: 7px 10px;
+}
+
+.nfc-search-input::placeholder {
+    color: var(--v2-text-faint);
+}
+
+.nfc-search-input:focus {
+    background: var(--v2-input-bg);
+    border-color: var(--v2-accent);
+}
+
+.nfc-list-container {
+    padding: 8px;
+}
+
+.nfc-list-item {
+    background: var(--v2-surface-sunken);
+    border: 1px solid var(--v2-border-soft);
+    border-radius: var(--v2-radius-md);
+    padding: 9px 10px;
+    margin-bottom: 6px;
+    gap: 10px;
+    transition: background 0.12s, border-color 0.12s;
+}
+
+.nfc-list-item:hover {
+    background: var(--v2-surface-raised);
+    border-color: var(--v2-border-strong);
+}
+
+/* Selection is the accent wash upstream uses for an active row, replacing the
+   classic green. */
+.nfc-list-item.selected {
+    background: var(--v2-accent-wash);
+    border-color: var(--v2-accent-border);
+}
+
+.nfc-list-item .color-swatch {
+    width: 18px;
+    height: 18px;
+    border-radius: var(--v2-radius-sm);
+    border: 1px solid var(--v2-swatch-border);
+}
+
+.nfc-list-item .item-name {
+    color: var(--v2-text);
+    font-size: 12.5px;
+    font-weight: 500;
+}
+
+.nfc-list-item .item-details {
+    color: var(--v2-text-dim);
+    font-size: 11.5px;
+}
+
+.nfc-no-selection {
+    color: var(--v2-text-faint);
+}
+
+.nfc-no-selection h4 {
+    color: var(--v2-text-dim);
+    font-size: 13px;
+}
+
+.nfc-no-selection p {
+    font-size: 12.5px;
+}
+
+.nfc-empty-message {
+    color: var(--v2-text-faint);
+    font-size: 12.5px;
+}
+
+/* --- Generated tag display ----------------------------------------------- */
+.nfc-qr-display {
+    background: var(--v2-surface-sunken);
+    border: 1px solid var(--v2-border-soft);
+    border-radius: var(--v2-radius-xl);
+    padding: 20px;
+}
+
+.nfc-selected-info h4 {
+    color: var(--v2-text);
+    font-size: 14px;
+    font-weight: 600;
+}
+
+.nfc-selected-info div {
+    color: var(--v2-text-dim);
+    font-size: 12.5px;
+}
+
+/* The code itself stays on white - a QR needs the contrast to scan - but its
+   frame joins the rest of the surface scale. */
+.nfc-qr-large {
+    border: 1px solid var(--v2-border-strong);
+    border-radius: var(--v2-radius-md);
+    box-shadow: none;
+}
+
+.nfc-url-large {
+    font-family: var(--v2-font-mono);
+    font-size: 11.5px;
+    color: var(--v2-text-dim);
+    background: var(--v2-input-bg);
+    border: 1px solid var(--v2-border-soft);
+    border-radius: var(--v2-radius);
+    padding: 7px 10px;
+}
+
+.nfc-copy-btn {
+    background: none;
+    border: 1px solid var(--v2-border-strong);
+    border-radius: var(--v2-radius);
+    color: var(--v2-text-2);
+    min-width: 32px;
+    height: 32px;
+    transition: border-color 0.12s, background 0.12s;
+}
+
+.nfc-copy-btn:hover {
+    background: var(--v2-accent-wash-soft);
+    border-color: var(--v2-accent);
+    transform: none;
+}
+
+.nfc-copy-btn:active {
+    transform: none;
+    background: var(--v2-accent-wash);
+}
+
+.nfc-copy-icon {
+    font-size: 14px;
+}

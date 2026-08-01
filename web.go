@@ -378,7 +378,7 @@ func (ws *WebServer) dashboardHandler(c *gin.Context) {
 
 	status, err := ws.bridge.GetStatus()
 	if err != nil {
-		c.HTML(http.StatusInternalServerError, "error.html", gin.H{
+		ws.renderPage(c, http.StatusInternalServerError, "error.html", gin.H{
 			"Error": "Failed to get printer status",
 		})
 		return
@@ -447,6 +447,20 @@ func (ws *WebServer) healthzHandler(c *gin.Context) {
 // c.JSON(http.StatusInternalServerError, gin.H{"error": ...}) boilerplate.
 func internalError(c *gin.Context, err error) {
 	c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+}
+
+// renderPage renders one of the standalone pages (the NFC scan results and the
+// error page), adding the fields every page needs on top of the handler's own
+// data. Currently that is DeveloperMode, which selects the experimental skin;
+// the dashboard passes it explicitly since it already builds a full data map.
+func (ws *WebServer) renderPage(c *gin.Context, code int, name string, data gin.H) {
+	if data == nil {
+		data = gin.H{}
+	}
+	if cfg := ws.bridge.GetConfigSnapshot(); cfg != nil {
+		data["DeveloperMode"] = cfg.DeveloperMode
+	}
+	c.HTML(code, name, data)
 }
 
 // hasConnectionErrors checks if there are connection errors
@@ -1307,7 +1321,7 @@ func (ws *WebServer) nfcAssignHandler(c *gin.Context) {
 	if spoolIDStr != "" {
 		spoolID, err = strconv.Atoi(spoolIDStr)
 		if err != nil {
-			c.HTML(http.StatusBadRequest, "nfc_error.html", gin.H{
+			ws.renderPage(c, http.StatusBadRequest, "nfc_error.html", gin.H{
 				"Error": "Invalid spool ID",
 			})
 			return
@@ -1320,7 +1334,7 @@ func (ws *WebServer) nfcAssignHandler(c *gin.Context) {
 	if locationStr != "" {
 		printerName, toolheadID, locationName, isPrinterLocation, err = ws.bridge.parseLocationParam(locationStr)
 		if err != nil {
-			c.HTML(http.StatusBadRequest, "nfc_error.html", gin.H{
+			ws.renderPage(c, http.StatusBadRequest, "nfc_error.html", gin.H{
 				"Error": err.Error(),
 			})
 			return
@@ -1330,7 +1344,7 @@ func (ws *WebServer) nfcAssignHandler(c *gin.Context) {
 	// Create or update session
 	session, err := ws.bridge.createOrUpdateSession(sessionID, spoolID, printerName, toolheadID, locationName, isPrinterLocation)
 	if err != nil {
-		c.HTML(http.StatusInternalServerError, "nfc_error.html", gin.H{
+		ws.renderPage(c, http.StatusInternalServerError, "nfc_error.html", gin.H{
 			"Error": "Failed to create session: " + err.Error(),
 		})
 		return
@@ -1341,7 +1355,7 @@ func (ws *WebServer) nfcAssignHandler(c *gin.Context) {
 		// Complete the assignment
 		err = ws.bridge.AssignSpoolToLocation(session.SpoolID, session.PrinterName, session.ToolheadID, session.LocationName, session.IsPrinterLocation)
 		if err != nil {
-			c.HTML(http.StatusInternalServerError, "nfc_error.html", gin.H{
+			ws.renderPage(c, http.StatusInternalServerError, "nfc_error.html", gin.H{
 				"Error": "Assignment failed: " + err.Error(),
 			})
 			return
@@ -1354,7 +1368,7 @@ func (ws *WebServer) nfcAssignHandler(c *gin.Context) {
 		ws.bridge.deleteSession(sessionID)
 
 		// Show success page
-		c.HTML(http.StatusOK, "nfc_success.html", gin.H{
+		ws.renderPage(c, http.StatusOK, "nfc_success.html", gin.H{
 			"SpoolID":           session.SpoolID,
 			"PrinterName":       session.PrinterName,
 			"ToolheadID":        session.ToolheadID,
@@ -1378,7 +1392,7 @@ func (ws *WebServer) nfcAssignHandler(c *gin.Context) {
 		message = "Session started. Scan a spool or location tag."
 	}
 
-	c.HTML(http.StatusOK, "nfc_progress.html", gin.H{
+	ws.renderPage(c, http.StatusOK, "nfc_progress.html", gin.H{
 		"Message":     message,
 		"SessionID":   sessionID,
 		"HasSpool":    session.HasSpool,

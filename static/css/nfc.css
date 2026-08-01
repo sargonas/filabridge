@@ -314,3 +314,16 @@
     font-size: 14px;
 }
 
+
+/* The Location Tags banner is a standard warning alert, just denser than the
+   page-level ones in status.html since it sits inside a list panel. */
+.nfc-info-banner {
+    padding: 15px;
+    margin: 0 0 15px 0;
+}
+
+.nfc-empty-message {
+    padding: 20px;
+    text-align: center;
+    color: #666;
+}

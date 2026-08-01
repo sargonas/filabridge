@@ -302,7 +302,8 @@ filabridge/
 ├── nfc.go                 # NFC session management and tag handling
 ├── web.go                 # HTTP server and API routes
 ├── templates/             # HTML templates
-├── static/                # CSS and JavaScript for the dashboard
+├── static/                # CSS, JavaScript and fonts for the dashboard
+│   └── css/v2/            # Experimental Spoolman-style skin (developer mode)
 ├── go.mod / go.sum        # Go module definition
 └── README.md              # Documentation
 ```
@@ -376,6 +377,27 @@ go test ./...
 # Same suite under the race detector (what CI runs)
 go test -race ./...
 ```
+
+### Developer mode
+
+Setting `FILABRIDGE_DEVELOPER_MODE=true` turns on features that are still under
+construction. It currently enables two:
+
+- **Bambu Lab printer support**, which is incomplete and hidden from the printer
+  configuration UI without the flag.
+- **An experimental interface skin** matching Spoolman's redesigned
+  (`client_v2`) look, so the two apps read as one system. It is a pure restyle:
+  the markup, behaviour and every element ID are shared with the default look,
+  and only the stylesheets differ. The classic interface stays the default while
+  the new one is evaluated.
+
+Neither is ready for everyday use, so leave the flag unset in a normal install.
+
+The skin lives in `static/css/v2/` and layers on top of the classic sheets rather
+than replacing them, so both looks stay in sync as features land. Its design
+tokens are ported from Spoolman's `client_v2/src/app.css`. IBM Plex Sans and Mono
+are bundled in `static/fonts/` (SIL Open Font License 1.1, see
+`static/fonts/OFL.txt`) so the interface needs no internet access.
 
 ## Contributing
 

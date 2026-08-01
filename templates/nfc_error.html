@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en"{{if .DeveloperMode}} data-theme="dark"{{end}}>
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -56,6 +56,12 @@
             background: #2980b9;
         }
     </style>
+    {{if .DeveloperMode}}
+    <!-- Experimental Spoolman-v2 skin (FILABRIDGE_DEVELOPER_MODE). Loaded after
+         the block above so it overrides it without the page needing two copies. -->
+    <link rel="stylesheet" href="/static/css/v2/tokens.css">
+    <link rel="stylesheet" href="/static/css/v2/standalone.css">
+    {{end}}
 </head>
 <body>
     <div class="container">

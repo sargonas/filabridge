@@ -1,0 +1,214 @@
+/*
+ * v2 skin - page chrome: the top bar, tab navigation and page frame.
+ * Overrides static/css/main.css and static/css/tabs.css, which load first.
+ *
+ * The classic shell is a purple gradient page holding a white rounded card.
+ * Spoolman v2 is the opposite: a flat dark app surface with a compact bar across
+ * the top. Since the markup is shared between both skins and must not change,
+ * the bar is built out of the existing .header and .tabs elements, which live in
+ * different parents and so stack as two rows. That is exactly upstream's own
+ * mobile chrome, and the two rows share a surface colour so they read as one bar.
+ */
+
+/* Strip the gradient page and the white card it framed. */
+.container {
+    max-width: none;
+    margin: 0;
+    background: none;
+    border-radius: 0;
+    box-shadow: none;
+}
+
+.content {
+    background: var(--v2-bg);
+    color: var(--v2-text);
+}
+
+/* Row 1 of the top bar: the app's identity. */
+.header {
+    background: var(--v2-surface);
+    color: var(--v2-text);
+    height: var(--v2-topbar-h);
+    padding: 0 18px;
+    display: flex;
+    align-items: center;
+    text-align: left;
+}
+
+.header h1 {
+    margin: 0;
+    font-size: 15px;
+    font-weight: 700;
+    letter-spacing: -0.01em;
+    color: var(--v2-text);
+}
+
+/* The tagline has nowhere to go in a 53px bar. It stays in the markup (and in
+   the classic skin) but is not shown here. */
+.header p {
+    display: none;
+}
+
+/* Row 2 of the top bar: navigation. Same surface as row 1, and it carries the
+   hairline that closes the bar off from the page. */
+.tabs {
+    background: var(--v2-surface);
+    border-bottom: 1px solid var(--v2-border);
+    border-radius: 0;
+    gap: 4px;
+    padding: 0 14px 8px;
+    align-items: center;
+}
+
+/* Upstream's nav is a row of pills sized to their labels, not a set of equal
+   segments - so the classic flex:1 and the green active underline both go. */
+.tab,
+a.tab {
+    flex: 0 0 auto;
+    display: flex;
+    align-items: center;
+    padding: 6px 12px;
+    border: none;
+    border-radius: var(--v2-radius);
+    background: none;
+    color: var(--v2-text-dim);
+    font-size: 13px;
+    font-weight: 400;
+    transition: background 0.12s ease, color 0.12s ease;
+}
+
+.tab:hover,
+a.tab:hover {
+    background: var(--v2-accent-wash-soft);
+    color: var(--v2-text);
+}
+
+.tab.active {
+    background: var(--v2-accent-wash);
+    color: var(--v2-accent-soft);
+    font-weight: 600;
+    border-bottom: none;
+}
+
+.tab.active:hover {
+    background: var(--v2-accent-wash);
+    color: var(--v2-accent-soft);
+}
+
+.tab-content {
+    background: var(--v2-bg);
+    color: var(--v2-text);
+    padding: 22px 24px 48px;
+}
+
+/* Headings. The classic sheets lean on em units against a 16px base; at 13px
+   those come out too small, so the scale is restated explicitly. */
+.tab-content h2 {
+    font-size: 17px;
+    font-weight: 700;
+    color: var(--v2-text);
+    margin: 0 0 4px;
+}
+
+.tab-content h3 {
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--v2-text);
+}
+
+.tab-content h4 {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--v2-text-2);
+}
+
+.section-header {
+    margin-bottom: 18px;
+}
+
+.section-header h2 {
+    color: var(--v2-text);
+}
+
+/* The subtitle under each tab's title: upstream's small dim caption. */
+.section-header p {
+    margin: 3px 0 0;
+    font-size: 12px;
+    color: var(--v2-text-dim);
+}
+
+/* Both banners were full-bleed gradients. They become ordinary raised cards with
+   an accent edge, so they sit inside the page rather than shouting over it. */
+.welcome-banner,
+.help-section {
+    background: var(--v2-surface);
+    border: 1px solid var(--v2-border);
+    border-left: 3px solid var(--v2-accent);
+    border-radius: var(--v2-radius-lg);
+    color: var(--v2-text);
+    padding: 18px 20px;
+    margin: 16px 0;
+    text-align: left;
+}
+
+.welcome-banner h3,
+.help-section h4 {
+    margin-top: 0;
+    color: var(--v2-text);
+}
+
+.welcome-banner ol,
+.help-section ol {
+    max-width: none;
+    margin: 0;
+    padding-left: 20px;
+    color: var(--v2-text-2);
+    line-height: 1.6;
+}
+
+.setup-steps {
+    background: var(--v2-surface-sunken);
+    border: 1px solid var(--v2-border-soft);
+    border-radius: var(--v2-radius-md);
+    padding: 14px 16px;
+    margin: 14px 0;
+}
+
+.app-footer {
+    color: var(--v2-text-faint);
+    font-size: 12px;
+    padding: 18px 15px 24px;
+}
+
+.app-footer a:hover {
+    color: var(--v2-accent-link);
+}
+
+@media (max-width: 600px) {
+    .header {
+        padding: 0 12px;
+    }
+
+    .header h1 {
+        font-size: 14px;
+    }
+
+    /* Upstream scrolls its mobile nav rather than wrapping it; the classic sheet
+       wraps main tabs onto several rows, which is taller than the bar allows. */
+    .tabs {
+        flex-wrap: nowrap;
+        overflow-x: auto;
+        padding: 0 8px 8px;
+    }
+
+    .tab {
+        flex: 0 0 auto;
+        white-space: nowrap;
+        padding: 6px 10px;
+        font-size: 13px;
+    }
+
+    .tab-content {
+        padding: 16px 14px 40px;
+    }
+}

@@ -1,0 +1,209 @@
+/*
+ * FilaBridge - experimental skin matching Spoolman's redesigned (client_v2)
+ * interface. Gated behind FILABRIDGE_DEVELOPER_MODE; see templates/base.html.
+ *
+ * Design tokens ported from Spoolman client_v2/src/app.css so the two apps read
+ * as one system. Only the dark theme is carried over for now; the values are
+ * upstream's verbatim, and the [data-theme='dark'] hook is already in place for
+ * a light theme to be added later without re-plumbing.
+ *
+ * The rest of the v2 sheets should reference these variables and never raw hex,
+ * so a future light theme is a matter of adding one override block here.
+ */
+
+:root {
+    /* Surfaces */
+    --v2-bg: #1f1f1f;
+    --v2-surface: #252525;
+    --v2-surface-2: #262626;
+    --v2-surface-raised: #2e2e2e;
+    --v2-surface-sunken: #1c1c1c;
+    --v2-input-bg: #1a1a1a;
+
+    /* Borders */
+    --v2-border: #333;
+    --v2-border-soft: #2b2b2b;
+    --v2-border-strong: #3d3d3d;
+    --v2-border-input: #383838;
+    --v2-hairline: rgba(255, 255, 255, 0.05);
+
+    /* Text. Upstream picked these so muted/dim/faint all clear WCAG AA (4.5:1)
+       even on the lightest surface (--v2-surface-raised), stepping in even ~7pt
+       L* increments. Don't darken --v2-text-faint further; it sits on the floor. */
+    --v2-text: #ececec;
+    --v2-text-2: #c9c9c9;
+    --v2-text-muted: #bababa;
+    --v2-text-dim: #a7a7a7;
+    --v2-text-faint: #959595;
+
+    /* Accent (warm orange). --v2-accent-fill is a separate, slightly darker tone
+       used wherever white text sits on a solid accent background: white on
+       --v2-accent is only 4.03:1 and fails AA, and no foreground colour fixes it.
+       --v2-accent itself drives links, borders, washes and focus rings, where it
+       sits on a dark surface and passes easily. Note the fill DARKENS on hover;
+       lightening it would drop back below AA. */
+    --v2-accent: #be682f;
+    --v2-accent-hover: #d47a3b;
+    --v2-accent-fill: #b2612c;
+    --v2-accent-fill-hover: #9b5526;
+    --v2-accent-link: #d0854a;
+    --v2-accent-link-hover: #e09a60;
+    --v2-accent-soft: #e0996a;
+    --v2-accent-muted: #8a6a4d;
+    --v2-accent-wash: rgba(190, 104, 47, 0.14);
+    --v2-accent-wash-soft: rgba(190, 104, 47, 0.06);
+    --v2-accent-border: #4a4239;
+
+    /* Status */
+    --v2-danger: #c4503a;
+    --v2-danger-soft: #d98a7a;
+    --v2-success: #6bb26b;
+    --v2-success-border: #3f6b3f;
+    --v2-warning-bg: #33302c;
+    --v2-warning-border: #4a4239;
+    --v2-warning-text: #d0a479;
+
+    /* Controls (toggle/progress tracks, scrollbars, colour-swatch chrome) */
+    --v2-track: #3a3a3a;
+    --v2-swatch-border: #363636;
+    --v2-swatch-border-hover: #4a4a4a;
+
+    /* Typography */
+    --v2-font-sans: 'IBM Plex Sans', system-ui, -apple-system, sans-serif;
+    --v2-font-mono: 'IBM Plex Mono', ui-monospace, monospace;
+
+    /* Radii */
+    --v2-radius-sm: 5px;
+    --v2-radius: 6px;
+    --v2-radius-md: 8px;
+    --v2-radius-lg: 10px;
+    --v2-radius-xl: 12px;
+
+    /* Layout */
+    --v2-topbar-h: 53px;
+}
+
+/* IBM Plex, self-hosted (latin subset) so the appliance stays usable with no
+   internet. SIL Open Font License 1.1 - see static/fonts/OFL.txt. */
+@font-face {
+    font-family: 'IBM Plex Sans';
+    font-style: normal;
+    font-weight: 400;
+    font-display: swap;
+    src: url('/static/fonts/ibm-plex-sans-400.woff2') format('woff2');
+}
+
+@font-face {
+    font-family: 'IBM Plex Sans';
+    font-style: normal;
+    font-weight: 500;
+    font-display: swap;
+    src: url('/static/fonts/ibm-plex-sans-500.woff2') format('woff2');
+}
+
+@font-face {
+    font-family: 'IBM Plex Sans';
+    font-style: normal;
+    font-weight: 600;
+    font-display: swap;
+    src: url('/static/fonts/ibm-plex-sans-600.woff2') format('woff2');
+}
+
+@font-face {
+    font-family: 'IBM Plex Sans';
+    font-style: normal;
+    font-weight: 700;
+    font-display: swap;
+    src: url('/static/fonts/ibm-plex-sans-700.woff2') format('woff2');
+}
+
+@font-face {
+    font-family: 'IBM Plex Mono';
+    font-style: normal;
+    font-weight: 400;
+    font-display: swap;
+    src: url('/static/fonts/ibm-plex-mono-400.woff2') format('woff2');
+}
+
+@font-face {
+    font-family: 'IBM Plex Mono';
+    font-style: normal;
+    font-weight: 500;
+    font-display: swap;
+    src: url('/static/fonts/ibm-plex-mono-500.woff2') format('woff2');
+}
+
+/* Base document. Upstream runs a 13px base with a dense type scale; the classic
+   sheets assume 16px, so anything sized in em below is re-checked per component
+   in the sheets that follow. */
+body {
+    background: var(--v2-bg);
+    color: var(--v2-text);
+    font-family: var(--v2-font-sans);
+    font-size: 13px;
+    padding: 0;
+    margin: 0;
+    min-height: 100vh;
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+}
+
+* {
+    box-sizing: border-box;
+}
+
+a {
+    color: var(--v2-accent-link);
+    text-decoration: none;
+}
+
+a:hover {
+    color: var(--v2-accent-link-hover);
+}
+
+code {
+    font-family: var(--v2-font-mono);
+    font-size: 12px;
+    background: var(--v2-input-bg);
+    border: 1px solid var(--v2-border-soft);
+    border-radius: var(--v2-radius-sm);
+    padding: 1px 5px;
+}
+
+input,
+select,
+button,
+textarea {
+    font-family: inherit;
+}
+
+input:focus,
+select:focus,
+textarea:focus {
+    outline: none;
+    border-color: var(--v2-accent);
+}
+
+::placeholder {
+    color: var(--v2-text-faint);
+}
+
+/* Slim, unobtrusive scrollbars to match the dense dark UI */
+* {
+    scrollbar-width: thin;
+    scrollbar-color: var(--v2-track) transparent;
+}
+
+*::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+}
+
+*::-webkit-scrollbar-thumb {
+    background: var(--v2-track);
+    border-radius: 4px;
+}
+
+*::-webkit-scrollbar-track {
+    background: transparent;
+}

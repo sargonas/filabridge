@@ -38,6 +38,17 @@
     background: #c82333;
 }
 
+/* Amber action button, used by the low-filament acknowledge control. The hover
+   rule repeats the base colour on purpose: .btn:hover would otherwise repaint it
+   green, and this button has always kept its colour through the hover lift. */
+.btn-warning {
+    background: #e0a800;
+}
+
+.btn-warning:hover {
+    background: #e0a800;
+}
+
 .btn-small {
     padding: 5px 12px;
     font-size: 12px;
@@ -130,6 +141,62 @@
 .timeout-settings {
     display: grid;
     gap: 15px;
+}
+
+/* Alert banners - Spoolman connection trouble, low-filament warnings, print
+   errors. The same markup is produced server-side (status.html) and rebuilt live
+   over the websocket, so both paths must use these classes rather than their own
+   inline colours. */
+.alert {
+    padding: 20px;
+    margin: 20px 0;
+    border-radius: 8px;
+    border: 1px solid transparent;
+}
+
+.alert-warning {
+    background: #fff3cd;
+    border-color: #ffeaa7;
+    color: #856404;
+}
+
+.alert-danger {
+    background: #f8d7da;
+    border-color: #f5c6cb;
+    color: #721c24;
+}
+
+/* Links inside a warning banner inherit the banner's dark amber rather than the
+   page link colour, which would vanish against the light background. */
+.alert-link {
+    color: #856404;
+    text-decoration: underline;
+    font-weight: bold;
+}
+
+/* The numbered quick-start box inside the first-run welcome banner. */
+.setup-steps {
+    background: rgba(255,255,255,0.1);
+    padding: 20px;
+    border-radius: 8px;
+    margin: 20px 0;
+}
+
+/* Compact inputs and panels built inline by settings.html and printers.js, which
+   sit outside .form-group and so need their own (denser) treatment. Sizing stays
+   with the caller; these carry only the look. */
+.inline-input {
+    padding: 8px;
+    border-radius: 4px;
+    border: 1px solid #666;
+    background: rgba(255,255,255,0.1);
+    color: #fff;
+}
+
+.inline-panel {
+    padding: 15px;
+    background: rgba(255,255,255,0.05);
+    border-radius: 5px;
 }
 
 /* Status Indicators */
@@ -272,8 +339,23 @@
     color: #c62828;
 }
 
-/* WebSocket connection indicator (badge text/colour are set inline by
-   websocket.js; layout lives here so it can adapt on mobile). */
+/* WebSocket connection indicator. websocket.js sets the text and a state class;
+   everything visual lives here. */
+.ws-status-connected {
+    background-color: #28a745;
+    color: white;
+}
+
+.ws-status-connecting {
+    background-color: #ffc107;
+    color: black;
+}
+
+.ws-status-offline {
+    background-color: #dc3545;
+    color: white;
+}
+
 .ws-status {
     position: fixed;
     top: 10px;

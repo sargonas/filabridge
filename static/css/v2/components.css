@@ -1,0 +1,607 @@
+/*
+ * v2 skin - controls and content. Overrides static/css/components.css,
+ * printers.css, dropdowns.css and modals.css, which all load first.
+ *
+ * Sizes follow upstream's 13px base and dense padding. Every colour is a token
+ * from tokens.css so a light theme later needs no changes here.
+ */
+
+/* --- Buttons -------------------------------------------------------------
+ * Upstream has three variants: a solid primary, a bordered outline and a bare
+ * ghost. FilaBridge's .btn is the primary; .btn-secondary maps to outline. The
+ * classic hover lift (translate + shadow) is dropped for upstream's flat
+ * background transition. */
+.btn {
+    background: var(--v2-accent-fill);
+    color: #fff;
+    padding: 8px 14px;
+    border: 1px solid transparent;
+    border-radius: var(--v2-radius);
+    font-size: 13px;
+    font-weight: 600;
+    margin: 0 6px 0 0;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    white-space: nowrap;
+    transition: background 0.12s, border-color 0.12s, color 0.12s;
+}
+
+.btn:hover {
+    background: var(--v2-accent-fill-hover);
+    transform: none;
+    box-shadow: none;
+}
+
+.btn-secondary {
+    background: none;
+    border-color: var(--v2-border-strong);
+    color: var(--v2-text-2);
+    padding: 7px 12px;
+    font-size: 12.5px;
+    font-weight: 500;
+}
+
+.btn-secondary:hover {
+    background: none;
+    border-color: var(--v2-accent);
+    color: var(--v2-text);
+}
+
+.btn-danger {
+    background: var(--v2-danger);
+}
+
+.btn-danger:hover {
+    background: #a8422f;
+}
+
+.btn-warning {
+    background: var(--v2-warning-text);
+    color: #241d16;
+}
+
+.btn-warning:hover {
+    background: #c1955f;
+}
+
+.btn-small {
+    padding: 5px 10px;
+    font-size: 12px;
+    font-weight: 500;
+    min-width: 0;
+}
+
+/* --- Forms --------------------------------------------------------------- */
+.form-group {
+    margin-bottom: 16px;
+}
+
+.form-group label {
+    color: var(--v2-text-2);
+    font-weight: 500;
+    font-size: 12.5px;
+    margin-bottom: 6px;
+}
+
+.form-group input,
+.form-group select,
+.inline-input {
+    padding: 7px 10px;
+    border: 1px solid var(--v2-border-input);
+    border-radius: var(--v2-radius);
+    background: var(--v2-input-bg);
+    color: var(--v2-text);
+    font-size: 12.5px;
+    transition: border-color 0.12s;
+}
+
+.form-group input:focus,
+.form-group select:focus,
+.inline-input:focus {
+    border-color: var(--v2-accent);
+}
+
+/* Password fields were flagged with a purple border; the accent tone carries
+   the same "this one is sensitive" cue in the new palette. */
+.form-group input[type="password"] {
+    border-color: var(--v2-accent-border);
+}
+
+.form-group select option {
+    background: var(--v2-input-bg);
+    color: var(--v2-text);
+}
+
+.form-group small {
+    color: var(--v2-text-dim);
+    font-size: 11.5px;
+    margin-top: 5px;
+}
+
+.form-row {
+    gap: 16px;
+}
+
+/* --- Cards and sections -------------------------------------------------- */
+.config-section,
+.advanced-settings,
+.inline-panel {
+    background: var(--v2-surface);
+    border: 1px solid var(--v2-border);
+    border-radius: var(--v2-radius-lg);
+    padding: 18px 20px;
+    margin: 14px 0;
+}
+
+.config-section h3 {
+    margin: 0 0 14px 0;
+    color: var(--v2-text);
+    font-size: 14px;
+    font-weight: 600;
+}
+
+/* Upstream labels a group of settings with a small uppercase caption rather
+   than a heading, which is what .help-text is doing here in practice. */
+.help-text {
+    color: var(--v2-text-dim);
+    font-style: normal;
+    font-size: 12px;
+    line-height: 1.5;
+    background: var(--v2-accent-wash-soft);
+    border-left: 2px solid var(--v2-accent-muted);
+    border-radius: var(--v2-radius-sm);
+    padding: 9px 12px;
+    margin-bottom: 16px;
+}
+
+/* Keep the settings forms to a readable measure on wide screens, the way
+   upstream caps its own settings page. */
+#settings-tab,
+#history-tab {
+    max-width: 980px;
+}
+
+/* --- Alerts -------------------------------------------------------------- */
+.alert {
+    border-radius: var(--v2-radius-lg);
+    padding: 14px 16px;
+    margin: 14px 0;
+    font-size: 12.5px;
+    line-height: 1.55;
+}
+
+.alert h4 {
+    font-size: 13px;
+    font-weight: 600;
+    margin-bottom: 8px;
+}
+
+.alert p {
+    margin: 5px 0;
+}
+
+.alert-warning {
+    background: var(--v2-warning-bg);
+    border-color: var(--v2-warning-border);
+    color: var(--v2-warning-text);
+}
+
+.alert-warning h4 {
+    color: var(--v2-warning-text);
+}
+
+.alert-danger {
+    background: rgba(196, 80, 58, 0.12);
+    border-color: rgba(196, 80, 58, 0.4);
+    color: var(--v2-danger-soft);
+}
+
+.alert-danger h4 {
+    color: var(--v2-danger-soft);
+}
+
+.alert-link {
+    color: var(--v2-accent-link);
+    font-weight: 600;
+}
+
+.alert-link:hover {
+    color: var(--v2-accent-link-hover);
+}
+
+/* --- Status pills --------------------------------------------------------
+ * Upstream tints a pill with a wash of the status colour rather than a solid
+ * pastel block, which reads better on a dark surface. */
+.status {
+    padding: 3px 9px;
+    border-radius: 20px;
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    border: 1px solid transparent;
+}
+
+.status.idle {
+    background: rgba(107, 178, 107, 0.14);
+    border-color: var(--v2-success-border);
+    color: var(--v2-success);
+}
+
+.status.printing {
+    background: var(--v2-accent-wash);
+    border-color: var(--v2-accent-border);
+    color: var(--v2-accent-soft);
+}
+
+.status.offline {
+    background: rgba(196, 80, 58, 0.14);
+    border-color: rgba(196, 80, 58, 0.4);
+    color: var(--v2-danger-soft);
+}
+
+.status.not_configured {
+    background: var(--v2-surface-raised);
+    border-color: var(--v2-border-strong);
+    color: var(--v2-text-dim);
+}
+
+/* --- Printers ------------------------------------------------------------ */
+.printer,
+.printer-card {
+    background: var(--v2-surface);
+    border: 1px solid var(--v2-border);
+    border-radius: var(--v2-radius-lg);
+    box-shadow: none;
+    margin: 12px 0;
+}
+
+.printer {
+    /* The tall bottom padding reserves room for the toolhead dropdown to open
+       inside the card; keep it, just trimmed to the denser scale. */
+    padding: 18px 20px 140px 20px;
+}
+
+.printer-card {
+    padding: 16px 18px;
+    transition: border-color 0.12s, background 0.12s;
+}
+
+.printer-card:hover {
+    background: var(--v2-surface-2);
+    border-color: var(--v2-border-strong);
+}
+
+.printer-header h3,
+.printer-card h3 {
+    color: var(--v2-text);
+    font-size: 14px;
+    font-weight: 600;
+}
+
+.printer-card .printer-info {
+    color: var(--v2-text-dim);
+    font-size: 12.5px;
+    line-height: 1.7;
+}
+
+.mapping-section {
+    border-top: 1px solid var(--v2-border-soft);
+    margin-top: 18px;
+    padding-top: 18px;
+}
+
+.mapping-section h4 {
+    color: var(--v2-text-2);
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.07em;
+    margin-bottom: 12px;
+}
+
+.toolhead-mapping-row {
+    background: var(--v2-surface-sunken);
+    border: 1px solid var(--v2-border-soft);
+    border-radius: var(--v2-radius-md);
+    padding: 8px 10px;
+    margin-bottom: 8px;
+    gap: 12px;
+}
+
+.toolhead-label {
+    color: var(--v2-text-2) !important;
+    font-weight: 500;
+    font-size: 12.5px;
+}
+
+/* The edit button is tinted per spool colour by the JS, so only its shape and
+   the neutral fallback are restyled here. */
+.edit-spool-btn {
+    border-radius: var(--v2-radius);
+    padding: 6px 10px;
+    font-size: 12px;
+    font-weight: 500;
+    margin-left: 12px;
+}
+
+.edit-spool-btn:hover {
+    transform: none;
+    box-shadow: none;
+    filter: brightness(1.12);
+}
+
+.color-swatch {
+    border: 1px solid var(--v2-swatch-border);
+    border-radius: var(--v2-radius-sm);
+    width: 18px;
+    height: 18px;
+}
+
+/* --- Sub-tabs (Settings and NFC) -----------------------------------------
+ * Upstream renders a nested tab strip as a segmented control: a sunken track
+ * holding pills, with the active pill filled. */
+.settings-tabs,
+.nfc-tabs {
+    display: inline-flex;
+    gap: 2px;
+    padding: 2px;
+    background: var(--v2-input-bg);
+    border: 1px solid var(--v2-border-input);
+    border-radius: var(--v2-radius);
+    margin-bottom: 18px;
+}
+
+.settings-tab,
+.nfc-tab {
+    border-radius: var(--v2-radius-sm);
+    color: var(--v2-text-muted);
+    padding: 5px 12px;
+    margin-right: 0;
+    font-size: 12.5px;
+    font-weight: 500;
+    transition: background 0.12s, color 0.12s;
+}
+
+.settings-tab:hover,
+.nfc-tab:hover {
+    background: none;
+    color: var(--v2-text-2);
+}
+
+.settings-tab.active,
+.nfc-tab.active {
+    background: var(--v2-accent-fill);
+    color: #fff;
+    border-bottom: none;
+}
+
+/* --- Dropdowns ----------------------------------------------------------- */
+.dropdown-button {
+    background: var(--v2-input-bg);
+    border: 1px solid var(--v2-border-input);
+    border-radius: var(--v2-radius);
+    color: var(--v2-text);
+    padding: 7px 10px;
+    font-size: 12.5px;
+    transition: border-color 0.12s;
+}
+
+.dropdown-button:hover {
+    background: var(--v2-input-bg);
+    border-color: var(--v2-border-strong);
+}
+
+.dropdown-button.open {
+    border-color: var(--v2-accent);
+    border-bottom-color: var(--v2-border-input);
+}
+
+.dropdown-content {
+    background: var(--v2-surface-raised);
+    border: 1px solid var(--v2-border-strong);
+    border-top: none;
+    border-radius: 0 0 var(--v2-radius) var(--v2-radius);
+    box-shadow: 0 8px 20px rgba(0, 0, 0, 0.35);
+}
+
+.dropdown-option {
+    padding: 7px 10px;
+    gap: 8px;
+    transition: background 0.12s;
+}
+
+.dropdown-option:hover {
+    background: var(--v2-accent-wash-soft);
+}
+
+.dropdown-option.selected {
+    background: var(--v2-accent-wash);
+    color: var(--v2-accent-soft);
+}
+
+.option-text {
+    font-size: 12.5px;
+}
+
+.dropdown-search-container {
+    background: var(--v2-surface-raised);
+    border-bottom: 1px solid var(--v2-border-soft);
+    padding: 8px;
+}
+
+.dropdown-search {
+    background: var(--v2-input-bg);
+    border: 1px solid var(--v2-border-input);
+    border-radius: var(--v2-radius);
+    color: var(--v2-text);
+    font-size: 12.5px;
+    padding: 6px 10px;
+}
+
+.dropdown-search:focus {
+    background: var(--v2-input-bg);
+    border-color: var(--v2-accent);
+}
+
+.dropdown-search::placeholder {
+    color: var(--v2-text-faint);
+}
+
+.dropdown-no-results {
+    color: var(--v2-text-faint);
+    font-style: normal;
+    font-size: 12.5px;
+}
+
+/* --- Modals -------------------------------------------------------------- */
+.modal {
+    background-color: rgba(0, 0, 0, 0.6);
+}
+
+.modal-content {
+    background-color: var(--v2-surface);
+    border: 1px solid var(--v2-border-strong);
+    border-radius: var(--v2-radius-xl);
+    padding: 20px 22px;
+    box-shadow: 0 16px 40px rgba(0, 0, 0, 0.45);
+}
+
+.modal-header {
+    margin-bottom: 16px;
+}
+
+.modal-header h3 {
+    color: var(--v2-text);
+    font-size: 14px;
+    font-weight: 600;
+}
+
+.close {
+    color: var(--v2-text-dim);
+    font-size: 22px;
+    line-height: 1;
+}
+
+.close:hover {
+    color: var(--v2-text);
+}
+
+.modal .form-group label {
+    color: var(--v2-text-2);
+    font-weight: 500;
+}
+
+.modal .form-group input,
+.modal .form-group select {
+    background-color: var(--v2-input-bg);
+    border: 1px solid var(--v2-border-input);
+    border-radius: var(--v2-radius);
+    color: var(--v2-text);
+    font-size: 12.5px;
+    padding: 7px 10px;
+}
+
+.modal .form-group input:focus,
+.modal .form-group select:focus {
+    background-color: var(--v2-input-bg);
+    border-color: var(--v2-accent);
+}
+
+.modal .form-group small {
+    color: var(--v2-text-dim);
+    font-size: 11.5px;
+}
+
+/* --- Print history table -------------------------------------------------
+ * The classic table was styled for the light card it used to sit on and still
+ * carries light greys; on the dark surface those borders are invisible. */
+.history-table {
+    font-size: 12.5px;
+}
+
+.history-table th {
+    padding: 8px 12px;
+    border-bottom: 1px solid var(--v2-border);
+    color: var(--v2-text-dim);
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+}
+
+.history-table td {
+    padding: 8px 12px;
+    border-bottom: 1px solid var(--v2-border-soft);
+    color: var(--v2-text-2);
+}
+
+.history-table tbody tr:hover {
+    background: var(--v2-accent-wash-soft);
+}
+
+.history-status {
+    padding: 2px 9px;
+    border-radius: 20px;
+    font-size: 11px;
+    font-weight: 600;
+    border: 1px solid transparent;
+}
+
+.history-status-completed {
+    background: rgba(107, 178, 107, 0.14);
+    border-color: var(--v2-success-border);
+    color: var(--v2-success);
+}
+
+.history-status-cancelled {
+    background: rgba(196, 80, 58, 0.14);
+    border-color: rgba(196, 80, 58, 0.4);
+    color: var(--v2-danger-soft);
+}
+
+/* --- Live connection badge ----------------------------------------------- */
+.ws-status {
+    border-radius: var(--v2-radius);
+    padding: 5px 10px;
+    font-size: 11px;
+    font-weight: 500;
+    border: 1px solid var(--v2-border-strong);
+}
+
+.ws-status-connected {
+    background-color: rgba(107, 178, 107, 0.16);
+    border-color: var(--v2-success-border);
+    color: var(--v2-success);
+}
+
+.ws-status-connecting {
+    background-color: var(--v2-accent-wash);
+    border-color: var(--v2-accent-border);
+    color: var(--v2-accent-soft);
+}
+
+.ws-status-offline {
+    background-color: rgba(196, 80, 58, 0.16);
+    border-color: rgba(196, 80, 58, 0.4);
+    color: var(--v2-danger-soft);
+}
+
+@media (max-width: 600px) {
+    /* The classic sheet re-pads .btn for touch at this width; keep upstream's
+       44px minimum tap target instead of the taller classic button. */
+    .btn {
+        padding: 10px 16px;
+        margin: 6px 6px 6px 0;
+        min-height: 40px;
+    }
+
+    .btn-small {
+        min-height: 36px;
+    }
+
+    .settings-tabs,
+    .nfc-tabs {
+        display: flex;
+        max-width: 100%;
+    }
+}

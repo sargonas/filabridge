@@ -167,8 +167,7 @@ async function loadLocationTags(dataPromise) {
         // Add informational banner about Spoolman locations
         const spoolmanURL = data.spoolman_url || '';
         const messageBanner = document.createElement('div');
-        messageBanner.className = 'nfc-info-banner';
-        messageBanner.style.cssText = 'background: #fff3cd; border: 1px solid #ffeaa7; color: #856404; padding: 15px; margin-bottom: 15px; border-radius: 8px;';
+        messageBanner.className = 'nfc-info-banner alert alert-warning';
         
         let bannerHTML = '<strong>ℹ️ Location Management:</strong><br>';
         bannerHTML += 'It is not possible via the Spoolman API to add locations automatically. ';
@@ -177,7 +176,7 @@ async function loadLocationTags(dataPromise) {
         if (spoolmanURL) {
             // Append /locations to the Spoolman URL
             const spoolmanLocationsURL = spoolmanURL.replace(/\/$/, '') + '/locations';
-            bannerHTML += '<br><br><a href="' + spoolmanLocationsURL + '" target="_blank" style="color: #856404; text-decoration: underline; font-weight: bold;">Open Spoolman →</a>';
+            bannerHTML += '<br><br><a href="' + spoolmanLocationsURL + '" target="_blank" class="alert-link">Open Spoolman →</a>';
         }
         
         messageBanner.innerHTML = bannerHTML;
@@ -186,7 +185,7 @@ async function loadLocationTags(dataPromise) {
         if (locationUrls.length === 0) {
             const noLocationsMsg = document.createElement('p');
             noLocationsMsg.textContent = 'No locations available. Create locations in Spoolman to see them here.';
-            noLocationsMsg.style.cssText = 'padding: 20px; text-align: center; color: #666;';
+            noLocationsMsg.className = 'nfc-empty-message';
             container.appendChild(noLocationsMsg);
             return;
         }

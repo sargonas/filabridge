@@ -35,10 +35,10 @@ function loadPrinters() {
                                 <input type="text" 
                                        id="toolhead-name-${printerId}-${toolheadID}" 
                                        value="${escapedName}" 
-                                       class="toolhead-name-input"
+                                       class="toolhead-name-input inline-input"
                                        data-printer-id="${printerId}"
                                        data-toolhead-id="${toolheadID}"
-                                       style="flex: 1; padding: 8px; border-radius: 4px; border: 1px solid #666; background: rgba(255,255,255,0.1); color: #fff;">
+                                       style="flex: 1;">
                             </div>
                         `;
                     }
@@ -58,7 +58,7 @@ function loadPrinters() {
                             <button class="btn btn-small" onclick="toggleToolheadNames('${printerId}')">🔤 Rename Toolheads</button>
                             <button class="btn btn-small btn-danger" onclick="deletePrinter('${printerId}')">🗑️ Delete</button>
                         </div>
-                        <div id="toolhead-names-${printerId}" class="toolhead-names-section" style="display: none; margin-top: 15px; padding: 15px; background: rgba(255,255,255,0.05); border-radius: 5px;">
+                        <div id="toolhead-names-${printerId}" class="toolhead-names-section inline-panel" style="display: none; margin-top: 15px;">
                             <h4 style="margin-top: 0; margin-bottom: 15px;">Toolhead Names</h4>
                             ${toolheadNamesHTML}
                             <div style="margin-top: 15px; text-align: right;">

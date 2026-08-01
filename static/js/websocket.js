@@ -71,22 +71,21 @@ function updateConnectionStatus(status) {
         document.body.appendChild(statusIndicator);
     }
 
+    // The badge's colours are a state class rather than inline styles, so a skin
+    // can restyle it (see static/css/v2/)
     switch (status) {
         case 'connected':
             statusIndicator.textContent = '🟢 Live';
-            statusIndicator.style.backgroundColor = '#28a745';
-            statusIndicator.style.color = 'white';
+            statusIndicator.className = 'ws-status ws-status-connected';
             break;
         case 'disconnected':
             statusIndicator.textContent = '🟡 Connecting...';
-            statusIndicator.style.backgroundColor = '#ffc107';
-            statusIndicator.style.color = 'black';
+            statusIndicator.className = 'ws-status ws-status-connecting';
             break;
         case 'error':
         case 'failed':
             statusIndicator.textContent = '🔴 Offline';
-            statusIndicator.style.backgroundColor = '#dc3545';
-            statusIndicator.style.color = 'white';
+            statusIndicator.className = 'ws-status ws-status-offline';
             break;
     }
 }
@@ -318,9 +317,10 @@ function updateRunoutWarnings(warnings) {
 
     warnings.forEach(w => {
         const el = document.createElement('div');
-        el.className = 'runout-warning';
+        // Same classes status.html renders server-side, so a warning looks the
+        // same whether the page was loaded with it or received it live
+        el.className = 'runout-warning alert alert-warning';
         el.setAttribute('data-warning-id', w.id);
-        el.style.cssText = 'background: #fff3cd; border: 1px solid #ffeaa7; color: #856404; padding: 20px; margin: 20px 0; border-radius: 8px;';
 
         const pausedNote = w.auto_paused
             ? '<p><strong>The print has been paused.</strong> Acknowledging will resume it (or swap the spool first, then acknowledge).</p>'
@@ -333,7 +333,7 @@ function updateRunoutWarnings(warnings) {
             <p><strong>Spool:</strong> [${w.spool_id}] ${w.spool_name} - ${w.remaining_weight.toFixed(1)}g remaining</p>
             <p><strong>Print needs:</strong> ~${w.required_weight.toFixed(1)}g to finish</p>
             ${pausedNote}
-            <button class="btn" onclick="acknowledgeRunoutWarning('${w.id}')" style="background: #e0a800; margin-top: 10px;">${buttonLabel}</button>
+            <button class="btn btn-warning" onclick="acknowledgeRunoutWarning('${w.id}')">${buttonLabel}</button>
         `;
 
         container.appendChild(el);
@@ -379,9 +379,9 @@ function updatePrintErrors(printErrors) {
     // Add each error
     printErrors.forEach(error => {
         const errorElement = document.createElement('div');
-        errorElement.className = 'print-error';
+        // Matches the server-rendered markup in status.html
+        errorElement.className = 'print-error alert alert-danger';
         errorElement.setAttribute('data-error-id', error.id);
-        errorElement.style.cssText = 'background: #f8d7da; border: 1px solid #f5c6cb; color: #721c24; padding: 20px; margin: 20px 0; border-radius: 8px;';
         
         const timestamp = new Date(error.timestamp).toLocaleString();
         
@@ -392,7 +392,7 @@ function updatePrintErrors(printErrors) {
             <p><strong>Time:</strong> ${timestamp}</p>
             <p><strong>Error:</strong> ${error.error}</p>
             <p><strong>Action Required:</strong> Please update Spoolman manually with the correct filament usage for this print.</p>
-            <button class="btn" onclick="acknowledgeError('${error.id}')" style="background: #dc3545; margin-top: 10px;">Acknowledge</button>
+            <button class="btn btn-danger" onclick="acknowledgeError('${error.id}')">Acknowledge</button>
         `;
         
         container.appendChild(errorElement);
