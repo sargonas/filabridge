@@ -569,6 +569,37 @@ func TestTabButtonsHaveMatchingContent(t *testing.T) {
 	}
 }
 
+// TestSettingsSubTabsHaveMatchingContent guards the same contract for the
+// Settings sub-tabs, which are also persisted in the URL hash as
+// "#settings/<sub-tab>": every switchSettingsTab('x') button needs a matching
+// content div (id="x-tab", class="settings-tab-content"), otherwise a reload
+// quietly drops back to the default sub-tab.
+func TestSettingsSubTabsHaveMatchingContent(t *testing.T) {
+	ws, _, _ := newTestServer(t)
+	rec, _ := doJSON(t, ws, http.MethodGet, "/", "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("dashboard: %d", rec.Code)
+	}
+	body := rec.Body.String()
+
+	matches := regexp.MustCompile(`switchSettingsTab\('([^']+)'`).FindAllStringSubmatch(body, -1)
+	if len(matches) == 0 {
+		t.Fatal("no settings sub-tab buttons found in rendered page")
+	}
+
+	contentDiv := regexp.MustCompile(`<div id="([a-z-]+)-tab" class="settings-tab-content`)
+	contents := map[string]bool{}
+	for _, m := range contentDiv.FindAllStringSubmatch(body, -1) {
+		contents[m[1]] = true
+	}
+
+	for _, m := range matches {
+		if !contents[m[1]] {
+			t.Errorf("settings sub-tab %q has no matching settings-tab-content div", m[1])
+		}
+	}
+}
+
 // TestDashboardSpoolmanLink: the tab bar links out to the configured Spoolman
 // instance, and hides the link when no URL is configured.
 func TestDashboardSpoolmanLink(t *testing.T) {

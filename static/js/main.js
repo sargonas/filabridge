@@ -1,7 +1,41 @@
 // FilaBridge Dashboard - Main JavaScript Functions
 
-// Tab switching functionality
-function switchTab(tabName) {
+// The tab the page opens on. It is left out of the URL so the dashboard's
+// address stays clean for the common case.
+const DEFAULT_TAB = 'status';
+
+// syncLocationHash rewrites the URL to match the tabs currently on screen, as
+// "#tab" or "#tab/sub-tab", without pushing a new history entry. The default
+// tab gets no hash at all.
+function syncLocationHash() {
+    const activeTab = document.querySelector('.tab.active');
+    if (!activeTab) {
+        return;
+    }
+
+    const tabName = activeTab.dataset.tab;
+    let hash = '';
+    if (tabName && tabName !== DEFAULT_TAB) {
+        hash = '#' + tabName;
+        // Settings is the only tab with sub-tabs; remember which one is open
+        const activeSubTab = document.querySelector('.settings-tab-content.active');
+        if (tabName === 'settings' && activeSubTab) {
+            hash += '/' + activeSubTab.id.replace(/-tab$/, '');
+        }
+    }
+
+    if (window.history && window.history.replaceState) {
+        // An empty hash still leaves a bare "#" behind if replaced directly, so
+        // fall back to the path when there is nothing to remember
+        window.history.replaceState(null, '', hash || window.location.pathname + window.location.search);
+    } else if (hash) {
+        window.location.hash = hash;
+    }
+}
+
+// Tab switching functionality. subTabName is only used by the Settings tab and
+// is normally omitted; it lets a reload reopen the sub-tab from the URL.
+function switchTab(tabName, subTabName) {
     // Hide all tab contents
     const tabContents = document.querySelectorAll('.tab-content');
     tabContents.forEach(content => {
@@ -28,35 +62,52 @@ function switchTab(tabName) {
         button.classList.add('active');
     }
 
-    // Remember the tab across reloads without pushing a new history entry
-    if (window.history && window.history.replaceState) {
-        window.history.replaceState(null, '', '#' + tabName);
-    } else {
-        window.location.hash = tabName;
-    }
-
     // Load print history when its tab is opened
     if (tabName === 'history') {
         loadPrintHistory();
     }
 
-    // Load data for the currently active settings sub-tab
+    // Open the requested settings sub-tab, or re-open the active one so its
+    // data is refreshed; switchSettingsTab handles the hash from there
     if (tabName === 'settings') {
         const activeTabContent = document.querySelector('.settings-tab-content.active');
-        if (activeTabContent) {
-            loadSettingsTabData(activeTabContent.id.replace('-tab', ''));
+        const subTab = subTabName || (activeTabContent ? activeTabContent.id.replace(/-tab$/, '') : '');
+        if (subTab) {
+            switchSettingsTab(subTab);
+            return;
         }
     }
+
+    // Remember the tab across reloads without pushing a new history entry
+    syncLocationHash();
 }
 
-// restoreActiveTab reselects the tab from the URL hash after a reload, falling
-// back to the server-rendered default when the hash is absent or names a tab
-// that isn't present (e.g. Print History when history is disabled).
+// restoreActiveTab reselects the tab (and Settings sub-tab) from the URL hash
+// after a reload, falling back to the server-rendered default when the hash is
+// absent or names a tab that isn't present (e.g. Print History when history is
+// disabled). The hash is "#tab" or "#tab/sub-tab".
 function restoreActiveTab() {
-    const tabName = (window.location.hash || '').replace(/^#/, '');
-    if (tabName && document.getElementById(tabName + '-tab')) {
-        switchTab(tabName);
+    const rawHash = (window.location.hash || '').replace(/^#/, '');
+    if (!rawHash) {
+        return;
     }
+
+    const parts = rawHash.split('/');
+    const tabName = parts[0];
+    if (!document.querySelector('.tab[data-tab="' + tabName + '"]')) {
+        // Nothing to restore (unknown or hidden tab): clear the stale hash
+        syncLocationHash();
+        return;
+    }
+
+    // Ignore a sub-tab that no longer exists rather than leaving Settings blank
+    let subTabName = '';
+    const subTabContent = parts[1] ? document.getElementById(parts[1] + '-tab') : null;
+    if (subTabContent && subTabContent.classList.contains('settings-tab-content')) {
+        subTabName = parts[1];
+    }
+
+    switchTab(tabName, subTabName);
 }
 
 // loadSettingsTabData loads the data a settings sub-tab needs when opened
@@ -202,6 +253,9 @@ function switchSettingsTab(tabName, clickedElement) {
     
     // Load data for specific tabs
     loadSettingsTabData(tabName);
+
+    // Remember the sub-tab across reloads too
+    syncLocationHash();
 }
 
 // Configuration Management
