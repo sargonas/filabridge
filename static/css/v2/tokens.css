@@ -3,9 +3,13 @@
  * interface. Gated behind FILABRIDGE_DEVELOPER_MODE; see templates/base.html.
  *
  * Design tokens ported from Spoolman client_v2/src/app.css so the two apps read
- * as one system. Only the dark theme is carried over for now; the values are
- * upstream's verbatim, and the [data-theme='dark'] hook is already in place for
- * a light theme to be added later without re-plumbing.
+ * as one system - surfaces, borders, the text ramp, type and radii are all
+ * upstream's verbatim. The accent is deliberately not: it is violet here rather
+ * than upstream's orange, so FilaBridge stays recognisably its own app. See the
+ * accent block below.
+ *
+ * Only the dark theme is carried over for now; the [data-theme='dark'] hook is
+ * already in place for a light theme to be added later without re-plumbing.
  *
  * The rest of the v2 sheets should reference these variables and never raw hex,
  * so a future light theme is a matter of adding one override block here.
@@ -36,23 +40,38 @@
     --v2-text-dim: #a7a7a7;
     --v2-text-faint: #959595;
 
-    /* Accent (warm orange). --v2-accent-fill is a separate, slightly darker tone
-       used wherever white text sits on a solid accent background: white on
-       --v2-accent is only 4.03:1 and fails AA, and no foreground colour fixes it.
-       --v2-accent itself drives links, borders, washes and focus rings, where it
-       sits on a dark surface and passes easily. Note the fill DARKENS on hover;
-       lightening it would drop back below AA. */
-    --v2-accent: #be682f;
-    --v2-accent-hover: #d47a3b;
-    --v2-accent-fill: #b2612c;
-    --v2-accent-fill-hover: #9b5526;
-    --v2-accent-link: #d0854a;
-    --v2-accent-link-hover: #e09a60;
-    --v2-accent-soft: #e0996a;
-    --v2-accent-muted: #8a6a4d;
-    --v2-accent-wash: rgba(190, 104, 47, 0.14);
-    --v2-accent-wash-soft: rgba(190, 104, 47, 0.06);
-    --v2-accent-border: #4a4239;
+    /* Accent (violet). This is the one place the skin deliberately parts company
+       with Spoolman: upstream's accent is a warm orange (#be682f), and FilaBridge
+       is a companion to Spoolman rather than a copy of it, so it keeps a violet
+       drawn from its own classic header gradient (#764ba2). Everything else in
+       the palette above is upstream's verbatim.
+
+       The roles are unchanged, and so are the contrast ratios each one has to
+       hold. --v2-accent-fill is a separate, slightly darker tone used wherever
+       white text sits on a solid accent background, because the base accent is
+       not dark enough to carry white text at AA on its own. --v2-accent itself
+       drives borders, washes and focus rings, where it sits on a dark surface and
+       passes easily. Note the fill DARKENS on hover; lightening it would drop
+       back below AA.
+
+       Measured against the surfaces each is used on:
+         white on --v2-accent-fill        4.56   (AA floor 4.5)
+         white on --v2-accent-fill-hover  5.67
+         --v2-accent-link on --v2-bg      5.64
+         --v2-accent-soft on the wash     4.98   (worst case, over --v2-surface-raised)
+         --v2-accent border on --v2-surface  3.84   (UI-component floor 3.0)
+       Re-check these if you retune the hue; the ramp is not eyeballed. */
+    --v2-accent: #9a6bc2;
+    --v2-accent-hover: #a57cc9;
+    --v2-accent-fill: #925fbe;
+    --v2-accent-fill-hover: #854cb6;
+    --v2-accent-link: #a88cc1;
+    --v2-accent-link-hover: #b8a1cc;
+    --v2-accent-soft: #b7a3c9;
+    --v2-accent-muted: #6c5b7b;
+    --v2-accent-wash: rgba(154, 107, 194, 0.14);
+    --v2-accent-wash-soft: rgba(154, 107, 194, 0.06);
+    --v2-accent-border: #564267;
 
     /* Status */
     --v2-danger: #c4503a;

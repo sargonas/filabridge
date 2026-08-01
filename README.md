@@ -395,9 +395,12 @@ Neither is ready for everyday use, so leave the flag unset in a normal install.
 
 The skin lives in `static/css/v2/` and layers on top of the classic sheets rather
 than replacing them, so both looks stay in sync as features land. Its design
-tokens are ported from Spoolman's `client_v2/src/app.css`. IBM Plex Sans and Mono
-are bundled in `static/fonts/` (SIL Open Font License 1.1, see
-`static/fonts/OFL.txt`) so the interface needs no internet access.
+tokens are ported from Spoolman's `client_v2/src/app.css`, with one deliberate
+difference: the accent is violet, carried over from FilaBridge's own classic
+header gradient, rather than Spoolman's orange. FilaBridge is a companion to
+Spoolman, not a clone of it. IBM Plex Sans and Mono are bundled in
+`static/fonts/` (SIL Open Font License 1.1, see `static/fonts/OFL.txt`) so the
+interface needs no internet access.
 
 ## Contributing
 
