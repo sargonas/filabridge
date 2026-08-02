@@ -109,6 +109,7 @@ function updateDashboard(data) {
     
     // Update print errors
     updateRunoutWarnings(data.runout_warnings || []);
+    updateMappingWarnings(data.mapping_warnings || []);
     if (data.print_errors) {
         updatePrintErrors(data.print_errors);
     }
@@ -338,6 +339,62 @@ function updateRunoutWarnings(warnings) {
 
         container.appendChild(el);
     });
+}
+
+function updateMappingWarnings(warnings) {
+    const container = document.getElementById('mapping-warnings-container');
+    if (!container) return;
+
+    container.innerHTML = '';
+
+    if (!warnings || warnings.length === 0) {
+        container.style.display = 'none';
+        return;
+    }
+
+    container.style.display = 'block';
+
+    warnings.forEach(w => {
+        const el = document.createElement('div');
+        // Same classes status.html renders server-side, so a warning looks the
+        // same whether the page was loaded with it or received it live
+        el.className = 'mapping-warning alert alert-warning';
+        el.setAttribute('data-warning-id', w.id);
+
+        el.innerHTML = `
+            <h4 style="margin-top: 0;">⚠️ Confirm Toolhead Mapping</h4>
+            <p><strong>Printer:</strong> ${escapeHtml(w.printer_name)}</p>
+            <p><strong>Print:</strong> ${escapeHtml(w.job_name)} (~${w.grams.toFixed(1)}g)</p>
+            <p>This print was sliced with a single filament, which does not record which slot it used, so FilaBridge will record its usage against <strong>toolhead ${w.toolhead_id}</strong>.</p>
+            <p><strong>Action:</strong> if the print is running from a different toolhead, remap it before the print finishes, otherwise the wrong spool will be debited.</p>
+            <button class="btn btn-warning" onclick="acknowledgeMappingWarning('${w.id}')">Acknowledge</button>
+        `;
+
+        container.appendChild(el);
+    });
+}
+
+// Acknowledge an unknown-filament-slot warning
+async function acknowledgeMappingWarning(warningId) {
+    try {
+        const response = await fetch(`/api/mapping-warnings/${encodeURIComponent(warningId)}/acknowledge`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+        });
+
+        if (response.ok) {
+            const el = document.querySelector(`[data-warning-id="${warningId}"]`);
+            if (el) {
+                el.remove();
+            }
+        } else {
+            const data = await response.json().catch(() => ({}));
+            alert('Failed to acknowledge warning: ' + (data.error || 'Unknown error'));
+        }
+    } catch (error) {
+        console.error('Error acknowledging mapping warning:', error);
+        alert('Failed to acknowledge warning');
+    }
 }
 
 // Acknowledge a low-filament warning (resumes the print if it was auto-paused)

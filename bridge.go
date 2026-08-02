@@ -22,17 +22,18 @@ type FilamentBridge struct {
 	db       *sql.DB
 	// In-flight print state is persisted in the active_jobs table (survives
 	// restarts); only the concurrency guard for the usage-recording path is kept in memory.
-	processingPrints map[string]bool          // Guard against overlapping monitor cycles recording the same printer's usage
-	printErrors      map[string]PrintError    // Store print processing errors
-	offlinePrinters  map[string]bool          // Printers currently logged as offline (edge-triggered reachability logging)
-	printerStates    map[string]string        // Last logged state per printer (edge-triggered state logging)
-	offlineMutex     sync.Mutex               // Guards offlinePrinters and printerStates
-	scanAttempts     map[string]int           // Header-scan attempts per printer+file (bounded retries)
-	scanInFlight     map[string]bool          // Printers with a header scan currently running
-	scanMutex        sync.Mutex               // Guards scanAttempts and scanInFlight
-	runoutWarnings   map[string]RunoutWarning // Active low-filament warnings
-	runoutChecked    map[string]int           // Runout check attempts per printer+job+toolhead+spool
-	warnMutex        sync.RWMutex             // Guards runoutWarnings and runoutChecked
+	processingPrints map[string]bool           // Guard against overlapping monitor cycles recording the same printer's usage
+	printErrors      map[string]PrintError     // Store print processing errors
+	offlinePrinters  map[string]bool           // Printers currently logged as offline (edge-triggered reachability logging)
+	printerStates    map[string]string         // Last logged state per printer (edge-triggered state logging)
+	offlineMutex     sync.Mutex                // Guards offlinePrinters and printerStates
+	scanAttempts     map[string]int            // Header-scan attempts per printer+file (bounded retries)
+	scanInFlight     map[string]bool           // Printers with a header scan currently running
+	scanMutex        sync.Mutex                // Guards scanAttempts and scanInFlight
+	runoutWarnings   map[string]RunoutWarning  // Active low-filament warnings
+	mappingWarnings  map[string]MappingWarning // Active toolhead-attribution warnings
+	runoutChecked    map[string]int            // Runout check attempts per printer+job+toolhead+spool
+	warnMutex        sync.RWMutex              // Guards runoutWarnings and runoutChecked
 	errorMutex       sync.RWMutex
 	mutex            sync.RWMutex
 	bambuClients     map[string]*bambuClient // Persistent MQTT clients per Bambu printer (developer mode)
@@ -114,6 +115,24 @@ type RunoutWarning struct {
 	Acknowledged    bool      `json:"acknowledged"`
 }
 
+// MappingWarning flags a running print on a multi-toolhead printer whose sliced
+// file used a single filament. Such a slice records no slot, so FilaBridge
+// attributes the usage to toolhead 0, which on a multi-toolhead machine is a
+// guess. The warning exists so the user can confirm the right spool is mapped to
+// the right toolhead for this print, while the print is still running and the
+// mapping can still be corrected.
+type MappingWarning struct {
+	ID           string    `json:"id"`
+	PrinterID    string    `json:"printer_id"`
+	PrinterName  string    `json:"printer_name"`
+	ToolheadID   int       `json:"toolhead_id"`
+	JobID        int       `json:"job_id"`
+	JobName      string    `json:"job_name"`
+	Grams        float64   `json:"grams"` // slicer estimate for this toolhead
+	Timestamp    time.Time `json:"timestamp"`
+	Acknowledged bool      `json:"acknowledged"`
+}
+
 // PrinterStatus represents the current status of all printers
 type PrinterStatus struct {
 	Printers         map[string]PrinterData             `json:"printers"`
@@ -139,6 +158,7 @@ func NewFilamentBridge(config *Config) (*FilamentBridge, error) {
 		scanAttempts:     make(map[string]int),
 		scanInFlight:     make(map[string]bool),
 		runoutWarnings:   make(map[string]RunoutWarning),
+		mappingWarnings:  make(map[string]MappingWarning),
 		runoutChecked:    make(map[string]int),
 		bambuClients:     make(map[string]*bambuClient),
 
@@ -344,6 +364,7 @@ func (b *FilamentBridge) initializeDefaultConfig() error {
 		ConfigKeyRunoutWarningEnabled:            {"true", "Show a dashboard warning when the mapped spool has less filament remaining than the print requires"},
 		ConfigKeyRunoutPauseEnabled:              {"false", "Also pause the print when a low-filament warning fires (acknowledging resumes it)"},
 		ConfigKeyNotifyWebhookURL:                {"", "Webhook URL to POST a JSON notification to on a low-filament warning or an unexpected loss of connection during a print (leave empty to disable)"},
+		ConfigKeyNotifyUnknownSlot:               {"true", "Warn at the start of a single-filament print on a multi-toolhead printer, whose sliced file does not record which slot it used, so the toolhead mapping can be confirmed before the usage is recorded"},
 	}
 
 	// Check if this is a fresh installation by checking if any config exists
@@ -473,6 +494,21 @@ func (b *FilamentBridge) SetAutoAssignPreviousSpoolRemember(enabled bool) error 
 		value = "true"
 	}
 	return b.SetConfigValue(ConfigKeyAutoAssignPreviousSpoolRemember, value)
+}
+
+// GetNotifyUnknownSlotEnabled reports whether a single-filament print on a
+// multi-toolhead printer should warn at print start. Defaults to true, including
+// for databases predating the setting: the usage is going to be recorded against
+// a guessed toolhead either way, and being told is better than not.
+func (b *FilamentBridge) GetNotifyUnknownSlotEnabled() (bool, error) {
+	value, err := b.GetConfigValue(ConfigKeyNotifyUnknownSlot)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return true, nil
+		}
+		return true, err
+	}
+	return value != "false", nil
 }
 
 // GetPrintHistoryEnabled reports whether local print history is kept and the
@@ -681,6 +717,96 @@ func (b *FilamentBridge) checkRunoutWarnings(printerID string, config PrinterCon
 		// Push an external notification (no-op unless a webhook is configured).
 		go b.sendNotification(lowFilamentPayload(warning, time.Now()))
 	}
+}
+
+// checkMappingWarnings flags a running print on a multi-toolhead printer whose
+// sliced file used a single filament. Such a slice records no slot, so the usage
+// is attributed to toolhead 0, which on a multi-toolhead machine is a guess. The
+// warning asks the user to confirm the right spool is mapped to the right
+// toolhead for this print, while the print is still running and the mapping can
+// still be corrected. The equivalent check at completion would be too late: by
+// then the usage has already been recorded against whatever toolhead 0 held.
+//
+// Scoped deliberately to this one case. A multi-filament slice names its own
+// slots, and a single-toolhead printer has nowhere else the filament could have
+// come from, so neither has anything to confirm.
+func (b *FilamentBridge) checkMappingWarnings(printerID string, config PrinterConfig, aj *activeJob) {
+	// One value in the estimate means the slice named no slot. That only leaves
+	// room for error where the printer has more than one toolhead to choose from.
+	if len(aj.Usage) != 1 || config.Toolheads <= 1 {
+		return
+	}
+	enabled, err := b.GetNotifyUnknownSlotEnabled()
+	if err != nil || !enabled {
+		return
+	}
+
+	printerName := resolvePrinterName(config)
+
+	for toolheadID, grams := range aj.Usage {
+		if grams <= 0 {
+			continue
+		}
+
+		id := fmt.Sprintf("mapping_%s_%d_%d", sanitizeErrorID(printerName), aj.JobID, toolheadID)
+
+		// Once per (printer, job, toolhead): the ambiguity does not change while
+		// the job runs, so repeating it every poll would only be noise. The
+		// printerID prefix matches what clearRunoutState sweeps at job end.
+		memoKey := fmt.Sprintf("%s|mapping|%d|%d", printerID, aj.JobID, toolheadID)
+		b.warnMutex.Lock()
+		if b.runoutChecked[memoKey] != 0 {
+			b.warnMutex.Unlock()
+			continue
+		}
+		b.runoutChecked[memoKey] = runoutCheckDone
+		b.mappingWarnings[id] = MappingWarning{
+			ID:          id,
+			PrinterID:   printerID,
+			PrinterName: printerName,
+			ToolheadID:  toolheadID,
+			JobID:       aj.JobID,
+			JobName:     aj.Filename,
+			Grams:       grams,
+			Timestamp:   time.Now(),
+		}
+		b.warnMutex.Unlock()
+
+		log.Printf("Print on %s used a single filament, so its ~%.1fg is attributed to toolhead %d; confirm that is the toolhead it is printing from",
+			printerName, grams, toolheadID)
+
+		go b.sendNotification(mappingWarningPayload(printerName, aj.Filename, toolheadID, grams, time.Now()))
+	}
+}
+
+// GetMappingWarnings returns all unacknowledged unknown-slot warnings.
+func (b *FilamentBridge) GetMappingWarnings() []MappingWarning {
+	b.warnMutex.RLock()
+	defer b.warnMutex.RUnlock()
+
+	var warnings []MappingWarning
+	for _, w := range b.mappingWarnings {
+		if !w.Acknowledged {
+			warnings = append(warnings, w)
+		}
+	}
+	return warnings
+}
+
+// AcknowledgeMappingWarning dismisses an unknown-slot warning. Unlike
+// low-filament warnings these are not cleared when the print ends, since a print
+// that went to the wrong spool still needs correcting in Spoolman by hand.
+func (b *FilamentBridge) AcknowledgeMappingWarning(id string) error {
+	b.warnMutex.Lock()
+	defer b.warnMutex.Unlock()
+
+	w, exists := b.mappingWarnings[id]
+	if !exists {
+		return fmt.Errorf("mapping warning not found: %s", id)
+	}
+	w.Acknowledged = true
+	b.mappingWarnings[id] = w
+	return nil
 }
 
 // clearRunoutState drops unacknowledged warnings and check memos for a printer
@@ -1945,8 +2071,10 @@ func (b *FilamentBridge) monitorPrusaLink(printerID string, config PrinterConfig
 		}
 
 		// With the estimate in hand, warn (and optionally pause) if the mapped
-		// spool has less filament remaining than the print still needs.
+		// spool has less filament remaining than the print still needs, and warn
+		// if a toolhead this print uses has no spool mapped at all.
 		b.checkRunoutWarnings(printerID, config, client, aj)
+		b.checkMappingWarnings(printerID, config, aj)
 
 	case isTerminal && active != nil && active.Filename != "":
 		// A tracked job has ended. Classify how it ended to decide how much usage to record:

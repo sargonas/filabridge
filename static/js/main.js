@@ -305,6 +305,13 @@ function loadConfiguration() {
                         <input type="text" id="notify_webhook_url" value="${config.notify_webhook_url || ''}" placeholder="https://ntfy.example/filabridge">
                         <small>POST a JSON notification here on a low-filament warning (noting if it auto-paused the print) or an unexpected loss of connection during a print. Point it at ntfy, Gotify, Home Assistant, a Discord/Slack relay, or an Apprise API instance. Leave empty to disable.</small>
                     </div>
+                    <div class="form-group">
+                        <label style="display: flex; align-items: center; gap: 10px; cursor: pointer;">
+                            <input type="checkbox" id="notify_unknown_filament_slot" style="width: auto; cursor: pointer;" ${config.notify_unknown_filament_slot !== 'false' ? 'checked' : ''}>
+                            <span><strong>Confirm toolhead mapping on single-filament prints</strong></span>
+                        </label>
+                        <small>On a printer with more than one toolhead, warn when a print was sliced with a single filament. Those files do not record which slot they used, so the usage is recorded against toolhead 0 by default. Warns on the dashboard, and via the webhook above if one is set. Printers with one toolhead are unaffected.</small>
+                    </div>
                     <div style="margin-top: 20px; text-align: center;">
                         <button class="btn" onclick="saveConfiguration()">💾 Save Configuration</button>
                     </div>
@@ -341,7 +348,8 @@ function saveConfiguration() {
         poll_interval: document.getElementById('poll_interval').value,
         runout_warning_enabled: document.getElementById('runout_warning_enabled').checked ? 'true' : 'false',
         runout_pause_enabled: document.getElementById('runout_pause_enabled').checked ? 'true' : 'false',
-        notify_webhook_url: document.getElementById('notify_webhook_url').value.trim()
+        notify_webhook_url: document.getElementById('notify_webhook_url').value.trim(),
+        notify_unknown_filament_slot: document.getElementById('notify_unknown_filament_slot').checked ? 'true' : 'false'
     };
     
     const password = document.getElementById('spoolman_password').value;

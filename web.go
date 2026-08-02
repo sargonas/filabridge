@@ -60,6 +60,7 @@ type WebSocketMessage struct {
 	ToolheadMappings map[string]map[int]ToolheadMapping `json:"toolhead_mappings"`
 	PrintErrors      []PrintError                       `json:"print_errors,omitempty"`
 	RunoutWarnings   []RunoutWarning                    `json:"runout_warnings,omitempty"`
+	MappingWarnings  []MappingWarning                   `json:"mapping_warnings,omitempty"`
 }
 
 // NewWebServer creates a new web server with Gin
@@ -170,6 +171,7 @@ func (ws *WebServer) setupRoutes() {
 		api.PUT("/printers/:id/toolheads/:toolhead_id", ws.updateToolheadNameHandler)
 		api.POST("/print-errors/:id/acknowledge", ws.acknowledgePrintErrorHandler)
 		api.POST("/runout-warnings/:id/acknowledge", ws.acknowledgeRunoutWarningHandler)
+		api.POST("/mapping-warnings/:id/acknowledge", ws.acknowledgeMappingWarningHandler)
 		api.GET("/print-history", ws.getPrintHistoryHandler)
 		api.DELETE("/print-history", ws.clearPrintHistoryHandler)
 		api.POST("/import-mappings", ws.importMappingsHandler)
@@ -244,6 +246,7 @@ func (ws *WebServer) BroadcastStatus() {
 	// Get print errors
 	printErrors := ws.bridge.GetPrintErrors()
 	runoutWarnings := ws.bridge.GetRunoutWarnings()
+	mappingWarnings := ws.bridge.GetMappingWarnings()
 
 	// Create message
 	message := WebSocketMessage{
@@ -254,6 +257,7 @@ func (ws *WebServer) BroadcastStatus() {
 		ToolheadMappings: status.ToolheadMappings,
 		PrintErrors:      printErrors,
 		RunoutWarnings:   runoutWarnings,
+		MappingWarnings:  mappingWarnings,
 	}
 
 	// Marshal to JSON
@@ -412,23 +416,26 @@ func (ws *WebServer) dashboardHandler(c *gin.Context) {
 	}
 
 	runoutWarnings := ws.bridge.GetRunoutWarnings()
+	mappingWarnings := ws.bridge.GetMappingWarnings()
 
 	c.HTML(http.StatusOK, "index.html", gin.H{
-		"Version":           version,
-		"HistoryEnabled":    historyEnabled,
-		"Status":            status,
-		"Spools":            spools,
-		"HasErrors":         hasErrors,
-		"HasPrintErrors":    hasPrintErrors,
-		"PrintErrors":       printErrors,
-		"RunoutWarnings":    runoutWarnings,
-		"HasRunoutWarnings": len(runoutWarnings) > 0,
-		"IsFirstRun":        isFirstRun,
-		"Printers":          cfg.Printers,
-		"SpoolmanConnected": spoolmanConnected,
-		"SpoolmanError":     spoolmanError,
-		"SpoolmanBaseURL":   cfg.SpoolmanURL,
-		"DeveloperMode":     cfg.DeveloperMode,
+		"Version":            version,
+		"HistoryEnabled":     historyEnabled,
+		"Status":             status,
+		"Spools":             spools,
+		"HasErrors":          hasErrors,
+		"HasPrintErrors":     hasPrintErrors,
+		"PrintErrors":        printErrors,
+		"RunoutWarnings":     runoutWarnings,
+		"HasRunoutWarnings":  len(runoutWarnings) > 0,
+		"MappingWarnings":    mappingWarnings,
+		"HasMappingWarnings": len(mappingWarnings) > 0,
+		"IsFirstRun":         isFirstRun,
+		"Printers":           cfg.Printers,
+		"SpoolmanConnected":  spoolmanConnected,
+		"SpoolmanError":      spoolmanError,
+		"SpoolmanBaseURL":    cfg.SpoolmanURL,
+		"DeveloperMode":      cfg.DeveloperMode,
 	})
 }
 
@@ -1258,6 +1265,22 @@ func (ws *WebServer) acknowledgeRunoutWarningHandler(c *gin.Context) {
 	}
 
 	if err := ws.bridge.AcknowledgeRunoutWarning(id); err != nil {
+		internalError(c, err)
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"message": "Warning acknowledged"})
+}
+
+// acknowledgeMappingWarningHandler dismisses a toolhead-attribution warning
+func (ws *WebServer) acknowledgeMappingWarningHandler(c *gin.Context) {
+	id := c.Param("id")
+	if id == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Warning ID is required"})
+		return
+	}
+
+	if err := ws.bridge.AcknowledgeMappingWarning(id); err != nil {
 		internalError(c, err)
 		return
 	}

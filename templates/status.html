@@ -45,6 +45,21 @@
         </div>
         {{else}}<div id="runout-warnings-container"></div>{{end}}
 
+        {{if .HasMappingWarnings}}
+        <div id="mapping-warnings-container">
+            {{range .MappingWarnings}}
+            <div class="mapping-warning alert alert-warning" data-warning-id="{{.ID}}">
+                <h4 style="margin-top: 0;">⚠️ Confirm Toolhead Mapping</h4>
+                <p><strong>Printer:</strong> {{.PrinterName}}</p>
+                <p><strong>Print:</strong> {{.JobName}} (~{{printf "%.1f" .Grams}}g)</p>
+                <p>This print was sliced with a single filament, which does not record which slot it used, so FilaBridge will record its usage against <strong>toolhead {{.ToolheadID}}</strong>.</p>
+                <p><strong>Action:</strong> if the print is running from a different toolhead, remap it before the print finishes, otherwise the wrong spool will be debited.</p>
+                <button class="btn btn-warning" onclick="acknowledgeMappingWarning('{{.ID}}')">Acknowledge</button>
+            </div>
+            {{end}}
+        </div>
+        {{else}}<div id="mapping-warnings-container"></div>{{end}}
+
         {{if .HasPrintErrors}}
         <div id="print-errors-container">
             {{range .PrintErrors}}
