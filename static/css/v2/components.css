@@ -155,11 +155,14 @@
     margin-bottom: 16px;
 }
 
-/* Keep the settings forms to a readable measure on wide screens, the way
-   upstream caps its own settings page. */
+/* Settings and history are read as documents rather than scanned as a dashboard,
+   so they keep to a narrower measure than the shared column - centred within it,
+   the way upstream caps its own settings page. */
 #settings-tab,
 #history-tab {
-    max-width: 980px;
+    max-width: calc(980px + 48px);
+    margin-left: auto;
+    margin-right: auto;
 }
 
 /* --- Alerts -------------------------------------------------------------- */

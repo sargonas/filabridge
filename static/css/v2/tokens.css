@@ -98,8 +98,13 @@
     --v2-radius-lg: 10px;
     --v2-radius-xl: 12px;
 
-    /* Layout */
+    /* Layout. --v2-content-w is the width of the centred column everything lines
+       up to: the top bar's title, the nav tabs and each tab's content all share
+       it, so nothing shifts sideways as you move between tabs. The bar's own
+       background still spans the full window. 1200px matches the width the
+       classic skin has always used. */
     --v2-topbar-h: 53px;
+    --v2-content-w: 1200px;
 }
 
 /* IBM Plex, self-hosted (latin subset) so the appliance stays usable with no
