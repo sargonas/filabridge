@@ -29,6 +29,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	mqtt "github.com/eclipse/paho.mqtt.golang"
@@ -42,6 +43,7 @@ const (
 	bambuConnectTimeout = 10 * time.Second
 	bambuKeepAlive      = 30 * time.Second
 	bambuFTPSTimeout    = 20 * time.Second
+	bambuCommandTimeout = 5 * time.Second // publish ack for pause/resume
 )
 
 // sliceInfoPath is the entry inside a Bambu .3mf (a zip) holding per-filament
@@ -90,6 +92,7 @@ type bambuClient struct {
 	accessCode string
 
 	client mqtt.Client
+	seq    atomic.Uint64 // sequence_id for outgoing commands
 
 	mu          sync.RWMutex
 	report      bambuReport
@@ -117,6 +120,10 @@ func newBambuClient(ip, serial, accessCode string) *bambuClient {
 	opts.SetOnConnectHandler(bc.onConnect)
 	opts.SetConnectionLostHandler(func(_ mqtt.Client, err error) {
 		log.Printf("Bambu %s: MQTT connection lost: %v", serial, err)
+		// Drop the cached report: whatever the printer was last doing is no
+		// longer something we know. onConnect re-requests a full state push, so
+		// the cache refills as soon as the printer is back.
+		bc.invalidateReport()
 	})
 
 	bc.client = mqtt.NewClient(opts)
@@ -155,6 +162,42 @@ func (bc *bambuClient) requestPushAll() {
 	bc.client.Publish(bc.requestTopic(), 0, false, payload)
 }
 
+// sendPrintCommand publishes a "print" command (pause/resume/stop) on the
+// printer's request topic. Bambu acknowledges nothing beyond the MQTT publish,
+// so the caller confirms the effect by watching gcode_state in the next report.
+func (bc *bambuClient) sendPrintCommand(command string) error {
+	// isConnected, not paho's IsConnected: a publish into a session that is only
+	// reconnecting would be reported as a successful pause that never happened.
+	if !bc.isConnected() {
+		return fmt.Errorf("MQTT not connected to %s", bc.ip)
+	}
+	payload := fmt.Sprintf(`{"print":{"sequence_id":"%d","command":"%s","param":""}}`,
+		bc.seq.Add(1), command)
+	token := bc.client.Publish(bc.requestTopic(), 0, false, payload)
+	if !token.WaitTimeout(bambuCommandTimeout) {
+		return fmt.Errorf("timed out publishing %q to %s", command, bc.ip)
+	}
+	return token.Error()
+}
+
+// PauseJob and ResumeJob satisfy jobController. Bambu's commands act on whatever
+// the printer is currently running rather than on a numbered job, so the job id
+// is accepted and ignored; it stays in the signature so a Bambu printer and a
+// PrusaLink one drive the same low-filament path.
+func (bc *bambuClient) PauseJob(int) error  { return bc.sendPrintCommand("pause") }
+func (bc *bambuClient) ResumeJob(int) error { return bc.sendPrintCommand("resume") }
+
+// IsPaused reports whether the printer is paused, from the cached MQTT state.
+// Unlike the PrusaLink implementation this costs the printer nothing, but it
+// needs at least one report to have arrived.
+func (bc *bambuClient) IsPaused() (bool, error) {
+	report, ok := bc.snapshot()
+	if !ok {
+		return false, fmt.Errorf("no state reported yet by %s", bc.ip)
+	}
+	return report.Print.GcodeState == bambuStatePause, nil
+}
+
 // bambuDebugRaw, when true, logs every raw MQTT report payload. Set by the
 // developer probe (main -bambu-probe) to inspect real printer messages.
 var bambuDebugRaw bool
@@ -183,8 +226,24 @@ func (bc *bambuClient) snapshot() (bambuReport, bool) {
 	return bc.report, bc.haveReport
 }
 
+// invalidateReport forgets the cached state, so a reader gets "nothing known"
+// rather than a report from before the printer went away.
+func (bc *bambuClient) invalidateReport() {
+	bc.mu.Lock()
+	defer bc.mu.Unlock()
+	bc.haveReport = false
+}
+
+// isConnected reports whether the MQTT session is actually open.
+//
+// It deliberately asks IsConnectionOpen rather than IsConnected: with
+// auto-reconnect and connect-retry both enabled (they are, above), paho's
+// IsConnected also answers true while it is merely *trying* to reconnect. A
+// printer that has been powered off would therefore read as connected forever,
+// and its last cached report would keep being served as current state.
+// IsConnectionOpen is true only for a live session.
 func (bc *bambuClient) isConnected() bool {
-	return bc.client.IsConnected()
+	return bc.client.IsConnectionOpen()
 }
 
 func (bc *bambuClient) disconnect() {
@@ -206,26 +265,92 @@ func bambuJobName(r bambuReport) string {
 // ensureBambuClient returns the persistent MQTT client for a printer, creating
 // and connecting it on first use. If the printer's address, serial, or access
 // code changed, the old client is torn down and replaced.
+//
+// The new client is registered before it is dialed, and the dial happens outside
+// bambuMutex: connect() blocks for up to bambuConnectTimeout, and holding the
+// map lock across it would serialize every other printer's setup behind an
+// unreachable one. A caller that arrives mid-dial gets the same client rather
+// than building a second connection to the same printer.
 func (b *FilamentBridge) ensureBambuClient(printerID string, config PrinterConfig) *bambuClient {
 	b.bambuMutex.Lock()
-	defer b.bambuMutex.Unlock()
-
 	if existing, ok := b.bambuClients[printerID]; ok {
 		if existing.ip == config.IPAddress && existing.serial == config.Serial && existing.accessCode == config.APIKey {
+			b.bambuMutex.Unlock()
 			return existing
 		}
 		existing.disconnect() // config changed; rebuild
 		delete(b.bambuClients, printerID)
 	}
-
 	bc := newBambuClient(config.IPAddress, config.Serial, config.APIKey)
 	b.bambuClients[printerID] = bc
+	b.bambuMutex.Unlock()
+
 	if err := bc.connect(); err != nil {
 		// Auto-reconnect keeps trying in the background; log and return the
 		// client so the next poll cycle sees it once it comes up.
 		log.Printf("Bambu %s: initial MQTT connect failed (will keep retrying): %v", config.Name, err)
 	}
 	return bc
+}
+
+// existingBambuClient returns the MQTT client already established for a printer,
+// or nil if none has been created. Unlike ensureBambuClient it never dials, so a
+// status read can consult live MQTT state without blocking on a TLS handshake.
+func (b *FilamentBridge) existingBambuClient(printerID string) *bambuClient {
+	b.bambuMutex.Lock()
+	defer b.bambuMutex.Unlock()
+	return b.bambuClients[printerID]
+}
+
+// StartBambuClients opens the MQTT connection for every configured Bambu printer
+// without waiting for a monitor cycle to do it. A Bambu printer has no status
+// endpoint to poll, so until its client is connected and has received a report
+// the dashboard has nothing to show but offline; starting the connections at
+// boot (and on every config reload) shrinks that window from a poll interval to
+// the length of one TLS handshake.
+//
+// Each printer connects in its own goroutine so an unreachable one cannot hold
+// up the others.
+func (b *FilamentBridge) StartBambuClients() {
+	cfg := b.GetConfigSnapshot()
+	if cfg == nil {
+		return
+	}
+	for printerID, pc := range cfg.Printers {
+		if printerID == "no_printers" || pc.Type != PrinterTypeBambu || pc.Serial == "" {
+			continue
+		}
+		go b.ensureBambuClient(printerID, pc)
+	}
+}
+
+// retireStaleBambuClients disconnects and drops the clients of printers that are
+// no longer configured (or are no longer Bambu printers), so a deleted printer
+// does not leave an MQTT session open for the life of the process. Printers
+// whose settings merely changed are rebuilt by ensureBambuClient.
+func (b *FilamentBridge) retireStaleBambuClients(printers map[string]PrinterConfig) {
+	b.bambuMutex.Lock()
+	defer b.bambuMutex.Unlock()
+
+	for printerID, bc := range b.bambuClients {
+		if pc, ok := printers[printerID]; ok && pc.Type == PrinterTypeBambu {
+			continue
+		}
+		bc.disconnect()
+		delete(b.bambuClients, printerID)
+		b.forgetPrinterStatus(printerID)
+	}
+}
+
+// CloseBambuClients disconnects every Bambu MQTT session, for shutdown.
+func (b *FilamentBridge) CloseBambuClients() {
+	b.bambuMutex.Lock()
+	defer b.bambuMutex.Unlock()
+
+	for printerID, bc := range b.bambuClients {
+		bc.disconnect()
+		delete(b.bambuClients, printerID)
+	}
 }
 
 // bambuStateIsPrinting reports whether the printer is actively working a job.
@@ -350,9 +475,13 @@ func (b *FilamentBridge) monitorBambu(printerID string, config PrinterConfig) er
 
 	report, ok := client.snapshot()
 	if !ok {
-		// Connected, awaiting the first report. Idle is the honest reading: the
-		// printer is reachable, we just do not know what it is doing yet.
-		b.cachePrinterStatus(printerID, StateIdle, nil)
+		// Session is open but the printer has not reported yet. Idle would be a
+		// guess, and a wrong guess here reads as "printer is fine and doing
+		// nothing" - which is indistinguishable from a printer that is actually
+		// gone. Offline is the honest answer for a state we do not know.
+		// onConnect requests a full state push, so this window closes as soon as
+		// the first report lands, well inside one poll interval.
+		b.cachePrinterStatus(printerID, StateOffline, nil)
 		return nil
 	}
 	p := report.Print
@@ -403,6 +532,11 @@ func (b *FilamentBridge) monitorBambu(printerID string, config PrinterConfig) er
 		if err := b.upsertActiveJob(aj); err != nil {
 			log.Printf("Warning: failed to persist active job for %s: %v", printerID, err)
 		}
+
+		// With the estimate in hand, warn (and optionally pause) if the mapped
+		// spool has less filament remaining than the print still needs. Same
+		// path PrusaLink uses; the MQTT client is the pauser here.
+		b.checkRunoutWarnings(printerID, config, client, aj)
 
 	case bambuStateIsTerminal(state) && active != nil && active.Filename != "":
 		completed := state == bambuStateFinish ||

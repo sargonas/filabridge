@@ -549,6 +549,34 @@ func (b *FilamentBridge) GetRunoutWarnings() []RunoutWarning {
 	return warnings
 }
 
+// jobController is the printer control surface the low-filament path needs:
+// pause a running print, resume it, and tell whether it is currently paused.
+// PrusaLink drives it over HTTP and Bambu over MQTT, so the warning logic below
+// is written once against the interface instead of once per printer type.
+type jobController interface {
+	PauseJob(jobID int) error
+	ResumeJob(jobID int) error
+	IsPaused() (bool, error)
+}
+
+var (
+	_ jobController = (*PrusaLinkClient)(nil)
+	_ jobController = (*bambuClient)(nil)
+)
+
+// jobControllerFor returns the pause/resume controller for a printer, chosen by
+// its type. It returns nil when a Bambu printer has no MQTT client yet, which
+// leaves auto-pause off for that cycle rather than misreporting a pause.
+func (b *FilamentBridge) jobControllerFor(printerID string, pc PrinterConfig, cfg *Config) jobController {
+	if pc.Type == PrinterTypeBambu {
+		if bc := b.existingBambuClient(printerID); bc != nil {
+			return bc
+		}
+		return nil
+	}
+	return b.prusaClientFor(printerID, pc, cfg)
+}
+
 // AcknowledgeRunoutWarning dismisses a low-filament warning. If the warning
 // auto-paused the print and the printer is still paused, the print is resumed
 // first; a print the user already resumed at the printer is left alone.
@@ -564,13 +592,16 @@ func (b *FilamentBridge) AcknowledgeRunoutWarning(id string) error {
 		cfg := b.GetConfigSnapshot()
 		if cfg != nil {
 			if pc, ok := cfg.Printers[w.PrinterID]; ok {
-				client := b.prusaClientFor(w.PrinterID, pc, cfg)
-				status, err := client.GetStatus()
+				controller := b.jobControllerFor(w.PrinterID, pc, cfg)
+				if controller == nil {
+					return fmt.Errorf("no connection to %s to resume the print", w.PrinterName)
+				}
+				paused, err := controller.IsPaused()
 				if err != nil {
 					return fmt.Errorf("could not check printer state before resuming: %w", err)
 				}
-				if status.Printer.State == StatePaused {
-					if err := client.ResumeJob(w.JobID); err != nil {
+				if paused {
+					if err := controller.ResumeJob(w.JobID); err != nil {
 						return fmt.Errorf("failed to resume print: %w", err)
 					}
 					log.Printf("Resumed job %d on %s after low-filament warning was acknowledged", w.JobID, w.PrinterName)
@@ -599,7 +630,10 @@ const runoutCheckDone = 1000
 // (optionally pausing the print) when the spool will run short. Each
 // (job, toolhead, spool) combination is checked once; remapping a toolhead to
 // a different spool triggers a fresh check.
-func (b *FilamentBridge) checkRunoutWarnings(printerID string, config PrinterConfig, client *PrusaLinkClient, aj *activeJob) {
+//
+// controller pauses the print when auto-pause is on; it is shared by both
+// printer backends, and a nil one means "warn only" for this cycle.
+func (b *FilamentBridge) checkRunoutWarnings(printerID string, config PrinterConfig, controller jobController, aj *activeJob) {
 	if len(aj.Usage) == 0 {
 		return
 	}
@@ -647,8 +681,8 @@ func (b *FilamentBridge) checkRunoutWarnings(printerID string, config PrinterCon
 		}
 
 		autoPaused := false
-		if pauseEnabled, err := b.GetRunoutPauseEnabled(); err == nil && pauseEnabled && aj.JobID != 0 {
-			if err := client.PauseJob(aj.JobID); err != nil {
+		if pauseEnabled, err := b.GetRunoutPauseEnabled(); err == nil && pauseEnabled && aj.JobID != 0 && controller != nil {
+			if err := controller.PauseJob(aj.JobID); err != nil {
 				log.Printf("Warning: could not pause job %d after low-filament warning: %v", aj.JobID, err)
 			} else {
 				autoPaused = true
@@ -958,6 +992,10 @@ func (b *FilamentBridge) ReloadConfig() error {
 	// whose settings changed are rebuilt lazily by prusaClientFor, which also
 	// closes the client it replaces.
 	b.retireStalePrusaClients(config.Printers)
+	b.retireStaleBambuClients(config.Printers)
+	// Connect any newly configured Bambu printer now rather than at the next
+	// poll, so a printer added from the UI does not read offline in between.
+	b.StartBambuClients()
 
 	return nil
 }
@@ -2239,14 +2277,25 @@ func (b *FilamentBridge) GetStatus() (*PrinterStatus, error) {
 			}
 
 			// A Bambu printer has no PrusaLink status endpoint to poll: its state
-			// only ever arrives through the monitor's MQTT client, which caches it
-			// above. With nothing cached yet (monitor has not run, or web-only
-			// mode) the honest answer is offline rather than a failed HTTP poll
-			// against a printer that does not serve one.
+			// arrives over MQTT. With nothing in the status cache yet (the first
+			// monitor cycle has not landed, or web-only mode), read the MQTT
+			// client's own cache directly - that is the Bambu equivalent of the
+			// live poll the PrusaLink branch does below, and it is what keeps a
+			// just-started printer from reading offline for a whole poll
+			// interval. Only an already-established client is consulted:
+			// StartBambuClients dials at boot and on config reload, so a
+			// dashboard load never has to wait on a TLS handshake.
 			if printerConfig.Type == PrinterTypeBambu {
+				state := StateOffline
+				if bc := b.existingBambuClient(printerID); bc != nil && bc.isConnected() {
+					if report, ok := bc.snapshot(); ok {
+						state = bambuDashboardState(report.Print.GcodeState)
+						b.cachePrinterStatus(printerID, state, nil)
+					}
+				}
 				status.Printers[printerID] = PrinterData{
 					Name:  printerName,
-					State: StateOffline,
+					State: state,
 				}
 				continue
 			}
@@ -2389,6 +2438,7 @@ func (b *FilamentBridge) processFilamentUsage(printerName string, filamentUsage 
 func (b *FilamentBridge) Close() error {
 	// Hand the printers their sockets back before going away.
 	b.ClosePrusaClients()
+	b.CloseBambuClients()
 	if b.db != nil {
 		return b.db.Close()
 	}
