@@ -388,15 +388,35 @@ type SpoolmanLocation struct {
 	Archived bool   `json:"archived"`
 }
 
-// GetLocations returns Spoolman's predefined locations. It prefers the
-// `locations` setting, which lists ALL created locations (including empty ones);
-// older Spoolman versions without that setting fall back to the /location list,
-// which only reports locations that currently hold a spool.
+// GetLocations returns Spoolman's locations, merged from both sources so that
+// upgraded instances don't lose data. The `locations` setting holds predefined
+// locations (including empty ones, created via older clients), while
+// /api/v1/location reports locations currently referenced by spools (the only
+// place new v0.26 client locations show up). Results are unioned and deduped by
+// exact name; empty/whitespace names are skipped.
 func (c *SpoolmanClient) GetLocations() ([]SpoolmanLocation, error) {
-	if locs, err := c.getLocationsFromSetting(); err == nil {
-		return locs, nil
+	settingLocs, settingErr := c.getLocationsFromSetting()
+	listLocs, listErr := c.getLocationsFromList()
+
+	// Only fail if BOTH sources errored — a single working source is still useful.
+	if settingErr != nil && listErr != nil {
+		return nil, fmt.Errorf("failed to get locations from Spoolman (setting: %v; list: %w)", settingErr, listErr)
 	}
-	return c.getLocationsFromList()
+
+	merged := make([]SpoolmanLocation, 0, len(settingLocs)+len(listLocs))
+	seen := make(map[string]bool)
+	// Setting first so its metadata (ID/comment/archived) wins for shared names.
+	for _, loc := range append(settingLocs, listLocs...) {
+		if strings.TrimSpace(loc.Name) == "" {
+			continue
+		}
+		if seen[loc.Name] {
+			continue
+		}
+		seen[loc.Name] = true
+		merged = append(merged, loc)
+	}
+	return merged, nil
 }
 
 // getLocationsFromSetting reads the predefined location list from Spoolman's
