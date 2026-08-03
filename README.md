@@ -233,6 +233,15 @@ FilaBridge keeps each spool's Spoolman location in step with its toolhead assign
 
 If you have exactly one printer with one toolhead configured, the Spool Tags screen also offers a Quick-Assign variant for each spool: a single tag that assigns the spool directly to your printer in one scan, with no location tag needed. Multi-toolhead users can build the same thing manually by appending `&location=<location name>` to a spool URL.
 
+#### Unloading With the Printer's Own Tag
+
+By default a toolhead tag scanned on its own waits for a spool tag, so tags pair up in whichever order you scan them. Tick **Toolhead tag first unloads the spool** under Settings → Advanced Settings → NFC Scanning Settings to change that:
+
+- **Scan spool, then printer** loads the spool, exactly as before.
+- **Scan printer on its own** unloads whatever is currently on that toolhead.
+
+That gives each printer a single tag covering both directions, with no separate "empty" tag to keep track of. The unloaded spool follows the same Spoolman location rules as any other unassignment above, so it returns to its own home location or to your default storage location. Storage location tags are unaffected and always wait for a spool, and scanning a toolhead that has nothing loaded reports that rather than reporting an unload.
+
 ## Notifications
 
 FilaBridge can POST to a webhook of your choice for the two events it uniquely knows about. Your printer's own app already handles print-started/finished alerts, so FilaBridge doesn't duplicate them... it only notifies about things that depend on Spoolman data or on its own view of the printer. Set a **Notification webhook URL** in Settings → Basic Configuration to enable it or leave it empty to disable.
@@ -285,6 +294,8 @@ The web interface also provides REST API endpoints:
 - `GET /api/nfc/assign` - Handle NFC tag scans (spool, location, or both in one URL)
 - `GET /api/nfc/urls` - Get all NFC URLs with QR codes
 - `GET /api/nfc/session/status` - Check NFC session status
+- `GET /api/config/nfc-toolhead-unload` - Get the "toolhead tag first unloads" setting
+- `PUT /api/config/nfc-toolhead-unload` - Set the "toolhead tag first unloads" setting
 - `GET/POST /api/locations`, `PUT/DELETE /api/locations/{name}` - Manage locations
 - `WS /ws/status` - WebSocket endpoint for real-time status updates
 

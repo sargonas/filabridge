@@ -344,6 +344,7 @@ func (b *FilamentBridge) initializeDefaultConfig() error {
 		ConfigKeyRunoutWarningEnabled:            {"true", "Show a dashboard warning when the mapped spool has less filament remaining than the print requires"},
 		ConfigKeyRunoutPauseEnabled:              {"false", "Also pause the print when a low-filament warning fires (acknowledging resumes it)"},
 		ConfigKeyNotifyWebhookURL:                {"", "Webhook URL to POST a JSON notification to on a low-filament warning or an unexpected loss of connection during a print (leave empty to disable)"},
+		ConfigKeyNFCToolheadFirstUnloads:         {"false", "Scanning a toolhead tag with no spool scan pending unloads whatever is on that toolhead, so one printer tag both loads and unloads"},
 	}
 
 	// Check if this is a fresh installation by checking if any config exists
@@ -473,6 +474,30 @@ func (b *FilamentBridge) SetAutoAssignPreviousSpoolRemember(enabled bool) error 
 		value = "true"
 	}
 	return b.SetConfigValue(ConfigKeyAutoAssignPreviousSpoolRemember, value)
+}
+
+// GetNFCToolheadFirstUnloads reports whether a toolhead tag scanned with no
+// spool scan pending unloads that toolhead instead of waiting for a spool.
+// Defaults to false, including for databases predating the setting, so the
+// scan-in-any-order workflow is what an existing install keeps.
+func (b *FilamentBridge) GetNFCToolheadFirstUnloads() (bool, error) {
+	value, err := b.GetConfigValue(ConfigKeyNFCToolheadFirstUnloads)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return false, nil
+		}
+		return false, err
+	}
+	return value == "true", nil
+}
+
+// SetNFCToolheadFirstUnloads sets whether a lone toolhead tag scan unloads.
+func (b *FilamentBridge) SetNFCToolheadFirstUnloads(enabled bool) error {
+	value := "false"
+	if enabled {
+		value = "true"
+	}
+	return b.SetConfigValue(ConfigKeyNFCToolheadFirstUnloads, value)
 }
 
 // GetPrintHistoryEnabled reports whether local print history is kept and the

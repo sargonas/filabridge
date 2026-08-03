@@ -163,6 +163,8 @@ func (ws *WebServer) setupRoutes() {
 		api.PUT("/config/auto-assign-previous-spool", ws.updateAutoAssignPreviousSpoolHandler)
 		api.GET("/config/print-history", ws.getPrintHistorySettingHandler)
 		api.PUT("/config/print-history", ws.updatePrintHistorySettingHandler)
+		api.GET("/config/nfc-toolhead-unload", ws.getNFCToolheadUnloadHandler)
+		api.PUT("/config/nfc-toolhead-unload", ws.updateNFCToolheadUnloadHandler)
 		api.GET("/printers", ws.getPrintersHandler)
 		api.POST("/printers", ws.addPrinterHandler)
 		api.PUT("/printers/:id", ws.updatePrinterHandler)
@@ -799,6 +801,38 @@ func (ws *WebServer) updateAutoAssignPreviousSpoolHandler(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"message": "Auto-assign previous spool settings updated successfully"})
 }
 
+// getNFCToolheadUnloadHandler returns whether a lone toolhead tag scan unloads
+func (ws *WebServer) getNFCToolheadUnloadHandler(c *gin.Context) {
+	enabled, err := ws.bridge.GetNFCToolheadFirstUnloads()
+	if err != nil {
+		internalError(c, err)
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"enabled": enabled})
+}
+
+// updateNFCToolheadUnloadHandler sets whether a lone toolhead tag scan unloads
+func (ws *WebServer) updateNFCToolheadUnloadHandler(c *gin.Context) {
+	// Note: no binding:"required" on Enabled - the validator treats false as a
+	// missing value, which would make it impossible to ever disable the feature.
+	var req struct {
+		Enabled bool `json:"enabled"`
+	}
+
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid JSON"})
+		return
+	}
+
+	if err := ws.bridge.SetNFCToolheadFirstUnloads(req.Enabled); err != nil {
+		internalError(c, err)
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"message": "NFC toolhead unload setting updated successfully"})
+}
+
 // getPrintersHandler returns all configured printers
 func (ws *WebServer) getPrintersHandler(c *gin.Context) {
 	printerConfigs, err := ws.bridge.GetAllPrinterConfigs()
@@ -1341,6 +1375,16 @@ func (ws *WebServer) nfcAssignHandler(c *gin.Context) {
 		}
 	}
 
+	// Optional workflow: with "toolhead tag first unloads" on, a toolhead tag
+	// scanned on its own means "take off whatever is loaded" rather than "wait
+	// for a spool", so one printer tag covers both directions. Scans carrying a
+	// spool, and scans landing on a session that already has a spool waiting,
+	// still assign exactly as they do with the mode off. Storage locations
+	// (drybox, shelf) are deliberately left out: clearing one has no meaning.
+	if spoolID == 0 && isPrinterLocation && ws.handleToolheadFirstUnload(c, sessionID, printerName, toolheadID, locationName) {
+		return
+	}
+
 	// Create or update session
 	session, err := ws.bridge.createOrUpdateSession(sessionID, spoolID, printerName, toolheadID, locationName, isPrinterLocation)
 	if err != nil {
@@ -1400,6 +1444,64 @@ func (ws *WebServer) nfcAssignHandler(c *gin.Context) {
 	})
 }
 
+// handleToolheadFirstUnload unloads a toolhead when its tag is scanned with no
+// spool scan pending and the mode is on. It reports whether it rendered a
+// response; false means the scan falls through to the normal session flow.
+func (ws *WebServer) handleToolheadFirstUnload(c *gin.Context, sessionID string, printerName string, toolheadID int, locationName string) bool {
+	enabled, err := ws.bridge.GetNFCToolheadFirstUnloads()
+	if err != nil {
+		// A setting that cannot be read is treated as off: the scan-in-any-order
+		// flow is the safe fallback, since it never discards a mapping.
+		log.Printf("Warning: Failed to check NFC toolhead unload setting: %v", err)
+		return false
+	}
+	if !enabled {
+		return false
+	}
+
+	// A spool already waiting in the session means this scan is the second half
+	// of a load, which the normal flow completes.
+	if session, err := ws.bridge.getSession(sessionID); err == nil && session.HasSpool {
+		return false
+	}
+
+	spoolID, err := ws.bridge.GetToolheadMapping(printerName, toolheadID)
+	if err != nil {
+		ws.renderPage(c, http.StatusInternalServerError, "nfc_error.html", gin.H{
+			"Error": "Failed to read toolhead mapping: " + err.Error(),
+		})
+		return true
+	}
+
+	// An empty toolhead is reported rather than silently succeeding, so a scan
+	// that did nothing does not read as one that unloaded something.
+	if spoolID > 0 {
+		// UnmapToolhead sends the spool back to its remembered location or the
+		// default storage one, per the auto-assign settings.
+		if err := ws.bridge.UnmapToolhead(printerName, toolheadID); err != nil {
+			ws.renderPage(c, http.StatusInternalServerError, "nfc_error.html", gin.H{
+				"Error": "Unload failed: " + err.Error(),
+			})
+			return true
+		}
+		ws.BroadcastStatus()
+	}
+
+	// Drop any half-finished session so a location left over from an earlier
+	// scan cannot pair up with whatever gets scanned next.
+	ws.bridge.deleteSession(sessionID)
+
+	ws.renderPage(c, http.StatusOK, "nfc_success.html", gin.H{
+		"Unloaded":     true,
+		"WasEmpty":     spoolID == 0,
+		"SpoolID":      spoolID,
+		"PrinterName":  printerName,
+		"ToolheadID":   toolheadID,
+		"LocationName": locationName,
+	})
+	return true
+}
+
 // nfcUrlsHandler returns all available NFC URLs with QR codes
 func (ws *WebServer) nfcUrlsHandler(c *gin.Context) {
 	var urls []gin.H
@@ -1435,6 +1537,11 @@ func (ws *WebServer) nfcUrlsHandler(c *gin.Context) {
 		comboURL := ""
 		comboQRBase64 := ""
 		if quickAssignLocation != "" {
+			// Keep spool ahead of location in the query string. Both are read
+			// from the same request so order does not change this handler's
+			// result, but a spool-first URL also reads correctly to anyone
+			// inspecting a tag, and never looks like the lone toolhead scan that
+			// the "toolhead tag first unloads" mode treats as an unload.
 			comboURL = fmt.Sprintf("http://%s/api/nfc/assign?spool=%d&location=%s",
 				c.Request.Host, spool.ID, neturl.QueryEscape(quickAssignLocation))
 			if qrCode, err := qrcode.Encode(comboURL, qrcode.Medium, 256); err != nil {

@@ -120,6 +120,7 @@ function loadSettingsTabData(tabId) {
     } else if (tabId === 'advanced') {
         loadAdvancedSettings();
         loadAutoAssignSettings();
+        loadNFCScanningSettings();
         loadPrintHistorySettings();
     }
 }
@@ -548,6 +549,33 @@ function saveAutoAssignSettings() {
 
 // Print History settings
 let printHistoryWasEnabled = true;
+
+// NFC Scanning Settings Functions
+function loadNFCScanningSettings() {
+    fetch('/api/config/nfc-toolhead-unload')
+        .then(response => response.json())
+        .then(data => {
+            const checkbox = document.getElementById('nfcToolheadFirstUnloads');
+            if (checkbox) {
+                checkbox.checked = data.enabled === true;
+            }
+        })
+        .catch(error => {
+            console.error('Error loading NFC scanning settings:', error);
+        });
+}
+
+function saveNFCScanningSettings() {
+    const enabled = document.getElementById('nfcToolheadFirstUnloads').checked;
+
+    apiRequest('/api/config/nfc-toolhead-unload', { method: 'PUT', body: { enabled: enabled } })
+    .then(() => {
+        alert('NFC settings saved successfully!');
+    })
+    .catch(error => {
+        alert('Error saving NFC settings: ' + error.message);
+    });
+}
 
 function loadPrintHistorySettings() {
     fetch('/api/config/print-history')
