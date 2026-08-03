@@ -429,6 +429,7 @@ func (ws *WebServer) dashboardHandler(c *gin.Context) {
 		"SpoolmanError":     spoolmanError,
 		"SpoolmanBaseURL":   cfg.SpoolmanURL,
 		"DeveloperMode":     cfg.DeveloperMode,
+		"LegacyUI":          cfg.LegacyUI,
 	})
 }
 
@@ -451,14 +452,14 @@ func internalError(c *gin.Context, err error) {
 
 // renderPage renders one of the standalone pages (the NFC scan results and the
 // error page), adding the fields every page needs on top of the handler's own
-// data. Currently that is DeveloperMode, which selects the experimental skin;
-// the dashboard passes it explicitly since it already builds a full data map.
+// data. Currently that is LegacyUI, which selects the pre-1.2.2 interface; the
+// dashboard passes it explicitly since it already builds a full data map.
 func (ws *WebServer) renderPage(c *gin.Context, code int, name string, data gin.H) {
 	if data == nil {
 		data = gin.H{}
 	}
 	if cfg := ws.bridge.GetConfigSnapshot(); cfg != nil {
-		data["DeveloperMode"] = cfg.DeveloperMode
+		data["LegacyUI"] = cfg.LegacyUI
 	}
 	c.HTML(code, name, data)
 }

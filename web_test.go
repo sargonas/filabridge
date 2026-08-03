@@ -60,52 +60,72 @@ func TestDeveloperModeFlag(t *testing.T) {
 	})
 }
 
-// TestExperimentalSkinGate: the Spoolman-v2 skin is served only when developer
-// mode is on. The classic sheets must load either way - the v2 files layer on
-// top of them rather than replacing them, so dropping them would leave the new
-// look with no base to override.
-func TestExperimentalSkinGate(t *testing.T) {
-	// Both the dashboard (which passes DeveloperMode explicitly) and a standalone
-	// page (which gets it from renderPage) have to honour the gate.
+// TestLegacyUIGate: the current interface is served by default, and
+// FILABRIDGE_OLD_UI brings back the pre-1.2.2 look. The classic sheets load
+// either way, since the current styling layers on top of them rather than
+// replacing them, so dropping them would leave the new look with no base.
+func TestLegacyUIGate(t *testing.T) {
+	// Both the dashboard (which passes LegacyUI explicitly) and a standalone page
+	// (which gets it from renderPage) have to honour the flag.
 	pages := map[string]string{
 		"dashboard":  "/",
 		"standalone": "/api/nfc/assign", // no params: renders nfc_error.html
 	}
 
 	for name, path := range pages {
-		t.Run(name+"/on", func(t *testing.T) {
-			t.Setenv("FILABRIDGE_DEVELOPER_MODE", "true")
+		t.Run(name+"/default", func(t *testing.T) {
+			t.Setenv("FILABRIDGE_OLD_UI", "")
 			ws, _, _ := newTestServer(t)
 			rec, _ := doJSON(t, ws, http.MethodGet, path, "")
 			body := rec.Body.String()
 			if !strings.Contains(body, "/static/css/v2/tokens.css") {
-				t.Error("expected the v2 skin to be linked when developer mode is on")
+				t.Error("the current interface should be served by default")
 			}
 			if !strings.Contains(body, `data-theme="dark"`) {
-				t.Error("expected the theme hook on <html> when developer mode is on")
+				t.Error("expected the theme hook on <html> by default")
 			}
 		})
 
-		t.Run(name+"/off", func(t *testing.T) {
-			t.Setenv("FILABRIDGE_DEVELOPER_MODE", "")
+		t.Run(name+"/old ui", func(t *testing.T) {
+			t.Setenv("FILABRIDGE_OLD_UI", "true")
 			ws, _, _ := newTestServer(t)
 			rec, _ := doJSON(t, ws, http.MethodGet, path, "")
-			if strings.Contains(rec.Body.String(), "/static/css/v2/") {
-				t.Error("v2 skin must stay hidden while developer mode is off")
+			body := rec.Body.String()
+			if strings.Contains(body, "/static/css/v2/") {
+				t.Error("FILABRIDGE_OLD_UI must drop the current styling")
+			}
+			if strings.Contains(body, `data-theme="dark"`) {
+				t.Error("FILABRIDGE_OLD_UI must drop the theme hook too")
 			}
 		})
 	}
 
 	t.Run("classic sheets always load", func(t *testing.T) {
-		for _, devMode := range []string{"true", ""} {
-			t.Setenv("FILABRIDGE_DEVELOPER_MODE", devMode)
+		for _, oldUI := range []string{"true", ""} {
+			t.Setenv("FILABRIDGE_OLD_UI", oldUI)
 			ws, _, _ := newTestServer(t)
 			rec, _ := doJSON(t, ws, http.MethodGet, "/", "")
 			for _, sheet := range []string{"main.css", "components.css", "tabs.css", "nfc.css"} {
 				if !strings.Contains(rec.Body.String(), "/static/css/"+sheet) {
-					t.Errorf("developer mode %q: classic %s is no longer linked", devMode, sheet)
+					t.Errorf("old ui %q: classic %s is no longer linked", oldUI, sheet)
 				}
 			}
+		}
+	})
+
+	// The two flags are independent: the interface must not follow developer
+	// mode, which now only gates in-progress features like Bambu support.
+	t.Run("independent of developer mode", func(t *testing.T) {
+		t.Setenv("FILABRIDGE_DEVELOPER_MODE", "true")
+		t.Setenv("FILABRIDGE_OLD_UI", "true")
+		ws, _, _ := newTestServer(t)
+		rec, _ := doJSON(t, ws, http.MethodGet, "/", "")
+		body := rec.Body.String()
+		if strings.Contains(body, "/static/css/v2/") {
+			t.Error("developer mode must not force the current interface back on")
+		}
+		if !strings.Contains(body, `data-developer-mode="true"`) {
+			t.Error("developer mode should still be exposed for feature gating")
 		}
 	})
 }

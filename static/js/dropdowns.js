@@ -414,14 +414,15 @@ function updateEditButton(toolheadRow, selectedValue, selectedColor = '') {
         editButton.setAttribute('data-spool-id', selectedValue);
         editButton.setAttribute('onclick', `openSpoolmanEdit(${selectedValue})`);
         
-        // Set button color to match filament color
+        // Tint the button with the filament's own colour. A spool with no colour
+        // recorded clears the inline tint instead of hardcoding one, so the
+        // button falls back to whatever the active stylesheet gives it.
         if (selectedColor) {
             editButton.style.backgroundColor = '#' + selectedColor;
             editButton.style.borderColor = '#' + selectedColor;
         } else {
-            // Fallback to default blue if no color
-            editButton.style.backgroundColor = '#007bff';
-            editButton.style.borderColor = '#007bff';
+            editButton.style.backgroundColor = '';
+            editButton.style.borderColor = '';
         }
     } else {
         // Hide button

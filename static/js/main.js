@@ -313,7 +313,7 @@ function loadConfiguration() {
         })
         .catch(error => {
             console.error('Error loading configuration:', error);
-            document.getElementById('config-form').innerHTML = '<p style="color: red;">Error loading configuration</p>';
+            document.getElementById('config-form').innerHTML = '<p class="text-error">Error loading configuration</p>';
         });
 }
 

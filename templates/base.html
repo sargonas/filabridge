@@ -1,10 +1,10 @@
 <!DOCTYPE html>
-<html lang="en"{{if .DeveloperMode}} data-theme="dark"{{end}}>
+<html lang="en"{{if not .LegacyUI}} data-theme="dark"{{end}}>
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta name="description" content="FilaBridge - The missing link between printers and filament inventory">
-    <meta name="theme-color" content="{{if .DeveloperMode}}#1f1f1f{{else}}#667eea{{end}}">
+    <meta name="theme-color" content="{{if .LegacyUI}}#667eea{{else}}#1f1f1f{{end}}">
     <title>FilaBridge Dashboard</title>
     <link rel="icon" type="image/svg+xml" href="/static/images/favicon.svg">
     <!-- External CSS Files -->
@@ -15,10 +15,11 @@
     <link rel="stylesheet" href="/static/css/printers.css">
     <link rel="stylesheet" href="/static/css/nfc.css">
     <link rel="stylesheet" href="/static/css/modals.css">
-    {{if .DeveloperMode}}
-    <!-- Experimental skin matching Spoolman's redesigned (client_v2) interface,
-         gated behind FILABRIDGE_DEVELOPER_MODE. Loaded last so it restyles the
-         sheets above rather than replacing them - same markup, same behaviour. -->
+    {{if not .LegacyUI}}
+    <!-- The current interface, matching Spoolman's redesigned (client_v2) look.
+         Loaded last so it restyles the sheets above rather than replacing them:
+         same markup, same behaviour, only the styling differs. Set
+         FILABRIDGE_OLD_UI=true to skip these and get the pre-1.2.2 look back. -->
     <link rel="stylesheet" href="/static/css/v2/tokens.css">
     <link rel="stylesheet" href="/static/css/v2/shell.css">
     <link rel="stylesheet" href="/static/css/v2/components.css">

@@ -303,7 +303,7 @@ filabridge/
 ├── web.go                 # HTTP server and API routes
 ├── templates/             # HTML templates
 ├── static/                # CSS, JavaScript and fonts for the dashboard
-│   └── css/v2/            # Experimental Spoolman-style skin (developer mode)
+│   └── css/v2/            # Spoolman-style interface (default since v1.2.2)
 ├── go.mod / go.sum        # Go module definition
 └── README.md              # Documentation
 ```
@@ -378,29 +378,37 @@ go test ./...
 go test -race ./...
 ```
 
+### Interface
+
+FilaBridge's interface matches Spoolman's redesigned (`client_v2`) look, so the
+two apps read as one system when you run them side by side.
+
+The styling lives in `static/css/v2/` and layers on top of the classic sheets
+rather than replacing them, so both looks stay in sync as features land. Its
+design tokens are ported from Spoolman's `client_v2/src/app.css`, with one
+deliberate difference: the accent is violet, carried over from FilaBridge's own
+earlier header gradient, rather than Spoolman's orange. FilaBridge is a companion
+to Spoolman, not a clone of it. IBM Plex Sans and Mono are bundled in
+`static/fonts/` (SIL Open Font License 1.1, see `static/fonts/OFL.txt`) so the
+interface needs no internet access.
+
+If the redesign disrupts you, `FILABRIDGE_OLD_UI=true` brings back the pre-1.2.2
+interface. It is a short-term escape hatch rather than a supported option, and it
+will be removed after a few releases, so treat it as time to adjust rather than a
+setting to keep. Only the styling differs either way: the markup, behaviour and
+every element ID are shared.
+
 ### Developer mode
 
 Setting `FILABRIDGE_DEVELOPER_MODE=true` turns on features that are still under
-construction. It currently enables two:
+construction. It currently enables one:
 
 - **Bambu Lab printer support**, which is incomplete and hidden from the printer
   configuration UI without the flag.
-- **An experimental interface skin** matching Spoolman's redesigned
-  (`client_v2`) look, so the two apps read as one system. It is a pure restyle:
-  the markup, behaviour and every element ID are shared with the default look,
-  and only the stylesheets differ. The classic interface stays the default while
-  the new one is evaluated.
 
-Neither is ready for everyday use, so leave the flag unset in a normal install.
-
-The skin lives in `static/css/v2/` and layers on top of the classic sheets rather
-than replacing them, so both looks stay in sync as features land. Its design
-tokens are ported from Spoolman's `client_v2/src/app.css`, with one deliberate
-difference: the accent is violet, carried over from FilaBridge's own classic
-header gradient, rather than Spoolman's orange. FilaBridge is a companion to
-Spoolman, not a clone of it. IBM Plex Sans and Mono are bundled in
-`static/fonts/` (SIL Open Font License 1.1, see `static/fonts/OFL.txt`) so the
-interface needs no internet access.
+It is not ready for everyday use, so leave the flag unset in a normal install.
+It has no effect on the interface, which is controlled by `FILABRIDGE_OLD_UI`
+above.
 
 ## Contributing
 
