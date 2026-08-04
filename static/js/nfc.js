@@ -168,10 +168,11 @@ async function loadLocationTags(dataPromise) {
         const spoolmanURL = data.spoolman_url || '';
         const messageBanner = document.createElement('div');
         messageBanner.className = 'nfc-info-banner alert alert-warning';
-        
+
         let bannerHTML = '<strong>ℹ️ Location Management:</strong><br>';
-        bannerHTML += 'It is not possible via the Spoolman API to add locations automatically. ';
-        bannerHTML += 'To create locations, please do so via Spoolman. Then they will show up here.';
+        bannerHTML += 'Locations appear here when a spool is assigned. ';
+        bannerHTML += 'Use Spoolman to update spool locations. ';
+        bannerHTML += 'For printer toolheads, use the Filament Status tab to assign a spool.';
         
         if (spoolmanURL) {
             // Append /locations to the Spoolman URL
@@ -209,9 +210,12 @@ async function loadLocationTags(dataPromise) {
                 <div class="item-info">
                     <div class="item-name">${url.display_name}</div>
                 </div>
+                <!-- Rename disabled until it operates on spools instead of the
+                     abandoned locations setting; restored in a follow-up PR.
                 <div class="location-actions">
                     ${renderLocationActions(url)}
                 </div>
+                -->
             `;
             
             // Add click handler

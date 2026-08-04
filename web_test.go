@@ -492,14 +492,16 @@ func TestScannedStorageLocationBecomesHome(t *testing.T) {
 	}
 }
 
-// TestLocationsListEmptyAndTypeToolheads: /api/locations reads the predefined
-// locations setting so empty locations (no spools) still appear, and this
-// instance's toolhead locations are typed "printer" so the storage dropdown
-// filters them out.
-func TestLocationsListEmptyAndTypeToolheads(t *testing.T) {
+// TestLocationsListAndTypeToolheads: /api/locations lists what Spoolman reports
+// from /api/v1/location, skipping the blank names that unassigned spools
+// produce, and types this instance's toolhead locations "printer" so the
+// storage dropdown filters them out.
+func TestLocationsListAndTypeToolheads(t *testing.T) {
 	ws, _, spoolman := newTestServer(t)
-	// "Unopened" holds no spools; "TestPrinter - Toolhead 0" is a toolhead location.
-	spoolman.LocationSetting = []string{"Drybox", "Unopened", "TestPrinter - Toolhead 0"}
+	// "TestPrinter - Toolhead 0" is a toolhead location, "Drybox" is storage.
+	// Spoolman reports an unassigned spool's location as "", and whitespace-only
+	// names occur in the wild; neither is a place anything can be filed under.
+	spoolman.Locations = []string{"Drybox", "", "   ", "TestPrinter - Toolhead 0"}
 
 	rec, body := doJSON(t, ws, http.MethodGet, "/api/locations", "")
 	if rec.Code != http.StatusOK {
@@ -511,14 +513,15 @@ func TestLocationsListEmptyAndTypeToolheads(t *testing.T) {
 		m := l.(map[string]interface{})
 		types[m["name"].(string)] = m["type"].(string)
 	}
-	if types["Unopened"] != "storage" {
-		t.Errorf("empty location 'Unopened' should be listed as storage; got %q (types: %v)", types["Unopened"], types)
-	}
 	if types["Drybox"] != "storage" {
 		t.Errorf("Drybox type = %q, want storage", types["Drybox"])
 	}
 	if types["TestPrinter - Toolhead 0"] != "printer" {
 		t.Errorf("toolhead location should be typed 'printer'; got %q", types["TestPrinter - Toolhead 0"])
+	}
+	// Catches both "" and "   ": either would land as an extra, unnamed entry.
+	if len(types) != 2 {
+		t.Errorf("blank locations must not be listed; want 2 entries, got %d (%v)", len(types), types)
 	}
 }
 

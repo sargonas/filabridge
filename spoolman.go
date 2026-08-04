@@ -388,56 +388,21 @@ type SpoolmanLocation struct {
 	Archived bool   `json:"archived"`
 }
 
-// GetLocations returns Spoolman's predefined locations. It prefers the
-// `locations` setting, which lists ALL created locations (including empty ones);
-// older Spoolman versions without that setting fall back to the /location list,
-// which only reports locations that currently hold a spool.
+// GetLocations returns Spoolman's locations as reported by /api/v1/location.
+//
+// It used to prefer the `locations` setting, falling back to /api/v1/location
+// only when that request errored. On Spoolman v0.26 the setting request
+// succeeds with an empty, never-set value ({"value":"[]","is_set":false},
+// HTTP 200), so the fallback never ran and no locations were imported. The
+// v0.26 client has no Locations page and never writes that setting — locations
+// there are just the free-text `location` strings on spools — so the setting is
+// not a source of truth to fall back to.
 func (c *SpoolmanClient) GetLocations() ([]SpoolmanLocation, error) {
-	if locs, err := c.getLocationsFromSetting(); err == nil {
-		return locs, nil
-	}
 	return c.getLocationsFromList()
 }
 
-// getLocationsFromSetting reads the predefined location list from Spoolman's
-// `locations` setting, whose value is a JSON-encoded array of names.
-func (c *SpoolmanClient) getLocationsFromSetting() ([]SpoolmanLocation, error) {
-	req, err := http.NewRequest("GET", c.baseURL+"/api/v1/setting/locations", nil)
-	if err != nil {
-		return nil, err
-	}
-	c.addAuthHeader(req)
-	resp, err := c.httpClient.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("spoolman setting/locations returned HTTP %d", resp.StatusCode)
-	}
-	var setting struct {
-		Value string `json:"value"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&setting); err != nil {
-		return nil, err
-	}
-	var names []string
-	if strings.TrimSpace(setting.Value) != "" {
-		if err := json.Unmarshal([]byte(setting.Value), &names); err != nil {
-			return nil, fmt.Errorf("parsing locations setting value: %w", err)
-		}
-	}
-	locations := make([]SpoolmanLocation, 0, len(names))
-	for _, n := range names {
-		if strings.TrimSpace(n) != "" {
-			locations = append(locations, SpoolmanLocation{Name: n})
-		}
-	}
-	return locations, nil
-}
-
-// getLocationsFromList reads locations from /api/v1/location — only those that
-// currently hold a spool. Fallback for Spoolman without the locations setting.
+// getLocationsFromList reads locations from /api/v1/location, i.e. the distinct
+// location strings currently referenced by spools.
 func (c *SpoolmanClient) getLocationsFromList() ([]SpoolmanLocation, error) {
 	req, err := http.NewRequest("GET", c.baseURL+"/api/v1/location", nil)
 	if err != nil {
@@ -464,7 +429,7 @@ func (c *SpoolmanClient) getLocationsFromList() ([]SpoolmanLocation, error) {
 	// 1) Try standard array of objects
 	var locations []SpoolmanLocation
 	if err := json.Unmarshal(bodyBytes, &locations); err == nil {
-		return locations, nil
+		return withNonEmptyNames(locations), nil
 	}
 
 	// 2) Try { data: [...] } wrapper
@@ -474,20 +439,24 @@ func (c *SpoolmanClient) getLocationsFromList() ([]SpoolmanLocation, error) {
 	}
 	if err := json.Unmarshal(bodyBytes, &dataWrapper); err == nil {
 		if len(dataWrapper.Data) > 0 {
-			return dataWrapper.Data, nil
+			return withNonEmptyNames(dataWrapper.Data), nil
 		}
 		if len(dataWrapper.Results) > 0 {
-			return dataWrapper.Results, nil
+			return withNonEmptyNames(dataWrapper.Results), nil
 		}
 	}
 
-	// 3) Try simple array of names like ["Testing", ...]
+	// 3) Try simple array of names like ["Testing", ...] (Spoolman v0.26).
+	// Build a fresh slice rather than appending to `locations`: the failed
+	// attempt at shape 1 leaves it grown to the element count with zero-value
+	// entries, and appending here would carry those blanks through.
 	var names []string
 	if err := json.Unmarshal(bodyBytes, &names); err == nil {
+		named := make([]SpoolmanLocation, 0, len(names))
 		for _, n := range names {
-			locations = append(locations, SpoolmanLocation{Name: n})
+			named = append(named, SpoolmanLocation{Name: n})
 		}
-		return locations, nil
+		return withNonEmptyNames(named), nil
 	}
 
 	// Log snippet for diagnostics and return error
@@ -497,6 +466,20 @@ func (c *SpoolmanClient) getLocationsFromList() ([]SpoolmanLocation, error) {
 	}
 	log.Printf("Spoolman /location unexpected JSON. Snippet: %s", snippet)
 	return nil, fmt.Errorf("error decoding locations from Spoolman: unexpected JSON shape")
+}
+
+// withNonEmptyNames drops locations whose name is empty or whitespace-only.
+// Now that /api/v1/location is the only source, unassigned spools surface as a
+// "" location, which is not a place anything can be filed under.
+func withNonEmptyNames(locs []SpoolmanLocation) []SpoolmanLocation {
+	out := make([]SpoolmanLocation, 0, len(locs))
+	for _, loc := range locs {
+		if strings.TrimSpace(loc.Name) == "" {
+			continue
+		}
+		out = append(out, loc)
+	}
+	return out
 }
 
 // GetOrCreateLocation gets an existing location by name
