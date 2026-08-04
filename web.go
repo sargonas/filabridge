@@ -1580,6 +1580,40 @@ func (ws *WebServer) nfcUrlsHandler(c *gin.Context) {
 		})
 	}
 
+	// Union in configured toolhead locations that hold no spool yet, so a freshly
+	// added printer's toolheads can be tagged before anything is loaded into them.
+	// Spoolman only knows a location once a spool references it, so these come
+	// from FilaBridge's own config. Typed "printer" like populated toolheads, so
+	// the UI gives them the printer icon and suppresses the rename action.
+	taggedLocations := make(map[string]bool, len(spoolmanLocations))
+	for _, location := range spoolmanLocations {
+		taggedLocations[location.Name] = true
+	}
+	for name := range toolheadLocs {
+		if strings.TrimSpace(name) == "" || taggedLocations[name] {
+			continue // empty, or already tagged via a spool — don't duplicate
+		}
+
+		nfcUrl := fmt.Sprintf("http://%s/api/nfc/assign?location=%s", c.Request.Host, neturl.QueryEscape(name))
+
+		// Generate QR code (leave it empty and keep going if generation fails)
+		qrCodeBase64 := ""
+		if qrCode, err := qrcode.Encode(nfcUrl, qrcode.Medium, 256); err != nil {
+			log.Printf("Error generating QR code for toolhead location %s: %v", name, err)
+		} else {
+			qrCodeBase64 = base64.StdEncoding.EncodeToString(qrCode)
+		}
+
+		urls = append(urls, gin.H{
+			"type":           "location",
+			"location_type":  "printer",
+			"location_name":  name,
+			"display_name":   name,
+			"url":            nfcUrl,
+			"qr_code_base64": qrCodeBase64,
+		})
+	}
+
 	// Sort URLs: filaments first, then spools, then locations alphabetically by display name
 	sort.Slice(urls, func(i, j int) bool {
 		typeI := urls[i]["type"].(string)
@@ -1683,7 +1717,10 @@ func (ws *WebServer) nfcSessionStatusHandler(c *gin.Context) {
 
 // Location Management Handlers
 
-// getLocationsHandler returns only Spoolman locations (no virtual printer toolheads)
+// getLocationsHandler returns Spoolman's locations, overlaid with this
+// instance's configured toolhead locations. Spoolman only knows a location once
+// a spool references it, so toolheads on a freshly added printer would otherwise
+// be invisible until first use.
 func (ws *WebServer) getLocationsHandler(c *gin.Context) {
 	// Get Spoolman locations
 	spoolmanLocations, err := ws.bridge.spoolman.GetLocations()
@@ -1719,6 +1756,27 @@ func (ws *WebServer) getLocationsHandler(c *gin.Context) {
 		})
 	}
 
+	// Union in configured toolhead locations that have no spool yet, so a freshly
+	// added printer's toolheads are visible for NFC/QR labeling before any spool
+	// references them. Typed "printer" (like populated toolheads) so the UI gates
+	// rename on them. These come from FilaBridge's own config, not Spoolman.
+	seen := make(map[string]bool, len(allLocations))
+	for _, l := range allLocations {
+		if name, ok := l["name"].(string); ok {
+			seen[name] = true
+		}
+	}
+	for name := range toolheadLocs {
+		if strings.TrimSpace(name) == "" || seen[name] {
+			continue // empty, or already surfaced via a spool — don't duplicate
+		}
+		allLocations = append(allLocations, gin.H{
+			"name":       name,
+			"type":       "printer",
+			"is_virtual": true,
+		})
+	}
+
 	// Get Spoolman URL for the message
 	spoolmanURL := ws.bridge.spoolman.GetBaseURL()
 
@@ -1751,10 +1809,16 @@ func (ws *WebServer) updateLocationHandler(c *gin.Context) {
 		return
 	}
 
-	// Get updated location
+	// Get updated location. FindLocationByName reports "not found" as (nil, nil),
+	// which is reachable here: a location no spool carries (e.g. a config-derived
+	// toolhead location) leaves nothing for Spoolman to list under the new name.
 	location, err := ws.bridge.spoolman.FindLocationByName(req.Name)
 	if err != nil {
 		log.Printf("Warning: Could not get updated location '%s': %v", req.Name, err)
+		c.JSON(http.StatusOK, gin.H{"message": "Location updated successfully"})
+		return
+	}
+	if location == nil {
 		c.JSON(http.StatusOK, gin.H{"message": "Location updated successfully"})
 		return
 	}

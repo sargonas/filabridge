@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	neturl "net/url"
 	"regexp"
 	"strings"
 	"testing"
@@ -471,14 +472,13 @@ func TestScannedStorageLocationBecomesHome(t *testing.T) {
 	}
 }
 
-// TestLocationsListEmptyAndTypeToolheads: /api/locations reads the predefined
-// locations setting so empty locations (no spools) still appear, and this
-// instance's toolhead locations are typed "printer" so the storage dropdown
-// filters them out.
+// TestLocationsListEmptyAndTypeToolheads: /api/locations reports the locations
+// Spoolman itself lists (GET /api/v1/location), and this instance's toolhead
+// locations are typed "printer" so the storage dropdown filters them out.
 func TestLocationsListEmptyAndTypeToolheads(t *testing.T) {
 	ws, _, spoolman := newTestServer(t)
-	// "Unopened" holds no spools; "TestPrinter - Toolhead 0" is a toolhead location.
-	spoolman.LocationSetting = []string{"Drybox", "Unopened", "TestPrinter - Toolhead 0"}
+	// "TestPrinter - Toolhead 0" is a toolhead location; the others are storage.
+	spoolman.Locations = []string{"Drybox", "Unopened", "TestPrinter - Toolhead 0"}
 
 	rec, body := doJSON(t, ws, http.MethodGet, "/api/locations", "")
 	if rec.Code != http.StatusOK {
@@ -499,6 +499,160 @@ func TestLocationsListEmptyAndTypeToolheads(t *testing.T) {
 	if types["TestPrinter - Toolhead 0"] != "printer" {
 		t.Errorf("toolhead location should be typed 'printer'; got %q", types["TestPrinter - Toolhead 0"])
 	}
+}
+
+// TestLocationsIncludeSpoollessToolheads: Spoolman only knows a location once a
+// spool references it, so a freshly configured printer's toolheads would be
+// invisible to /api/locations. The handler unions them in from FilaBridge's own
+// config, typed "printer" — and must not duplicate them once a spool does land
+// there.
+func TestLocationsIncludeSpoollessToolheads(t *testing.T) {
+	ws, _, spoolman := newTestServer(t)
+
+	toolheads := ws.bridge.toolheadLocationSet()
+	if len(toolheads) != 1 {
+		t.Fatalf("test fixture expects exactly 1 toolhead location, got %d (%v)", len(toolheads), toolheads)
+	}
+	var toolheadName string
+	for name := range toolheads {
+		toolheadName = name
+	}
+
+	// Spoolman reports nothing: the toolhead must still be listed, as virtual.
+	spoolman.Locations = nil
+	locs := locationsByName(t, ws)
+	if len(locs) != 1 {
+		t.Fatalf("want exactly 1 location (the spool-less toolhead), got %d (%v)", len(locs), locs)
+	}
+	entry, ok := locs[toolheadName]
+	if !ok {
+		t.Fatalf("spool-less toolhead %q missing from /api/locations (%v)", toolheadName, locs)
+	}
+	if entry["type"] != "printer" {
+		t.Errorf("spool-less toolhead type = %v, want printer", entry["type"])
+	}
+	if entry["is_virtual"] != true {
+		t.Errorf("spool-less toolhead is_virtual = %v, want true", entry["is_virtual"])
+	}
+
+	// Now a spool references it: still exactly one entry, still typed "printer",
+	// but no longer virtual — and critically, not duplicated.
+	spoolman.Locations = []string{toolheadName}
+	locs = locationsByName(t, ws)
+	if len(locs) != 1 {
+		t.Fatalf("toolhead duplicated once a spool referenced it: got %d entries (%v)", len(locs), locs)
+	}
+	entry = locs[toolheadName]
+	if entry["type"] != "printer" {
+		t.Errorf("populated toolhead type = %v, want printer", entry["type"])
+	}
+	if entry["is_virtual"] != false {
+		t.Errorf("populated toolhead is_virtual = %v, want false", entry["is_virtual"])
+	}
+}
+
+// TestNFCUrlsIncludeSpoollessToolheads: the NFC/QR tag list must offer a tag for
+// a configured toolhead before any spool has been loaded into it, typed
+// "printer" so the UI shows the printer icon and hides the rename action — and
+// must not emit a second entry once a spool does reference that location.
+func TestNFCUrlsIncludeSpoollessToolheads(t *testing.T) {
+	ws, _, spoolman := newTestServer(t)
+
+	toolheads := ws.bridge.toolheadLocationSet()
+	if len(toolheads) != 1 {
+		t.Fatalf("test fixture expects exactly 1 toolhead location, got %d (%v)", len(toolheads), toolheads)
+	}
+	var toolheadName string
+	for name := range toolheads {
+		toolheadName = name
+	}
+
+	// No spool references the toolhead: it must still get a tag.
+	spoolman.Locations = nil
+	entries := nfcLocationsByName(t, ws)
+	entry, ok := entries[toolheadName]
+	if !ok {
+		t.Fatalf("spool-less toolhead %q missing from /api/nfc/urls (%v)", toolheadName, entries)
+	}
+	if entry["location_type"] != "printer" {
+		t.Errorf("spool-less toolhead location_type = %v, want printer", entry["location_type"])
+	}
+	if qr, _ := entry["qr_code_base64"].(string); qr == "" {
+		t.Error("spool-less toolhead got no QR code, so it cannot be labeled")
+	}
+	if u, _ := entry["url"].(string); !strings.Contains(u, neturl.QueryEscape(toolheadName)) {
+		t.Errorf("toolhead NFC url %q does not encode the location name", u)
+	}
+
+	// A spool now sits there: still exactly one entry for that name.
+	spoolman.Locations = []string{toolheadName}
+	entries = nfcLocationsByName(t, ws)
+	if got := entries[toolheadName]; got == nil {
+		t.Fatalf("toolhead %q disappeared once a spool referenced it", toolheadName)
+	} else if got["location_type"] != "printer" {
+		t.Errorf("populated toolhead location_type = %v, want printer", got["location_type"])
+	}
+	if n := nfcLocationCount(t, ws, toolheadName); n != 1 {
+		t.Fatalf("toolhead tag duplicated once a spool referenced it: %d entries", n)
+	}
+}
+
+// nfcLocationsByName fetches /api/nfc/urls and indexes the "location" entries by
+// name. Duplicate names collapse, so pair it with nfcLocationCount when the
+// point of the test is that nothing was duplicated.
+func nfcLocationsByName(t *testing.T, ws *WebServer) map[string]map[string]interface{} {
+	t.Helper()
+	out := make(map[string]map[string]interface{})
+	for _, m := range nfcLocationEntries(t, ws) {
+		out[m["location_name"].(string)] = m
+	}
+	return out
+}
+
+// nfcLocationCount reports how many "location" entries carry the given name.
+func nfcLocationCount(t *testing.T, ws *WebServer, name string) int {
+	t.Helper()
+	n := 0
+	for _, m := range nfcLocationEntries(t, ws) {
+		if m["location_name"] == name {
+			n++
+		}
+	}
+	return n
+}
+
+func nfcLocationEntries(t *testing.T, ws *WebServer) []map[string]interface{} {
+	t.Helper()
+	rec, body := doJSON(t, ws, http.MethodGet, "/api/nfc/urls", "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("nfc/urls: %d", rec.Code)
+	}
+	raw, _ := body["urls"].([]interface{})
+	out := make([]map[string]interface{}, 0, len(raw))
+	for _, u := range raw {
+		m, ok := u.(map[string]interface{})
+		if !ok || m["type"] != "location" {
+			continue
+		}
+		out = append(out, m)
+	}
+	return out
+}
+
+// locationsByName fetches /api/locations and indexes the entries by name.
+func locationsByName(t *testing.T, ws *WebServer) map[string]map[string]interface{} {
+	t.Helper()
+	rec, body := doJSON(t, ws, http.MethodGet, "/api/locations", "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("locations: %d", rec.Code)
+	}
+	raw, _ := body["locations"].([]interface{})
+	out := make(map[string]map[string]interface{}, len(raw))
+	for _, l := range raw {
+		m := l.(map[string]interface{})
+		out[m["name"].(string)] = m
+	}
+	return out
 }
 
 // TestMapToolheadRejectsInvalidTargets: mappings to toolheads beyond the

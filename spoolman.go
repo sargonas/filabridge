@@ -270,28 +270,40 @@ func (c *SpoolmanClient) GetAllFilaments() ([]SpoolmanFilament, error) {
 // the Spoolman base URL) and verifies a 200 response. opDesc names the
 // operation for error messages, e.g. "updating spool 3".
 func (c *SpoolmanClient) patchJSON(path string, data map[string]interface{}, opDesc string) error {
+	_, err := c.patchJSONResult(path, data, opDesc)
+	return err
+}
+
+// patchJSONResult is patchJSON for the few endpoints whose response body carries
+// information we act on (e.g. the bulk field update's spools_updated count).
+func (c *SpoolmanClient) patchJSONResult(path string, data map[string]interface{}, opDesc string) ([]byte, error) {
 	jsonData, err := json.Marshal(data)
 	if err != nil {
-		return fmt.Errorf("error marshaling data for %s: %w", opDesc, err)
+		return nil, fmt.Errorf("error marshaling data for %s: %w", opDesc, err)
 	}
 
 	req, err := http.NewRequest("PATCH", c.baseURL+path, bytes.NewBuffer(jsonData))
 	if err != nil {
-		return fmt.Errorf("error creating PATCH request: %w", err)
+		return nil, fmt.Errorf("error creating PATCH request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
 	c.addAuthHeader(req)
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
-		return fmt.Errorf("error %s in Spoolman: %w", opDesc, err)
+		return nil, fmt.Errorf("error %s in Spoolman: %w", opDesc, err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return c.handleAPIError(resp)
+		return nil, c.handleAPIError(resp)
 	}
-	return nil
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("error reading response for %s: %w", opDesc, err)
+	}
+	return body, nil
 }
 
 // UpdateSpool updates spool information (used for filament usage tracking)
@@ -388,76 +400,27 @@ type SpoolmanLocation struct {
 	Archived bool   `json:"archived"`
 }
 
-// GetLocations returns Spoolman's locations, merged from both sources so that
-// upgraded instances don't lose data. The `locations` setting holds predefined
-// locations (including empty ones, created via older clients), while
-// /api/v1/location reports locations currently referenced by spools (the only
-// place new v0.26 client locations show up). Results are unioned and deduped by
-// exact name; empty/whitespace names are skipped.
+// GetLocations returns Spoolman's locations as reported by /api/v1/location,
+// i.e. the distinct location strings currently referenced by spools. This
+// mirrors what the Spoolman v0.26 UI itself shows: locations are just strings
+// on spools, not first-class entities. The legacy `locations` setting is
+// intentionally ignored — v0.26 no longer reads or writes it, so any
+// predefined, spool-less entries there are invisible in Spoolman too.
 func (c *SpoolmanClient) GetLocations() ([]SpoolmanLocation, error) {
-	settingLocs, settingErr := c.getLocationsFromSetting()
-	listLocs, listErr := c.getLocationsFromList()
-
-	// Only fail if BOTH sources errored — a single working source is still useful.
-	if settingErr != nil && listErr != nil {
-		return nil, fmt.Errorf("failed to get locations from Spoolman (setting: %v; list: %w)", settingErr, listErr)
+	listLocs, err := c.getLocationsFromList()
+	if err != nil {
+		return nil, fmt.Errorf("failed to get locations from Spoolman: %w", err)
 	}
 
-	merged := make([]SpoolmanLocation, 0, len(settingLocs)+len(listLocs))
-	seen := make(map[string]bool)
-	// Setting first so its metadata (ID/comment/archived) wins for shared names.
-	for _, loc := range append(settingLocs, listLocs...) {
-		if strings.TrimSpace(loc.Name) == "" {
-			continue
-		}
-		if seen[loc.Name] {
-			continue
-		}
-		seen[loc.Name] = true
-		merged = append(merged, loc)
-	}
-	return merged, nil
+	return listLocs, nil
 }
 
-// getLocationsFromSetting reads the predefined location list from Spoolman's
-// `locations` setting, whose value is a JSON-encoded array of names.
-func (c *SpoolmanClient) getLocationsFromSetting() ([]SpoolmanLocation, error) {
-	req, err := http.NewRequest("GET", c.baseURL+"/api/v1/setting/locations", nil)
-	if err != nil {
-		return nil, err
-	}
-	c.addAuthHeader(req)
-	resp, err := c.httpClient.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("spoolman setting/locations returned HTTP %d", resp.StatusCode)
-	}
-	var setting struct {
-		Value string `json:"value"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&setting); err != nil {
-		return nil, err
-	}
-	var names []string
-	if strings.TrimSpace(setting.Value) != "" {
-		if err := json.Unmarshal([]byte(setting.Value), &names); err != nil {
-			return nil, fmt.Errorf("parsing locations setting value: %w", err)
-		}
-	}
-	locations := make([]SpoolmanLocation, 0, len(names))
-	for _, n := range names {
-		if strings.TrimSpace(n) != "" {
-			locations = append(locations, SpoolmanLocation{Name: n})
-		}
-	}
-	return locations, nil
-}
-
-// getLocationsFromList reads locations from /api/v1/location — only those that
-// currently hold a spool. Fallback for Spoolman without the locations setting.
+// getLocationsFromList reads locations from Spoolman's GET /api/v1/location.
+// The endpoint's response shape has varied across Spoolman versions, so we try
+// several: an array of objects, a {data|results:[...]} wrapper, and a plain
+// array of name strings (v0.26). Whichever parses, the names are normalized in
+// one place: blank/whitespace names become "Unassigned", mirroring Spoolman's
+// UI, which groups spool-less/empty locations under that label.
 func (c *SpoolmanClient) getLocationsFromList() ([]SpoolmanLocation, error) {
 	req, err := http.NewRequest("GET", c.baseURL+"/api/v1/location", nil)
 	if err != nil {
@@ -475,48 +438,74 @@ func (c *SpoolmanClient) getLocationsFromList() ([]SpoolmanLocation, error) {
 		return nil, c.handleAPIError(resp)
 	}
 
-	// Read full body so we can retry alternative shapes and log on error
 	bodyBytes, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return nil, fmt.Errorf("error reading locations response from Spoolman: %w", err)
 	}
 
-	// 1) Try standard array of objects
 	var locations []SpoolmanLocation
+	parsed := false
+
+	// 1) Standard array of objects: [{"name":"...","id":1,...}, ...]
 	if err := json.Unmarshal(bodyBytes, &locations); err == nil {
-		return locations, nil
+		parsed = true
 	}
 
-	// 2) Try { data: [...] } wrapper
-	var dataWrapper struct {
-		Data    []SpoolmanLocation `json:"data"`
-		Results []SpoolmanLocation `json:"results"`
-	}
-	if err := json.Unmarshal(bodyBytes, &dataWrapper); err == nil {
-		if len(dataWrapper.Data) > 0 {
-			return dataWrapper.Data, nil
+	// 2) Wrapped: {"data":[...]} or {"results":[...]}
+	if !parsed {
+		var wrapper struct {
+			Data    []SpoolmanLocation `json:"data"`
+			Results []SpoolmanLocation `json:"results"`
 		}
-		if len(dataWrapper.Results) > 0 {
-			return dataWrapper.Results, nil
+		if err := json.Unmarshal(bodyBytes, &wrapper); err == nil {
+			switch {
+			case len(wrapper.Data) > 0:
+				locations = wrapper.Data
+				parsed = true
+			case len(wrapper.Results) > 0:
+				locations = wrapper.Results
+				parsed = true
+			}
 		}
 	}
 
-	// 3) Try simple array of names like ["Testing", ...]
-	var names []string
-	if err := json.Unmarshal(bodyBytes, &names); err == nil {
-		for _, n := range names {
-			locations = append(locations, SpoolmanLocation{Name: n})
+	// 3) Plain array of names: ["Closet Shelf", "", ...] (Spoolman v0.26)
+	if !parsed {
+		var names []string
+		if err := json.Unmarshal(bodyBytes, &names); err == nil {
+			locations = make([]SpoolmanLocation, 0, len(names))
+			for _, n := range names {
+				locations = append(locations, SpoolmanLocation{Name: n})
+			}
+			parsed = true
 		}
-		return locations, nil
 	}
 
-	// Log snippet for diagnostics and return error
-	snippet := string(bodyBytes)
-	if len(snippet) > 300 {
-		snippet = snippet[:300] + "..."
+	if !parsed {
+		snippet := string(bodyBytes)
+		if len(snippet) > 300 {
+			snippet = snippet[:300] + "..."
+		}
+		log.Printf("Spoolman /location unexpected JSON. Snippet: %s", snippet)
+		return nil, fmt.Errorf("error decoding locations from Spoolman: unexpected JSON shape")
 	}
-	log.Printf("Spoolman /location unexpected JSON. Snippet: %s", snippet)
-	return nil, fmt.Errorf("error decoding locations from Spoolman: unexpected JSON shape")
+
+	// Single normalization pass, applied no matter which shape parsed:
+	// blank names -> "Unassigned", and dedupe by final name so an "" and a
+	// literal "Unassigned" (or two blanks) don't produce duplicates.
+	normalized := make([]SpoolmanLocation, 0, len(locations))
+	seen := make(map[string]bool)
+	for _, loc := range locations {
+		if strings.TrimSpace(loc.Name) == "" {
+			loc.Name = "Unassigned"
+		}
+		if seen[loc.Name] {
+			continue
+		}
+		seen[loc.Name] = true
+		normalized = append(normalized, loc)
+	}
+	return normalized, nil
 }
 
 // GetOrCreateLocation gets an existing location by name
@@ -575,40 +564,46 @@ func (c *SpoolmanClient) UpdateSpoolLocation(spoolID int, locationName string) e
 	return nil
 }
 
-// UpdateLocation updates a location name in Spoolman
-func (c *SpoolmanClient) UpdateLocation(locationID int, newName string) error {
-	err := c.patchJSON(fmt.Sprintf("/api/v1/location/%d", locationID),
-		map[string]interface{}{"name": newName},
-		fmt.Sprintf("updating location %d", locationID))
+// UpdateLocationByName renames a location by rewriting the `location` string on
+// every spool that currently carries oldName. This mirrors Spoolman's own
+// dashboard group-rename (PATCH /api/v1/spool/field/location): locations are
+// just strings on spools, not first-class entities, so a rename is a bulk
+// field update.
+func (c *SpoolmanClient) UpdateLocationByName(oldName, newName string) error {
+	// Keep the caller's spelling for logs and errors; the wire values below are
+	// the mapped ones.
+	displayOld, displayNew := oldName, newName
+
+	// Map the UI's "Unassigned" back to the empty string Spoolman stores.
+	if oldName == "Unassigned" {
+		oldName = ""
+	}
+	if newName == "Unassigned" {
+		newName = ""
+	}
+
+	body, err := c.patchJSONResult("/api/v1/spool/field/location",
+		map[string]interface{}{"value": oldName, "new_value": newName},
+		fmt.Sprintf("renaming location '%s' to '%s'", displayOld, displayNew))
 	if err != nil {
 		return err
 	}
-	log.Printf("Successfully updated Spoolman location %d to '%s'", locationID, newName)
+
+	// Spoolman answers 200 with a count even when the old name matched nothing.
+	// A rename that moved no spools changed nothing, so report it rather than
+	// telling the user it worked.
+	var result struct {
+		SpoolsUpdated *int `json:"spools_updated"`
+	}
+	if err := json.Unmarshal(body, &result); err != nil {
+		// Unrecognized shape: the PATCH itself succeeded, so don't fail the rename.
+		log.Printf("Warning: could not parse rename response for location '%s': %v", displayOld, err)
+		return nil
+	}
+	if result.SpoolsUpdated != nil && *result.SpoolsUpdated == 0 {
+		return fmt.Errorf("no spools are in location '%s'", displayOld)
+	}
+
+	log.Printf("Successfully renamed Spoolman location '%s' to '%s'", displayOld, displayNew)
 	return nil
-}
-
-// UpdateLocationByName updates a location in Spoolman by name
-func (c *SpoolmanClient) UpdateLocationByName(oldName, newName string) error {
-	// First, find the location by name
-	locations, err := c.GetLocations()
-	if err != nil {
-		return fmt.Errorf("failed to get locations: %w", err)
-	}
-
-	var locationID int
-	found := false
-	for _, loc := range locations {
-		if loc.Name == oldName && !loc.Archived {
-			locationID = loc.ID
-			found = true
-			break
-		}
-	}
-
-	if !found {
-		return fmt.Errorf("location '%s' not found in Spoolman", oldName)
-	}
-
-	// Update the location using its ID
-	return c.UpdateLocation(locationID, newName)
 }
