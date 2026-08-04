@@ -1917,6 +1917,12 @@ func (ws *WebServer) updateLocationHandler(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"message": "Location updated successfully"})
 		return
 	}
+	// FindLocationByName reports "not found" as (nil, nil), so a missing
+	// location arrives here as a nil pointer rather than an error.
+	if location == nil {
+		c.JSON(http.StatusOK, gin.H{"message": "Location updated successfully"})
+		return
+	}
 
 	c.JSON(http.StatusOK, gin.H{
 		"message": "Location updated successfully",
