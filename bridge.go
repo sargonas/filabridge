@@ -33,7 +33,7 @@ type FilamentBridge struct {
 	runoutWarnings   map[string]RunoutWarning  // Active low-filament warnings
 	mappingWarnings  map[string]MappingWarning // Active toolhead-attribution warnings
 	runoutChecked    map[string]int            // Runout check attempts per printer+job+toolhead+spool
-	warnMutex        sync.RWMutex              // Guards runoutWarnings and runoutChecked
+	warnMutex        sync.RWMutex              // Guards runoutWarnings, mappingWarnings and runoutChecked
 	errorMutex       sync.RWMutex
 	mutex            sync.RWMutex
 	bambuClients     map[string]*bambuClient // Persistent MQTT clients per Bambu printer (developer mode)
@@ -118,19 +118,43 @@ type RunoutWarning struct {
 // MappingWarning flags a running print on a multi-toolhead printer whose sliced
 // file used a single filament. Such a slice records no slot, so FilaBridge
 // attributes the usage to toolhead 0, which on a multi-toolhead machine is a
-// guess. The warning exists so the user can confirm the right spool is mapped to
-// the right toolhead for this print, while the print is still running and the
-// mapping can still be corrected.
+// guess. The warning carries the printer's toolheads as Slots so the user can
+// answer it directly, naming the toolhead the print is really running from,
+// while the print is still running and the attribution can still be moved.
 type MappingWarning struct {
-	ID           string    `json:"id"`
-	PrinterID    string    `json:"printer_id"`
-	PrinterName  string    `json:"printer_name"`
-	ToolheadID   int       `json:"toolhead_id"`
-	JobID        int       `json:"job_id"`
-	JobName      string    `json:"job_name"`
-	Grams        float64   `json:"grams"` // slicer estimate for this toolhead
-	Timestamp    time.Time `json:"timestamp"`
-	Acknowledged bool      `json:"acknowledged"`
+	ID               string               `json:"id"`
+	PrinterID        string               `json:"printer_id"`
+	PrinterName      string               `json:"printer_name"`
+	ToolheadID       int                  `json:"toolhead_id"` // where the usage lands unless the user says otherwise
+	JobID            int                  `json:"job_id"`
+	JobName          string               `json:"job_name"`
+	Grams            float64              `json:"grams"` // slicer estimate for this toolhead
+	Slots            []MappingWarningSlot `json:"slots"`
+	Assigned         bool                 `json:"assigned"`          // the user answered and named a toolhead
+	AssignedToolhead int                  `json:"assigned_toolhead"` // the toolhead they named
+	Timestamp        time.Time            `json:"timestamp"`
+	Acknowledged     bool                 `json:"acknowledged"`
+}
+
+// MappingWarningSlot is one answer a mapping warning offers: a toolhead on the
+// printer, labelled with whatever spool is mapped to it. Answering in these
+// terms ("the print is running from slot 5") is what the user already knows,
+// where remapping toolhead 0 to the slot 5 spool would mean describing their
+// physical setup wrongly and undoing it before the next multi-colour print.
+type MappingWarningSlot struct {
+	ToolheadID  int    `json:"toolhead_id"`
+	DisplayName string `json:"display_name"`          // custom toolhead name, or "Toolhead N (slot N+1)"
+	SpoolID     int    `json:"spool_id"`              // 0 when nothing is mapped here
+	SpoolLabel  string `json:"spool_label,omitempty"` // as the spool reads elsewhere in the UI
+}
+
+// SelectedToolhead is the toolhead a warning's dropdown should show: what the
+// user answered, or the default attribution until they do.
+func (w MappingWarning) SelectedToolhead() int {
+	if w.Assigned {
+		return w.AssignedToolhead
+	}
+	return w.ToolheadID
 }
 
 // PrinterStatus represents the current status of all printers
@@ -364,7 +388,7 @@ func (b *FilamentBridge) initializeDefaultConfig() error {
 		ConfigKeyRunoutWarningEnabled:            {"true", "Show a dashboard warning when the mapped spool has less filament remaining than the print requires"},
 		ConfigKeyRunoutPauseEnabled:              {"false", "Also pause the print when a low-filament warning fires (acknowledging resumes it)"},
 		ConfigKeyNotifyWebhookURL:                {"", "Webhook URL to POST a JSON notification to on a low-filament warning or an unexpected loss of connection during a print (leave empty to disable)"},
-		ConfigKeyNotifyUnknownSlot:               {"true", "Warn at the start of a single-filament print on a multi-toolhead printer, whose sliced file does not record which slot it used, so the toolhead mapping can be confirmed before the usage is recorded"},
+		ConfigKeyNotifyUnknownSlot:               {"true", "Warn at the start of a single-filament print on a multi-toolhead printer, whose sliced file does not record which slot it used, so the toolhead it is printing from can be picked before the usage is recorded"},
 	}
 
 	// Check if this is a fresh installation by checking if any config exists
@@ -748,18 +772,26 @@ func (b *FilamentBridge) checkMappingWarnings(printerID string, config PrinterCo
 			continue
 		}
 
-		id := fmt.Sprintf("mapping_%s_%d_%d", sanitizeErrorID(printerName), aj.JobID, toolheadID)
-
-		// Once per (printer, job, toolhead): the ambiguity does not change while
-		// the job runs, so repeating it every poll would only be noise. The
-		// printerID prefix matches what clearRunoutState sweeps at job end.
-		memoKey := fmt.Sprintf("%s|mapping|%d|%d", printerID, aj.JobID, toolheadID)
+		// Once per (printer, job): the ambiguity does not change while the job
+		// runs, so repeating it every poll would only be noise. Keyed on the job
+		// rather than the toolhead so that answering the warning, which moves the
+		// estimate onto the toolhead the user named, cannot look like a fresh
+		// ambiguity and raise a second warning. The printerID prefix matches what
+		// clearRunoutState sweeps at job end.
+		memoKey := fmt.Sprintf("%s|mapping|%d", printerID, aj.JobID)
 		b.warnMutex.Lock()
 		if b.runoutChecked[memoKey] != 0 {
 			b.warnMutex.Unlock()
 			continue
 		}
 		b.runoutChecked[memoKey] = runoutCheckDone
+		b.warnMutex.Unlock()
+
+		// Built outside the lock: naming each toolhead's spool reads Spoolman.
+		slots := b.buildMappingSlots(printerID, printerName, config.Toolheads)
+
+		id := fmt.Sprintf("mapping_%s_%d_%d", sanitizeErrorID(printerName), aj.JobID, toolheadID)
+		b.warnMutex.Lock()
 		b.mappingWarnings[id] = MappingWarning{
 			ID:          id,
 			PrinterID:   printerID,
@@ -768,6 +800,7 @@ func (b *FilamentBridge) checkMappingWarnings(printerID string, config PrinterCo
 			JobID:       aj.JobID,
 			JobName:     aj.Filename,
 			Grams:       grams,
+			Slots:       slots,
 			Timestamp:   time.Now(),
 		}
 		b.warnMutex.Unlock()
@@ -777,6 +810,141 @@ func (b *FilamentBridge) checkMappingWarnings(printerID string, config PrinterCo
 
 		go b.sendNotification(mappingWarningPayload(printerName, aj.Filename, toolheadID, grams, time.Now()))
 	}
+}
+
+// buildMappingSlots lists a printer's toolheads with the spool mapped to each,
+// so the warning can be answered by picking the slot the print is running from
+// instead of by rewiring the mappings. Labels are a snapshot: they are rebuilt
+// when the warning is answered, which is when they matter, so mapping a spool
+// and then answering shows what will really be debited.
+func (b *FilamentBridge) buildMappingSlots(printerID, printerName string, toolheads int) []MappingWarningSlot {
+	mappings, err := b.GetToolheadMappings(printerName)
+	if err != nil {
+		log.Printf("Warning: could not read toolhead mappings for %s: %v", printerName, err)
+		mappings = make(map[int]ToolheadMapping)
+	}
+	names, err := b.GetAllToolheadNames(printerID)
+	if err != nil {
+		names = make(map[int]string)
+	}
+	// One list call rather than a lookup per toolhead.
+	spoolsByID := make(map[int]SpoolmanSpool)
+	if spools, err := b.spoolman.GetAllSpools(); err != nil {
+		log.Printf("Warning: could not read spools to label toolheads on %s: %v", printerName, err)
+	} else {
+		for _, s := range spools {
+			spoolsByID[s.ID] = s
+		}
+	}
+
+	slots := make([]MappingWarningSlot, 0, toolheads)
+	for toolheadID := 0; toolheadID < toolheads; toolheadID++ {
+		slot := MappingWarningSlot{
+			ToolheadID:  toolheadID,
+			DisplayName: mappingSlotName(names, toolheadID),
+		}
+		if m, ok := mappings[toolheadID]; ok && m.SpoolID != 0 {
+			slot.SpoolID = m.SpoolID
+			if spool, ok := spoolsByID[m.SpoolID]; ok {
+				slot.SpoolLabel = spoolSummary(spool)
+			} else {
+				slot.SpoolLabel = fmt.Sprintf("[%d] spool not found in Spoolman", m.SpoolID)
+			}
+		}
+		slots = append(slots, slot)
+	}
+	return slots
+}
+
+// mappingSlotName labels a toolhead for the warning's dropdown. A custom name is
+// what the user calls it, so it stands alone. Otherwise both numbers are shown,
+// because the whole confusion here is that FilaBridge counts toolheads from 0
+// and an MMU counts slots from 1.
+func mappingSlotName(names map[int]string, toolheadID int) string {
+	if name, ok := names[toolheadID]; ok && name != "" {
+		return name
+	}
+	return fmt.Sprintf("Toolhead %d (slot %d)", toolheadID, toolheadID+1)
+}
+
+// spoolSummary renders a spool the way the toolhead dropdowns do, so the same
+// spool reads the same wherever it is named.
+func spoolSummary(spool SpoolmanSpool) string {
+	material := spool.Material
+	if material == "" {
+		material = "Unknown Material"
+	}
+	brand := spool.Brand
+	if brand == "" {
+		brand = "Unknown Brand"
+	}
+	name := spool.Name
+	if name == "" {
+		name = "Unnamed Spool"
+	}
+	return fmt.Sprintf("[%d] %s - %s - %s", spool.ID, material, brand, name)
+}
+
+// AssignMappingWarningToolhead answers a mapping warning: the print is running
+// from the named toolhead, so its usage belongs there rather than on the
+// toolhead a slot-less slice defaulted to. The choice stays changeable until the
+// print ends, since the recording only happens at that point.
+func (b *FilamentBridge) AssignMappingWarningToolhead(id string, toolheadID int) (MappingWarning, error) {
+	b.warnMutex.RLock()
+	w, exists := b.mappingWarnings[id]
+	b.warnMutex.RUnlock()
+	if !exists {
+		return MappingWarning{}, fmt.Errorf("mapping warning not found: %s", id)
+	}
+	if toolheadID < 0 || toolheadID >= len(w.Slots) {
+		return MappingWarning{}, fmt.Errorf("toolhead %d is not a toolhead on %s", toolheadID, w.PrinterName)
+	}
+
+	// Rebuild the labels outside the lock: a user who noticed the slot they are
+	// about to pick had no spool mapped has probably just mapped one.
+	slots := b.buildMappingSlots(w.PrinterID, w.PrinterName, len(w.Slots))
+
+	b.warnMutex.Lock()
+	w, exists = b.mappingWarnings[id]
+	if !exists {
+		b.warnMutex.Unlock()
+		return MappingWarning{}, fmt.Errorf("mapping warning not found: %s", id)
+	}
+	w.Slots = slots
+	w.Assigned = true
+	w.AssignedToolhead = toolheadID
+	b.mappingWarnings[id] = w
+	b.warnMutex.Unlock()
+
+	log.Printf("Print %s on %s assigned to toolhead %d by hand: its ~%.1fg will be recorded there rather than toolhead %d",
+		w.JobName, w.PrinterName, toolheadID, w.Grams, w.ToolheadID)
+
+	// Persist right away so the answer survives a restart mid-print, rather than
+	// waiting for the next poll to rewrite the stored estimate. getActiveJob
+	// applies the answer, so reading and writing the job back is the whole move.
+	if aj, err := b.getActiveJob(w.PrinterID); err != nil {
+		log.Printf("Warning: could not persist toolhead assignment for %s: %v", w.PrinterName, err)
+	} else if aj != nil && aj.JobID == w.JobID {
+		if err := b.upsertActiveJob(aj); err != nil {
+			log.Printf("Warning: could not persist toolhead assignment for %s: %v", w.PrinterName, err)
+		}
+	}
+
+	return w, nil
+}
+
+// mappingSlotOverride reports the toolhead the user named for a printer's
+// in-flight job, if they answered its mapping warning.
+func (b *FilamentBridge) mappingSlotOverride(printerID string, jobID int) (int, bool) {
+	b.warnMutex.RLock()
+	defer b.warnMutex.RUnlock()
+
+	for _, w := range b.mappingWarnings {
+		if w.Assigned && w.PrinterID == printerID && w.JobID == jobID {
+			return w.AssignedToolhead, true
+		}
+	}
+	return 0, false
 }
 
 // GetMappingWarnings returns all unacknowledged unknown-slot warnings.
@@ -793,9 +961,8 @@ func (b *FilamentBridge) GetMappingWarnings() []MappingWarning {
 	return warnings
 }
 
-// AcknowledgeMappingWarning dismisses an unknown-slot warning. Unlike
-// low-filament warnings these are not cleared when the print ends, since a print
-// that went to the wrong spool still needs correcting in Spoolman by hand.
+// AcknowledgeMappingWarning dismisses an unknown-slot warning: the default
+// attribution was right, or the user has dealt with it another way.
 func (b *FilamentBridge) AcknowledgeMappingWarning(id string) error {
 	b.warnMutex.Lock()
 	defer b.warnMutex.Unlock()
@@ -811,12 +978,20 @@ func (b *FilamentBridge) AcknowledgeMappingWarning(id string) error {
 
 // clearRunoutState drops unacknowledged warnings and check memos for a printer
 // once its job ends, so stale warnings do not outlive the print they describe.
+// Mapping warnings are dropped only once answered or acknowledged: an unanswered
+// one outlives its print on purpose, since a print recorded against a guessed
+// toolhead still needs correcting in Spoolman by hand.
 func (b *FilamentBridge) clearRunoutState(printerID string) {
 	b.warnMutex.Lock()
 	defer b.warnMutex.Unlock()
 	for id, w := range b.runoutWarnings {
 		if w.PrinterID == printerID {
 			delete(b.runoutWarnings, id)
+		}
+	}
+	for id, w := range b.mappingWarnings {
+		if w.PrinterID == printerID && (w.Assigned || w.Acknowledged) {
+			delete(b.mappingWarnings, id)
 		}
 	}
 	prefix := printerID + "|"
@@ -1702,6 +1877,18 @@ func (b *FilamentBridge) getActiveJob(printerID string) (*activeJob, error) {
 	if usageJSON != "" {
 		if err := json.Unmarshal([]byte(usageJSON), &aj.Usage); err != nil {
 			log.Printf("Warning: failed to decode stored usage for %s: %v", printerID, err)
+		}
+	}
+
+	// A single-filament slice records no slot, so its estimate lands on toolhead
+	// 0 by default. If the user answered this job's mapping warning and named the
+	// toolhead the print is really running from, move the estimate there before
+	// anything downstream sees it: low-filament checks, usage recording and print
+	// history all read the job through here. Idempotent, and re-answering simply
+	// moves the same value again.
+	if toolheadID, ok := b.mappingSlotOverride(printerID, aj.JobID); ok && len(aj.Usage) == 1 {
+		for _, grams := range aj.Usage {
+			aj.Usage = map[int]float64{toolheadID: grams}
 		}
 	}
 	return &aj, nil

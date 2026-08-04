@@ -210,6 +210,23 @@
     color: var(--v2-accent-link-hover);
 }
 
+/* The mapping warning's toolhead picker is styled for the light amber banner
+   upstream, which is unreadable on this darker wash: give it the same treatment
+   as the form inputs instead. */
+.mapping-slot-select {
+    padding: 7px 10px;
+    border: 1px solid var(--v2-border-input);
+    border-radius: var(--v2-radius);
+    background: var(--v2-input-bg);
+    color: var(--v2-text);
+    font-size: 12.5px;
+}
+
+.mapping-slot-select option {
+    background: var(--v2-input-bg);
+    color: var(--v2-text);
+}
+
 /* --- Status pills --------------------------------------------------------
  * Upstream tints a pill with a wash of the status colour rather than a solid
  * pastel block, which reads better on a dark surface. */

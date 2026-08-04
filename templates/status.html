@@ -48,13 +48,26 @@
         {{if .HasMappingWarnings}}
         <div id="mapping-warnings-container">
             {{range .MappingWarnings}}
+            {{$selected := .SelectedToolhead}}
             <div class="mapping-warning alert alert-warning" data-warning-id="{{.ID}}">
                 <h4 style="margin-top: 0;">⚠️ Confirm Toolhead Mapping</h4>
                 <p><strong>Printer:</strong> {{.PrinterName}}</p>
                 <p><strong>Print:</strong> {{.JobName}} (~{{printf "%.1f" .Grams}}g)</p>
-                <p>This print was sliced with a single filament, which does not record which slot it used, so FilaBridge will record its usage against <strong>toolhead {{.ToolheadID}}</strong>.</p>
-                <p><strong>Action:</strong> if the print is running from a different toolhead, remap it before the print finishes, otherwise the wrong spool will be debited.</p>
-                <button class="btn btn-warning" onclick="acknowledgeMappingWarning('{{.ID}}')">Acknowledge</button>
+                <p>This print was sliced with a single filament, so the file does not record which slot it came from.</p>
+                {{range .Slots}}{{if eq .ToolheadID $selected}}
+                <p><strong>Recording against {{.DisplayName}}{{if .SpoolLabel}}, {{.SpoolLabel}}{{end}}.</strong></p>
+                {{if not .SpoolID}}<p>No spool is mapped to {{.DisplayName}}, so nothing will be recorded unless one is mapped before the print finishes.</p>{{end}}
+                {{end}}{{end}}
+                <p>If the print is running from a different toolhead, pick it here. Nothing is recorded until the print finishes, so this can be changed until then.</p>
+                <div class="mapping-warning-actions">
+                    <select class="mapping-slot-select" id="mapping-slot-{{.ID}}" aria-label="Toolhead this print is running from">
+                        {{range .Slots}}
+                        <option value="{{.ToolheadID}}"{{if eq .ToolheadID $selected}} selected{{end}}>{{.DisplayName}} - {{if .SpoolLabel}}{{.SpoolLabel}}{{else}}no spool mapped{{end}}</option>
+                        {{end}}
+                    </select>
+                    <button class="btn btn-warning" onclick="assignMappingWarning('{{.ID}}')">Use this toolhead</button>
+                    <button class="btn btn-secondary" onclick="acknowledgeMappingWarning('{{.ID}}')">Dismiss</button>
+                </div>
             </div>
             {{end}}
         </div>

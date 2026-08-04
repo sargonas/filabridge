@@ -470,3 +470,163 @@ func TestSingleToolheadPrinterNeverWarnsOnUnknownSlot(t *testing.T) {
 		t.Errorf("single-toolhead printer raised a warning: %+v", got)
 	}
 }
+
+// TestMappingWarningOffersEveryToolhead: the warning has to be answerable, which
+// means listing every toolhead with whatever spool is mapped to it, so the user
+// picks the slot they loaded rather than rewiring their mappings to match a
+// slot-less file.
+func TestMappingWarningOffersEveryToolhead(t *testing.T) {
+	printer := newFakePrusaLink(t)
+	spoolman := newFakeSpoolman(t)
+	spoolman.Spools[9] = &fakeSpool{ID: 9, Name: "Galaxy Black", RemainingWeight: 900}
+	spoolman.Spools[61] = &fakeSpool{ID: 61, Name: "Lipstick Red", RemainingWeight: 800}
+	b := multiToolheadTestBridge(t, printer, spoolman, 5)
+	if err := b.SetToolheadMapping("TestPrinter", 0, 9); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.SetToolheadMapping("TestPrinter", 4, 61); err != nil {
+		t.Fatal(err)
+	}
+
+	printer.set(func(f *fakePrusaLink) {
+		f.State = "PRINTING"
+		f.JobID = 95
+		f.Filename = "single.bgcode"
+		f.FileBody = bgcodeFixture("102.48", 1024)
+	})
+	cycle(t, b)
+
+	warnings := b.GetMappingWarnings()
+	if len(warnings) != 1 {
+		t.Fatalf("expected 1 warning, got %d", len(warnings))
+	}
+	slots := warnings[0].Slots
+	if len(slots) != 5 {
+		t.Fatalf("expected one slot per toolhead, got %d: %+v", len(slots), slots)
+	}
+	// Both numberings are shown, since the confusion being fixed is exactly that
+	// FilaBridge counts toolheads from 0 and an MMU counts slots from 1.
+	if slots[4].DisplayName != "Toolhead 4 (slot 5)" {
+		t.Errorf("slot 4 display name = %q", slots[4].DisplayName)
+	}
+	if slots[4].SpoolID != 61 || !strings.Contains(slots[4].SpoolLabel, "Lipstick Red") {
+		t.Errorf("slot 4 should name the spool mapped to it: %+v", slots[4])
+	}
+	// An unmapped toolhead is still offered: the user may map a spool to it once
+	// the warning has told them it is empty.
+	if slots[2].SpoolID != 0 || slots[2].SpoolLabel != "" {
+		t.Errorf("slot 2 should be empty: %+v", slots[2])
+	}
+}
+
+// TestMappingWarningAssignmentRecordsAgainstChosenToolhead is the fix for issue
+// #36 end to end: a single-filament slice printed from slot 5 defaults to
+// toolhead 0, and answering the warning must move the whole print onto the
+// toolhead named, debiting that spool and leaving toolhead 0's alone.
+func TestMappingWarningAssignmentRecordsAgainstChosenToolhead(t *testing.T) {
+	printer := newFakePrusaLink(t)
+	spoolman := newFakeSpoolman(t)
+	spoolman.Spools[9] = &fakeSpool{ID: 9, Name: "Slot 1 spool", RemainingWeight: 900}
+	spoolman.Spools[61] = &fakeSpool{ID: 61, Name: "Slot 5 spool", RemainingWeight: 800}
+	b := multiToolheadTestBridge(t, printer, spoolman, 5)
+	if err := b.SetToolheadMapping("TestPrinter", 0, 9); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.SetToolheadMapping("TestPrinter", 4, 61); err != nil {
+		t.Fatal(err)
+	}
+
+	printer.set(func(f *fakePrusaLink) {
+		f.State = "PRINTING"
+		f.JobID = 96
+		f.Filename = "single.bgcode"
+		f.FileBody = bgcodeFixture("102.48", 1024)
+	})
+	cycle(t, b)
+
+	warnings := b.GetMappingWarnings()
+	if len(warnings) != 1 {
+		t.Fatalf("expected 1 warning, got %d", len(warnings))
+	}
+	id := warnings[0].ID
+
+	// A toolhead the printer does not have is not an answer.
+	if _, err := b.AssignMappingWarningToolhead(id, 5); err == nil {
+		t.Error("assigning a toolhead beyond the printer's count should fail")
+	}
+
+	updated, err := b.AssignMappingWarningToolhead(id, 4)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !updated.Assigned || updated.AssignedToolhead != 4 || updated.SelectedToolhead() != 4 {
+		t.Fatalf("warning did not record the answer: %+v", updated)
+	}
+
+	// The answer moves the estimate before anything downstream reads it, and the
+	// answered warning must not read as a fresh ambiguity on the next poll.
+	active, err := b.getActiveJob("printer_test")
+	if err != nil || active == nil {
+		t.Fatalf("active job not tracked: %v %v", active, err)
+	}
+	if len(active.Usage) != 1 || active.Usage[4] != 102.48 {
+		t.Fatalf("estimate not moved to the chosen toolhead: %v", active.Usage)
+	}
+	cycle(t, b)
+	if got := b.GetMappingWarnings(); len(got) != 1 {
+		t.Fatalf("expected the one answered warning, got %d: %+v", len(got), got)
+	}
+
+	printer.set(func(f *fakePrusaLink) { f.State = "FINISHED" })
+	cycle(t, b)
+
+	if got := spoolman.Spools[61].UsedWeight; got < 102.47 || got > 102.49 {
+		t.Errorf("slot 5 spool used_weight = %v, want ~102.48", got)
+	}
+	if got := spoolman.Spools[9].UsedWeight; got != 0 {
+		t.Errorf("slot 1 spool was debited %v, it was never printing", got)
+	}
+	history, _ := b.GetPrintHistory(10)
+	if len(history) != 1 || history[0].ToolheadID != 4 || history[0].SpoolID != 61 {
+		t.Errorf("history should credit the chosen toolhead: %+v", history)
+	}
+	// The print is over and the answer has been applied, so the card goes away.
+	if got := b.GetMappingWarnings(); len(got) != 0 {
+		t.Errorf("answered warning outlived its print: %+v", got)
+	}
+}
+
+// TestMappingWarningAssignmentSurvivesRestart: the answer is applied to the
+// persisted job immediately, so a bridge restarted mid-print still records
+// against the toolhead the user named rather than falling back to toolhead 0.
+func TestMappingWarningAssignmentSurvivesRestart(t *testing.T) {
+	printer := newFakePrusaLink(t)
+	spoolman := newFakeSpoolman(t)
+	b := multiToolheadTestBridge(t, printer, spoolman, 5)
+
+	printer.set(func(f *fakePrusaLink) {
+		f.State = "PRINTING"
+		f.JobID = 97
+		f.Filename = "single.bgcode"
+		f.FileBody = bgcodeFixture("102.48", 1024)
+	})
+	cycle(t, b)
+
+	warnings := b.GetMappingWarnings()
+	if len(warnings) != 1 {
+		t.Fatalf("expected 1 warning, got %d", len(warnings))
+	}
+	if _, err := b.AssignMappingWarningToolhead(warnings[0].ID, 3); err != nil {
+		t.Fatal(err)
+	}
+
+	// Warnings live in memory only, so the stored estimate is what a restart has
+	// left to go on.
+	var stored string
+	if err := b.db.QueryRow(`SELECT usage_json FROM active_jobs WHERE printer_id = ?`, "printer_test").Scan(&stored); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(stored, `"3":102.48`) {
+		t.Errorf("stored estimate did not follow the answer: %s", stored)
+	}
+}

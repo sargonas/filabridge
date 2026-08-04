@@ -96,11 +96,11 @@ func printerOfflinePayload(printerName, lastState string, at time.Time) Notifica
 // mappingWarningPayload builds the notification for a single-filament print on a
 // multi-toolhead printer. The slice records no slot, so the usage is attributed
 // to the given toolhead by default. It fires at print start rather than at
-// completion precisely so the mapping can still be corrected while the print
+// completion precisely so the right toolhead can still be picked while the print
 // runs, which is the difference between debiting the right spool and the wrong
 // one.
 func mappingWarningPayload(printerName, filename string, toolheadID int, grams float64, at time.Time) NotificationPayload {
-	msg := fmt.Sprintf("%s is printing ~%.1fg from a single-filament slice, which does not record which slot it used. FilaBridge will record it against toolhead %d. Confirm that is the toolhead it is really printing from, and remap it before the print finishes if not.",
+	msg := fmt.Sprintf("%s is printing ~%.1fg from a single-filament slice, which does not record which slot it used. FilaBridge will record it against toolhead %d. Confirm that is the toolhead it is really printing from, or pick the right one on the dashboard before the print finishes.",
 		printerName, grams, toolheadID)
 
 	return NotificationPayload{

@@ -504,6 +504,85 @@ func TestLocationsListEmptyAndTypeToolheads(t *testing.T) {
 // TestMapToolheadRejectsInvalidTargets: mappings to toolheads beyond the
 // printer's configured count (or to unknown printers) must be rejected, not
 // silently stored.
+// TestAssignMappingWarningEndpoint: answering a mapping warning names a
+// toolhead, and toolhead 0 is a real answer (it is the default attribution, so
+// "yes, slot 1" must not be read as a missing field).
+func TestAssignMappingWarningEndpoint(t *testing.T) {
+	ws, _, spoolman := newTestServer(t)
+	spoolman.Spools[1] = &fakeSpool{ID: 1, Name: "Spool", RemainingWeight: 500}
+	ws.bridge.mappingWarnings["mapping_test"] = MappingWarning{
+		ID:          "mapping_test",
+		PrinterID:   "printer_test",
+		PrinterName: "TestPrinter",
+		ToolheadID:  0,
+		JobID:       7,
+		JobName:     "single.bgcode",
+		Grams:       102.48,
+		Slots:       []MappingWarningSlot{{ToolheadID: 0}, {ToolheadID: 1}},
+	}
+
+	rec, body := doJSON(t, ws, http.MethodPost, "/api/mapping-warnings/mapping_test/assign", `{"toolhead_id":0}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("assigning toolhead 0 must succeed, got %d %s", rec.Code, rec.Body.String())
+	}
+	warning, _ := body["warning"].(map[string]interface{})
+	if warning == nil || warning["assigned"] != true || warning["assigned_toolhead"].(float64) != 0 {
+		t.Fatalf("response did not confirm the answer: %v", body)
+	}
+
+	rec, _ = doJSON(t, ws, http.MethodPost, "/api/mapping-warnings/mapping_test/assign", `{"toolhead_id":9}`)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("toolhead the printer does not have must 400, got %d %s", rec.Code, rec.Body.String())
+	}
+	rec, _ = doJSON(t, ws, http.MethodPost, "/api/mapping-warnings/nope/assign", `{"toolhead_id":1}`)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("unknown warning must 400, got %d %s", rec.Code, rec.Body.String())
+	}
+}
+
+// TestMappingWarningRendersSlotPicker: a warning already on the dashboard when
+// the page loads must render the same picker the websocket path builds, since a
+// user arriving mid-print has no other way to answer it.
+func TestMappingWarningRendersSlotPicker(t *testing.T) {
+	ws, _, _ := newTestServer(t)
+	ws.bridge.mappingWarnings["mapping_test"] = MappingWarning{
+		ID:               "mapping_test",
+		PrinterID:        "printer_test",
+		PrinterName:      "TestPrinter",
+		ToolheadID:       0,
+		JobID:            7,
+		JobName:          "single.bgcode",
+		Grams:            102.48,
+		Assigned:         true,
+		AssignedToolhead: 1,
+		Slots: []MappingWarningSlot{
+			{ToolheadID: 0, DisplayName: "Toolhead 0 (slot 1)", SpoolID: 3, SpoolLabel: "[3] PLA - TestVendor - Galaxy Black"},
+			{ToolheadID: 1, DisplayName: "Toolhead 1 (slot 2)"},
+		},
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	rec := httptest.NewRecorder()
+	ws.router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("dashboard returned %d", rec.Code)
+	}
+
+	html := rec.Body.String()
+	for _, want := range []string{
+		`id="mapping-slot-mapping_test"`,
+		`<option value="0">Toolhead 0 (slot 1) - [3] PLA - TestVendor - Galaxy Black</option>`,
+		`<option value="1" selected>Toolhead 1 (slot 2) - no spool mapped</option>`,
+		"Recording against Toolhead 1 (slot 2).",
+		"No spool is mapped to Toolhead 1 (slot 2)",
+		`onclick="assignMappingWarning('mapping_test')"`,
+	} {
+		if !strings.Contains(html, want) {
+			t.Errorf("dashboard missing %q", want)
+		}
+	}
+}
+
 func TestMapToolheadRejectsInvalidTargets(t *testing.T) {
 	ws, _, spoolman := newTestServer(t)
 	spoolman.Spools[1] = &fakeSpool{ID: 1, Name: "Spool", RemainingWeight: 500}

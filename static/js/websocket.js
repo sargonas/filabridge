@@ -345,6 +345,18 @@ function updateMappingWarnings(warnings) {
     const container = document.getElementById('mapping-warnings-container');
     if (!container) return;
 
+    // A status broadcast arrives every poll and rebuilds these cards. Remember
+    // any toolhead already picked in a dropdown so a user reading the list does
+    // not have their half-made choice reset out from under them, and then submit
+    // a toolhead they did not pick.
+    const pending = {};
+    container.querySelectorAll('.mapping-slot-select').forEach(select => {
+        const card = select.closest('[data-warning-id]');
+        if (card) {
+            pending[card.getAttribute('data-warning-id')] = select.value;
+        }
+    });
+
     container.innerHTML = '';
 
     if (!warnings || warnings.length === 0) {
@@ -360,18 +372,91 @@ function updateMappingWarnings(warnings) {
         // same whether the page was loaded with it or received it live
         el.className = 'mapping-warning alert alert-warning';
         el.setAttribute('data-warning-id', w.id);
+        el.innerHTML = mappingWarningBody(w);
 
-        el.innerHTML = `
-            <h4 style="margin-top: 0;">⚠️ Confirm Toolhead Mapping</h4>
-            <p><strong>Printer:</strong> ${escapeHtml(w.printer_name)}</p>
-            <p><strong>Print:</strong> ${escapeHtml(w.job_name)} (~${w.grams.toFixed(1)}g)</p>
-            <p>This print was sliced with a single filament, which does not record which slot it used, so FilaBridge will record its usage against <strong>toolhead ${w.toolhead_id}</strong>.</p>
-            <p><strong>Action:</strong> if the print is running from a different toolhead, remap it before the print finishes, otherwise the wrong spool will be debited.</p>
-            <button class="btn btn-warning" onclick="acknowledgeMappingWarning('${w.id}')">Acknowledge</button>
-        `;
+        const previous = pending[w.id];
+        if (previous !== undefined) {
+            const select = el.querySelector('.mapping-slot-select');
+            if (select && select.querySelector(`option[value="${previous}"]`)) {
+                select.value = previous;
+            }
+        }
 
         container.appendChild(el);
     });
+}
+
+// The inside of a mapping warning card, matching what status.html renders
+// server-side so the two paths cannot drift. Also used to redraw a card in place
+// once the toolhead has been picked.
+function mappingWarningBody(w) {
+    const slots = w.slots || [];
+    const selected = w.assigned ? w.assigned_toolhead : w.toolhead_id;
+    const current = slots.find(s => s.toolhead_id === selected);
+
+    let recording = '';
+    if (current) {
+        const spool = current.spool_label ? `, ${escapeHtml(current.spool_label)}` : '';
+        recording = `<p><strong>Recording against ${escapeHtml(current.display_name)}${spool}.</strong></p>`;
+        if (!current.spool_id) {
+            recording += `<p>No spool is mapped to ${escapeHtml(current.display_name)}, so nothing will be recorded unless one is mapped before the print finishes.</p>`;
+        }
+    }
+
+    const options = slots.map(s => {
+        const label = s.spool_label ? escapeHtml(s.spool_label) : 'no spool mapped';
+        return `<option value="${s.toolhead_id}"${s.toolhead_id === selected ? ' selected' : ''}>${escapeHtml(s.display_name)} - ${label}</option>`;
+    }).join('');
+
+    return `
+            <h4 style="margin-top: 0;">⚠️ Confirm Toolhead Mapping</h4>
+            <p><strong>Printer:</strong> ${escapeHtml(w.printer_name)}</p>
+            <p><strong>Print:</strong> ${escapeHtml(w.job_name)} (~${w.grams.toFixed(1)}g)</p>
+            <p>This print was sliced with a single filament, so the file does not record which slot it came from.</p>
+            ${recording}
+            <p>If the print is running from a different toolhead, pick it here. Nothing is recorded until the print finishes, so this can be changed until then.</p>
+            <div class="mapping-warning-actions">
+                <select class="mapping-slot-select" id="mapping-slot-${w.id}" aria-label="Toolhead this print is running from">
+                    ${options}
+                </select>
+                <button class="btn btn-warning" onclick="assignMappingWarning('${w.id}')">Use this toolhead</button>
+                <button class="btn btn-secondary" onclick="acknowledgeMappingWarning('${w.id}')">Dismiss</button>
+            </div>
+    `;
+}
+
+// Tell FilaBridge which toolhead the print is really running from, so its usage
+// is recorded there instead of against the toolhead a slot-less slice defaulted
+// to. Answerable, and re-answerable, until the print finishes.
+async function assignMappingWarning(warningId) {
+    const select = document.getElementById(`mapping-slot-${warningId}`);
+    if (!select) return;
+
+    const toolheadId = parseInt(select.value, 10);
+    if (Number.isNaN(toolheadId)) return;
+
+    try {
+        const response = await fetch(`/api/mapping-warnings/${encodeURIComponent(warningId)}/assign`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ toolhead_id: toolheadId }),
+        });
+
+        const data = await response.json().catch(() => ({}));
+        if (response.ok && data.warning) {
+            // Redraw from the server's copy rather than waiting for the next
+            // broadcast, so the confirmation is immediate.
+            const el = document.querySelector(`[data-warning-id="${warningId}"]`);
+            if (el) {
+                el.innerHTML = mappingWarningBody(data.warning);
+            }
+        } else {
+            alert('Failed to assign toolhead: ' + (data.error || 'Unknown error'));
+        }
+    } catch (error) {
+        console.error('Error assigning mapping warning toolhead:', error);
+        alert('Failed to assign toolhead');
+    }
 }
 
 // Acknowledge an unknown-filament-slot warning

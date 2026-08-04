@@ -310,7 +310,7 @@ function loadConfiguration() {
                             <input type="checkbox" id="notify_unknown_filament_slot" style="width: auto; cursor: pointer;" ${config.notify_unknown_filament_slot !== 'false' ? 'checked' : ''}>
                             <span><strong>Confirm toolhead mapping on single-filament prints</strong></span>
                         </label>
-                        <small>On a printer with more than one toolhead, warn when a print was sliced with a single filament. Those files do not record which slot they used, so the usage is recorded against toolhead 0 by default. Warns on the dashboard, and via the webhook above if one is set. Printers with one toolhead are unaffected.</small>
+                        <small>On a printer with more than one toolhead, warn when a print was sliced with a single filament. Those files do not record which slot they used, so the usage is recorded against toolhead 0 unless you pick the right one on the dashboard warning while the print runs. Warns on the dashboard, and via the webhook above if one is set. Printers with one toolhead are unaffected.</small>
                     </div>
                     <div style="margin-top: 20px; text-align: center;">
                         <button class="btn" onclick="saveConfiguration()">💾 Save Configuration</button>
