@@ -155,11 +155,14 @@
     margin-bottom: 16px;
 }
 
-/* Keep the settings forms to a readable measure on wide screens, the way
-   upstream caps its own settings page. */
+/* Settings and history are read as documents rather than scanned as a dashboard,
+   so they keep to a narrower measure than the shared column - centred within it,
+   the way upstream caps its own settings page. */
 #settings-tab,
 #history-tab {
-    max-width: 980px;
+    max-width: calc(980px + 48px);
+    margin-left: auto;
+    margin-right: auto;
 }
 
 /* --- Alerts -------------------------------------------------------------- */
@@ -339,6 +342,11 @@
     font-size: 12px;
     font-weight: 500;
     margin-left: 12px;
+    /* Tinted inline with the filament's colour when the spool has one. This is
+       the fallback for spools with no colour recorded, which would otherwise
+       inherit the classic sheet's blue and clash with the accent. */
+    background: var(--v2-accent-fill);
+    border-color: var(--v2-accent-fill);
 }
 
 .edit-spool-btn:hover {
@@ -600,6 +608,12 @@
 .ws-status-offline {
     background-color: rgba(196, 80, 58, 0.16);
     border-color: rgba(196, 80, 58, 0.4);
+    color: var(--v2-danger-soft);
+}
+
+/* Inline failure text. The classic red is too saturated to sit on the dark
+   surfaces here, so use the same tone the danger alerts do. */
+.text-error {
     color: var(--v2-danger-soft);
 }
 

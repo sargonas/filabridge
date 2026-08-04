@@ -76,6 +76,11 @@ func main() {
 		log.Fatalf("Failed to update bridge config: %v", err)
 	}
 
+	// Bring up the Bambu MQTT sessions now. They are the only source of state
+	// for those printers, so waiting for the first monitor cycle would leave
+	// them reading offline on the dashboard until then.
+	bridge.StartBambuClients()
+
 	// Override port from config if not specified
 	if *port == DefaultWebPort && config.WebPort != DefaultWebPort {
 		*port = config.WebPort

@@ -24,12 +24,20 @@
     color: var(--v2-text);
 }
 
-/* Row 1 of the top bar: the app's identity. */
+/* Row 1 of the top bar: the app's identity.
+ *
+ * The bar's surface spans the whole window, but its contents line up with the
+ * centred content column. Doing that with padding rather than an inner wrapper
+ * keeps the markup shared with the classic skin: once the window is wider than
+ * the column, the side padding grows to absorb the difference; below that it
+ * falls back to a plain gutter. The same expression is used on .tabs and
+ * .tab-content so all three columns share one left edge. */
 .header {
     background: var(--v2-surface);
     color: var(--v2-text);
     height: var(--v2-topbar-h);
-    padding: 0 18px;
+    padding: 0 24px;
+    padding-inline: max(24px, calc((100% - var(--v2-content-w)) / 2));
     display: flex;
     align-items: center;
     text-align: left;
@@ -56,7 +64,11 @@
     border-bottom: 1px solid var(--v2-border);
     border-radius: 0;
     gap: 4px;
-    padding: 0 14px 8px;
+    padding: 0 0 8px;
+    /* Pulled 12px further out than the other two so that the first tab's label -
+       inset by the pill's own 12px padding - lands on the column, rather than the
+       pill's invisible background edge. */
+    padding-inline: max(12px, calc((100% - var(--v2-content-w)) / 2 - 12px));
     align-items: center;
 }
 
@@ -95,10 +107,15 @@ a.tab:hover {
     color: var(--v2-accent-soft);
 }
 
+/* The column plus its own gutters, so the content inside starts on exactly the
+   same left edge as the title and the nav tabs above it. */
 .tab-content {
     background: var(--v2-bg);
     color: var(--v2-text);
     padding: 22px 24px 48px;
+    max-width: calc(var(--v2-content-w) + 48px);
+    margin-left: auto;
+    margin-right: auto;
 }
 
 /* Headings. The classic sheets lean on em units against a 16px base; at 13px
@@ -185,8 +202,9 @@ a.tab:hover {
 }
 
 @media (max-width: 600px) {
+    /* Same three-way alignment as the desktop column, on a 14px phone gutter. */
     .header {
-        padding: 0 12px;
+        padding: 0 14px;
     }
 
     .header h1 {
@@ -198,7 +216,7 @@ a.tab:hover {
     .tabs {
         flex-wrap: nowrap;
         overflow-x: auto;
-        padding: 0 8px 8px;
+        padding: 0 4px 8px;
     }
 
     .tab {

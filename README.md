@@ -234,6 +234,15 @@ FilaBridge keeps each spool's Spoolman location in step with its toolhead assign
 
 If you have exactly one printer with one toolhead configured, the Spool Tags screen also offers a Quick-Assign variant for each spool: a single tag that assigns the spool directly to your printer in one scan, with no location tag needed. Multi-toolhead users can build the same thing manually by appending `&location=<location name>` to a spool URL.
 
+#### Unloading With the Printer's Own Tag
+
+By default a toolhead tag scanned on its own waits for a spool tag, so tags pair up in whichever order you scan them. Tick **Toolhead tag first unloads the spool** under Settings → Advanced Settings → NFC Scanning Settings to change that:
+
+- **Scan spool, then printer** loads the spool, exactly as before.
+- **Scan printer on its own** unloads whatever is currently on that toolhead.
+
+That gives each printer a single tag covering both directions, with no separate "empty" tag to keep track of. The unloaded spool follows the same Spoolman location rules as any other unassignment above, so it returns to its own home location or to your default storage location. Storage location tags are unaffected and always wait for a spool, and scanning a toolhead that has nothing loaded reports that rather than reporting an unload.
+
 ## Notifications
 
 FilaBridge can POST to a webhook of your choice for the events it uniquely knows about. Your printer's own app already handles print-started/finished alerts, so FilaBridge doesn't duplicate them... it only notifies about things that depend on Spoolman data or on its own view of the printer. Set a **Notification webhook URL** in Settings → Basic Configuration to enable it or leave it empty to disable.
@@ -297,6 +306,8 @@ The web interface also provides REST API endpoints:
 - `GET /api/nfc/assign` - Handle NFC tag scans (spool, location, or both in one URL)
 - `GET /api/nfc/urls` - Get all NFC URLs with QR codes
 - `GET /api/nfc/session/status` - Check NFC session status
+- `GET /api/config/nfc-toolhead-unload` - Get the "toolhead tag first unloads" setting
+- `PUT /api/config/nfc-toolhead-unload` - Set the "toolhead tag first unloads" setting
 - `GET/POST /api/locations`, `PUT/DELETE /api/locations/{name}` - Manage locations
 - `WS /ws/status` - WebSocket endpoint for real-time status updates
 
@@ -315,7 +326,7 @@ filabridge/
 ├── web.go                 # HTTP server and API routes
 ├── templates/             # HTML templates
 ├── static/                # CSS, JavaScript and fonts for the dashboard
-│   └── css/v2/            # Experimental Spoolman-style skin (developer mode)
+│   └── css/v2/            # Spoolman-style interface (default since v1.2.2)
 ├── go.mod / go.sum        # Go module definition
 └── README.md              # Documentation
 ```
@@ -390,29 +401,37 @@ go test ./...
 go test -race ./...
 ```
 
+### Interface
+
+FilaBridge's interface matches Spoolman's redesigned (`client_v2`) look, so the
+two apps read as one system when you run them side by side.
+
+The styling lives in `static/css/v2/` and layers on top of the classic sheets
+rather than replacing them, so both looks stay in sync as features land. Its
+design tokens are ported from Spoolman's `client_v2/src/app.css`, with one
+deliberate difference: the accent is violet, carried over from FilaBridge's own
+earlier header gradient, rather than Spoolman's orange. FilaBridge is a companion
+to Spoolman, not a clone of it. IBM Plex Sans and Mono are bundled in
+`static/fonts/` (SIL Open Font License 1.1, see `static/fonts/OFL.txt`) so the
+interface needs no internet access.
+
+If the redesign disrupts you, `FILABRIDGE_OLD_UI=true` brings back the pre-1.2.2
+interface. It is a short-term escape hatch rather than a supported option, and it
+will be removed after a few releases, so treat it as time to adjust rather than a
+setting to keep. Only the styling differs either way: the markup, behaviour and
+every element ID are shared.
+
 ### Developer mode
 
 Setting `FILABRIDGE_DEVELOPER_MODE=true` turns on features that are still under
-construction. It currently enables two:
+construction. It currently enables one:
 
 - **Bambu Lab printer support**, which is incomplete and hidden from the printer
   configuration UI without the flag.
-- **An experimental interface skin** matching Spoolman's redesigned
-  (`client_v2`) look, so the two apps read as one system. It is a pure restyle:
-  the markup, behaviour and every element ID are shared with the default look,
-  and only the stylesheets differ. The classic interface stays the default while
-  the new one is evaluated.
 
-Neither is ready for everyday use, so leave the flag unset in a normal install.
-
-The skin lives in `static/css/v2/` and layers on top of the classic sheets rather
-than replacing them, so both looks stay in sync as features land. Its design
-tokens are ported from Spoolman's `client_v2/src/app.css`, with one deliberate
-difference: the accent is violet, carried over from FilaBridge's own classic
-header gradient, rather than Spoolman's orange. FilaBridge is a companion to
-Spoolman, not a clone of it. IBM Plex Sans and Mono are bundled in
-`static/fonts/` (SIL Open Font License 1.1, see `static/fonts/OFL.txt`) so the
-interface needs no internet access.
+It is not ready for everyday use, so leave the flag unset in a normal install.
+It has no effect on the interface, which is controlled by `FILABRIDGE_OLD_UI`
+above.
 
 ## Contributing
 

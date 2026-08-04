@@ -216,6 +216,17 @@ func (c *PrusaLinkClient) ResumeJob(jobID int) error {
 	return c.jobCommand(jobID, "resume")
 }
 
+// IsPaused reports whether the printer is currently paused, so a caller can tell
+// an auto-paused print from one the user already resumed at the printer. It
+// completes the jobController interface alongside PauseJob and ResumeJob.
+func (c *PrusaLinkClient) IsPaused() (bool, error) {
+	status, err := c.GetStatus()
+	if err != nil {
+		return false, err
+	}
+	return status.Printer.State == StatePaused, nil
+}
+
 // GetGcodeFileWithRetry downloads the G-code file with retry logic and exponential backoff
 func (c *PrusaLinkClient) GetGcodeFileWithRetry(filename string, fileDownloadTimeout int) ([]byte, error) {
 	backoffDelays := []time.Duration{2 * time.Second, 4 * time.Second, 8 * time.Second}

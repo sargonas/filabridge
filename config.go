@@ -40,6 +40,7 @@ type Config struct {
 	SpoolmanTimeout              int
 	Printers                     map[string]PrinterConfig // Key is printer ID, value is printer config
 	DeveloperMode                bool                     // Experimental features (e.g. Bambu support) via FILABRIDGE_DEVELOPER_MODE
+	LegacyUI                     bool                     // Serve the pre-1.2.2 interface via FILABRIDGE_OLD_UI
 }
 
 // LoadConfig loads configuration from database
@@ -67,6 +68,7 @@ func LoadConfig(bridge *FilamentBridge) (*Config, error) {
 		SpoolmanTimeout:              spoolmanTimeout,
 		Printers:                     make(map[string]PrinterConfig),
 		DeveloperMode:                developerModeEnabled(),
+		LegacyUI:                     legacyUIEnabled(),
 	}
 
 	// Load printer configs directly from database without making API calls.
@@ -93,7 +95,21 @@ func LoadConfig(bridge *FilamentBridge) (*Config, error) {
 // the FILABRIDGE_DEVELOPER_MODE environment variable so the feature stays hidden
 // in normal deployments until it is complete.
 func developerModeEnabled() bool {
-	switch strings.ToLower(strings.TrimSpace(os.Getenv("FILABRIDGE_DEVELOPER_MODE"))) {
+	return envFlagEnabled("FILABRIDGE_DEVELOPER_MODE")
+}
+
+// legacyUIEnabled reports whether the pre-1.2.2 interface should be served
+// instead of the current one, via the FILABRIDGE_OLD_UI environment variable.
+// A short-lived escape hatch for anyone the redesign disrupts, to be removed
+// once the new interface has a few releases behind it.
+func legacyUIEnabled() bool {
+	return envFlagEnabled("FILABRIDGE_OLD_UI")
+}
+
+// envFlagEnabled reads a boolean environment variable, accepting the spellings
+// people actually type.
+func envFlagEnabled(name string) bool {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv(name))) {
 	case "true", "1", "yes", "on":
 		return true
 	}

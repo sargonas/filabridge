@@ -112,6 +112,12 @@ body {
     display: none;
 }
 
+/* Inline failure text, e.g. a settings panel that could not load. A class
+   rather than an inline colour so a skin can restyle it. */
+.text-error {
+    color: #ff6b6b;
+}
+
 /* Section Headers */
 .section-header {
     display: flex;
