@@ -143,6 +143,67 @@
     gap: 15px;
 }
 
+/* Inline "?" badge that reveals a longer explanation of a setting on hover or
+   focus. Focus (not just hover) carries it, so it is reachable by keyboard and
+   by tapping on touch screens, where hover never fires. */
+.setting-tip {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 18px;
+    height: 18px;
+    margin-left: 6px;
+    border-radius: 50%;
+    background: rgba(255,255,255,0.15);
+    color: #fff;
+    font-size: 12px;
+    font-weight: bold;
+    font-style: normal;
+    cursor: help;
+    flex-shrink: 0;
+}
+
+.setting-tip:hover,
+.setting-tip:focus {
+    background: rgba(255,255,255,0.3);
+    outline: none;
+}
+
+.setting-tip .setting-tip-text {
+    visibility: hidden;
+    opacity: 0;
+    position: absolute;
+    bottom: calc(100% + 8px);
+    left: 50%;
+    transform: translateX(-50%);
+    width: max-content;
+    max-width: min(380px, 85vw);
+    padding: 10px 12px;
+    border-radius: 6px;
+    background: #2c3e50;
+    border: 1px solid rgba(255,255,255,0.15);
+    box-shadow: 0 6px 18px rgba(0,0,0,0.35);
+    color: #f1f1f1;
+    font-size: 13px;
+    font-weight: normal;
+    line-height: 1.5;
+    text-align: left;
+    white-space: normal;
+    z-index: 10;
+    transition: opacity 0.15s;
+}
+
+.setting-tip:hover .setting-tip-text,
+.setting-tip:focus .setting-tip-text {
+    visibility: visible;
+    opacity: 1;
+}
+
+.setting-tip .setting-tip-text strong {
+    color: #fff;
+}
+
 /* Alert banners - Spoolman connection trouble, low-filament warnings, print
    errors. The same markup is produced server-side (status.html) and rebuilt live
    over the websocket, so both paths must use these classes rather than their own

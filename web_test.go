@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	neturl "net/url"
 	"regexp"
 	"strings"
 	"testing"
@@ -689,5 +690,176 @@ func TestDashboardSpoolmanLink(t *testing.T) {
 	rec, _ = doJSON(t, ws, http.MethodGet, "/", "")
 	if strings.Contains(rec.Body.String(), "Spoolman ↗") {
 		t.Fatal("Spoolman link rendered without a configured URL")
+	}
+}
+
+// nfcScan performs an NFC tag scan against the assign endpoint and returns the
+// rendered page body. Query values are escaped for the caller so location names
+// with spaces and dashes survive the trip.
+func nfcScan(t *testing.T, ws *WebServer, spool string, location string) string {
+	t.Helper()
+	q := neturl.Values{}
+	if spool != "" {
+		q.Set("spool", spool)
+	}
+	if location != "" {
+		q.Set("location", location)
+	}
+	rec, _ := doJSON(t, ws, http.MethodGet, "/api/nfc/assign?"+q.Encode(), "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("nfc scan (spool=%q location=%q): status %d: %s", spool, location, rec.Code, rec.Body.String())
+	}
+	return rec.Body.String()
+}
+
+// setToolheadUnloadMode turns the "toolhead tag first unloads" workflow on or
+// off through the API, the same way the settings page does.
+func setToolheadUnloadMode(t *testing.T, ws *WebServer, enabled bool) {
+	t.Helper()
+	body := `{"enabled":false}`
+	if enabled {
+		body = `{"enabled":true}`
+	}
+	rec, _ := doJSON(t, ws, http.MethodPut, "/api/config/nfc-toolhead-unload", body)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("set toolhead unload mode: status %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+// mappedSpool returns the spool currently mapped to the test printer's only
+// toolhead, or 0 when it is empty.
+func mappedSpool(t *testing.T, ws *WebServer) int {
+	t.Helper()
+	spoolID, err := ws.bridge.GetToolheadMapping("TestPrinter", 0)
+	if err != nil {
+		t.Fatalf("GetToolheadMapping: %v", err)
+	}
+	return spoolID
+}
+
+// TestNFCToolheadFirstUnload covers the optional workflow where a toolhead tag
+// scanned on its own unloads that toolhead (issue #42), including the guarantee
+// that everything else about NFC scanning is unchanged while it is off.
+func TestNFCToolheadFirstUnload(t *testing.T) {
+	const toolhead = "TestPrinter - Toolhead 0"
+
+	// Each subtest gets its own server: NFC sessions are keyed by client IP,
+	// which is identical across requests here, so a shared server would leak
+	// half-finished sessions from one case into the next.
+	setup := func(t *testing.T) (*WebServer, *fakeSpoolman) {
+		t.Helper()
+		ws, _, spoolman := newTestServer(t)
+		spoolman.Spools[7] = &fakeSpool{ID: 7, Name: "Galaxy Black", RemainingWeight: 800}
+		return ws, spoolman
+	}
+
+	t.Run("off: toolhead first still waits for a spool", func(t *testing.T) {
+		ws, _ := setup(t)
+		if err := ws.bridge.SetToolheadMapping("TestPrinter", 0, 7); err != nil {
+			t.Fatalf("SetToolheadMapping: %v", err)
+		}
+
+		body := nfcScan(t, ws, "", toolhead)
+		if !strings.Contains(body, "Now scan a spool tag") {
+			t.Fatalf("expected the scan-in-any-order progress page, got: %s", body)
+		}
+		if got := mappedSpool(t, ws); got != 7 {
+			t.Fatalf("toolhead mapping = %d, want it left alone at 7", got)
+		}
+	})
+
+	t.Run("on: toolhead first unloads the loaded spool", func(t *testing.T) {
+		ws, spoolman := setup(t)
+		setToolheadUnloadMode(t, ws, true)
+		if err := ws.bridge.SetToolheadMapping("TestPrinter", 0, 7); err != nil {
+			t.Fatalf("SetToolheadMapping: %v", err)
+		}
+
+		body := nfcScan(t, ws, "", toolhead)
+		if !strings.Contains(body, "Toolhead Unloaded") {
+			t.Fatalf("expected the unload page, got: %s", body)
+		}
+		if got := mappedSpool(t, ws); got != 0 {
+			t.Fatalf("toolhead mapping = %d, want it cleared", got)
+		}
+		// The spool left the toolhead in Spoolman too, not just in FilaBridge.
+		if got := spoolman.Spools[7].Location; got == toolhead {
+			t.Fatalf("spool 7 still sits at %q in Spoolman", got)
+		}
+	})
+
+	t.Run("on: empty toolhead says so instead of claiming an unload", func(t *testing.T) {
+		ws, _ := setup(t)
+		setToolheadUnloadMode(t, ws, true)
+
+		body := nfcScan(t, ws, "", toolhead)
+		if !strings.Contains(body, "Toolhead Was Empty") {
+			t.Fatalf("expected the empty-toolhead page, got: %s", body)
+		}
+		if strings.Contains(body, "Toolhead Unloaded") {
+			t.Fatal("empty toolhead reported as an unload")
+		}
+	})
+
+	t.Run("on: spool then toolhead still loads", func(t *testing.T) {
+		ws, _ := setup(t)
+		setToolheadUnloadMode(t, ws, true)
+
+		if body := nfcScan(t, ws, "7", ""); !strings.Contains(body, "Now scan a location tag") {
+			t.Fatalf("expected the progress page after a spool scan, got: %s", body)
+		}
+		if body := nfcScan(t, ws, "", toolhead); !strings.Contains(body, "Assignment Complete") {
+			t.Fatalf("expected the assignment page, got: %s", body)
+		}
+		if got := mappedSpool(t, ws); got != 7 {
+			t.Fatalf("toolhead mapping = %d, want spool 7 loaded", got)
+		}
+	})
+
+	t.Run("on: single-scan combo URL still loads", func(t *testing.T) {
+		ws, _ := setup(t)
+		setToolheadUnloadMode(t, ws, true)
+
+		if body := nfcScan(t, ws, "7", toolhead); !strings.Contains(body, "Assignment Complete") {
+			t.Fatalf("expected the assignment page, got: %s", body)
+		}
+		if got := mappedSpool(t, ws); got != 7 {
+			t.Fatalf("toolhead mapping = %d, want spool 7 loaded", got)
+		}
+	})
+
+	t.Run("on: storage location tags are unaffected", func(t *testing.T) {
+		ws, _ := setup(t)
+		setToolheadUnloadMode(t, ws, true)
+
+		body := nfcScan(t, ws, "", "Drybox")
+		if !strings.Contains(body, "Now scan a spool tag") {
+			t.Fatalf("expected a storage location to wait for a spool, got: %s", body)
+		}
+	})
+}
+
+// TestNFCToolheadUnloadSettingRoundTrip: the setting defaults to off, so an
+// existing install keeps the scan-in-any-order workflow until it opts in.
+func TestNFCToolheadUnloadSettingRoundTrip(t *testing.T) {
+	ws, _, _ := newTestServer(t)
+
+	_, body := doJSON(t, ws, http.MethodGet, "/api/config/nfc-toolhead-unload", "")
+	if body["enabled"] != false {
+		t.Fatalf("enabled = %v, want false by default", body["enabled"])
+	}
+
+	setToolheadUnloadMode(t, ws, true)
+	_, body = doJSON(t, ws, http.MethodGet, "/api/config/nfc-toolhead-unload", "")
+	if body["enabled"] != true {
+		t.Fatalf("enabled = %v, want true after opting in", body["enabled"])
+	}
+
+	// Turning it back off has to work: a bool with binding:"required" would
+	// reject false as a missing value and strand the user in the new workflow.
+	setToolheadUnloadMode(t, ws, false)
+	_, body = doJSON(t, ws, http.MethodGet, "/api/config/nfc-toolhead-unload", "")
+	if body["enabled"] != false {
+		t.Fatalf("enabled = %v, want false after opting back out", body["enabled"])
 	}
 }

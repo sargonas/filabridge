@@ -46,6 +46,7 @@ const (
 	ConfigKeyRunoutWarningEnabled            = "runout_warning_enabled"
 	ConfigKeyRunoutPauseEnabled              = "runout_pause_enabled"
 	ConfigKeyNotifyWebhookURL                = "notify_webhook_url"
+	ConfigKeyNFCToolheadFirstUnloads         = "nfc_toolhead_first_unloads"
 )
 
 // HTTP timeouts
