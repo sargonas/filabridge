@@ -235,6 +235,29 @@
     font-weight: bold;
 }
 
+/* The toolhead picker on a mapping warning, where a single-filament print says
+   which slot it is really running from. It sits inside the amber banner rather
+   than in a form, so it carries its own light colours instead of the dark
+   .form-group treatment, which would be unreadable there. */
+.mapping-warning-actions {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 10px;
+    margin-top: 12px;
+}
+
+.mapping-slot-select {
+    flex: 1 1 320px;
+    min-width: 0;
+    padding: 10px;
+    border: 1px solid #ffeaa7;
+    border-radius: 8px;
+    background: #fff;
+    color: #856404;
+    font-size: 14px;
+}
+
 /* The numbered quick-start box inside the first-run welcome banner. */
 .setup-steps {
     background: rgba(255,255,255,0.1);

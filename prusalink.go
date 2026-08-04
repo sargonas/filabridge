@@ -297,7 +297,11 @@ func (c *PrusaLinkClient) GetGcodeFileWithRetry(filename string, fileDownloadTim
 var filamentUsedRegex = regexp.MustCompile(`;?\s*filament used \[g\]\s*=\s*([0-9.,\s]+)`)
 
 // parseFilamentWeights parses the comma-separated per-toolhead weights from a
-// filamentUsedRegex capture group.
+// filamentUsedRegex capture group. A value's position in the list is the
+// toolhead it belongs to, and positions are preserved across zero entries, so
+// "0,0,0,0,102.48" is toolhead 4. A slice with a single filament records one
+// value and no position, which is why such a print always reads as toolhead 0
+// regardless of which physical slot it was printed from.
 func parseFilamentWeights(weightsStr string) map[int]float64 {
 	filamentUsage := make(map[int]float64)
 	for i, weightStr := range strings.Split(weightsStr, ",") {
@@ -306,6 +310,10 @@ func parseFilamentWeights(weightsStr string) map[int]float64 {
 			filamentUsage[i] = weight
 		}
 	}
+	// Log the raw field next to what it parsed to: when usage lands on an
+	// unexpected toolhead, the slicer's own string is the evidence needed to
+	// tell a parsing problem from a slice that never named a slot.
+	log.Printf("Slicer filament estimate %q parsed as %v", strings.TrimSpace(weightsStr), filamentUsage)
 	return filamentUsage
 }
 
@@ -432,6 +440,7 @@ func filamentUsageFromMeta(meta map[string]interface{}) map[int]float64 {
 	switch val := raw.(type) {
 	case string:
 		// "1.23,4.56" (per toolhead) or a single "1.23"
+		log.Printf("Job metadata filament estimate %q", strings.TrimSpace(val))
 		for i, part := range strings.Split(val, ",") {
 			addValue(i, part)
 		}

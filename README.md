@@ -27,7 +27,8 @@ Spoolman is an excellent tool to track one's filament inventory. However, manual
 - **Web-based Config**: No config files needed - manage everything through the web UI
 - **Smart Spool Search**: Search and filter spools by ID, material, brand, or name with real-time filtering
 - **Error Handling**: Print error detection with acknowledgment system for failed filament tracking
-- **Webhook Notifications**: Optional outgoing webhook for low-filament warnings (noting an auto-pause) and unexpected printer disconnects during a print. Point it at ntfy, Gotify, Home Assistant, Discord/Slack, or Apprise
+- **Webhook Notifications**: Optional outgoing webhook for low-filament warnings (noting an auto-pause), unexpected printer disconnects during a print, and single-filament prints on a multi-toolhead printer. Point it at ntfy, Gotify, Home Assistant, Discord/Slack, or Apprise
+- **Single-Filament Prints on an MMU**: A file sliced with one filament records no slot, so its usage would land on toolhead 0 whatever slot it really printed from. FilaBridge warns at print start and lets you pick the toolhead, before anything is deducted
 - **Auto-mapping**: Automatic spool assignment when selecting from dropdown menus
 - **NFC Tag Support**: Generate QR codes and program NFC tags for spools, filaments, and locations
 - **Smart Scanning**: Two-step NFC workflow - scan spool + location for instant assignment
@@ -244,14 +245,15 @@ That gives each printer a single tag covering both directions, with no separate 
 
 ## Notifications
 
-FilaBridge can POST to a webhook of your choice for the two events it uniquely knows about. Your printer's own app already handles print-started/finished alerts, so FilaBridge doesn't duplicate them... it only notifies about things that depend on Spoolman data or on its own view of the printer. Set a **Notification webhook URL** in Settings → Basic Configuration to enable it or leave it empty to disable.
+FilaBridge can POST to a webhook of your choice for the events it uniquely knows about. Your printer's own app already handles print-started/finished alerts, so FilaBridge doesn't duplicate them... it only notifies about things that depend on Spoolman data or on its own view of the printer. Set a **Notification webhook URL** in Settings → Basic Configuration to enable it or leave it empty to disable.
 
-Two events fire:
+Three events fire:
 
 - **Low filament** - when the mapped spool has less filament remaining than the print still needs (the same check that raises the dashboard warning). If you've enabled *Pause print on low filament warning*, the notification says the print was paused and how to resume.
 - **Unexpected disconnect** - when a printer drops offline **while a print is active** (printing, paused, or awaiting attention). A printer going offline while idle is treated as a normal power-off and stays silent.
+- **Unknown filament slot** - when a multi-toolhead printer starts a print that was sliced with a single filament. See [Single-filament prints on a multi-toolhead printer](#single-filament-prints-on-a-multi-toolhead-printer) below. Can be turned off with *Confirm toolhead mapping on single-filament prints* in Settings.
 
-Each event is sent once, the low-filament check fires once per print/toolhead/spool, and the disconnect alert is edge-triggered, so you won't get repeat alerts on every poll.
+Each event is sent once, the low-filament check fires once per print/toolhead/spool, the unknown-slot warning once per print, and the disconnect alert is edge-triggered, so you won't get repeat alerts on every poll.
 
 The webhook receives a JSON `POST` with both a human-readable `title`/`message` and structured fields:
 
@@ -276,6 +278,16 @@ The `printer_offline` event carries `event`, `title`, `message`, `printer`, `tim
 Because it's a plain webhook, point it at whatever you already run: [ntfy](https://ntfy.sh), [Gotify](https://gotify.net), Home Assistant, a Discord/Slack incoming webhook, or an [Apprise API](https://github.com/caronc/apprise-api) instance if you want to fan out to countless services. Targets that expect a specific body shape (Discord, Slack) are best reached through Apprise API or a small relay.
 
 > **Tip:** many webhook URLs embed a token (Discord, Slack, ntfy). Use a single-purpose, revocable webhook so the URL grants nothing beyond posting these notifications, like other settings, it is stored and shown in the config UI.
+
+## Single-filament prints on a multi-toolhead printer
+
+FilaBridge works out which toolhead used what from the *position* of each value in the slicer's `filament used [g]` line. A five-filament slice writes `6.12, 6.20, 6.21, 4.03, 3.78`, so all five toolheads are tracked correctly, and MMU/INDX/XL prints need nothing from you.
+
+A file sliced with a **single** filament writes one value and no position, whatever slot you actually loaded it from. There is nowhere to read the real slot from: PrusaLink's API reports no active tool either. So that print would land on toolhead 0, which is right on a single-toolhead printer and a guess on any other.
+
+When a printer with more than one toolhead starts a single-filament print, FilaBridge raises a dashboard warning (and fires the webhook, if configured) listing every toolhead with the spool mapped to it. Pick the one the print is running from and its usage is recorded there instead. Nothing is deducted until the print finishes, so you can change the answer, or map a spool to an empty slot, right up until then. Dismiss it and toolhead 0 is used as before.
+
+Multi-filament slices and single-toolhead printers never see this warning: both already know exactly where their filament came from.
 
 ## API Endpoints
 
