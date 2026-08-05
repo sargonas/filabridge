@@ -247,6 +247,14 @@ By default a toolhead tag scanned on its own waits for a spool tag, so tags pair
 
 That gives each printer a single tag covering both directions, with no separate "empty" tag to keep track of. The unloaded spool follows the same Spoolman location rules as any other unassignment above, so it returns to its own home location or to your default storage location. Storage location tags are unaffected and always wait for a spool, and scanning a toolhead that has nothing loaded reports that rather than reporting an unload.
 
+#### Renaming a Location
+
+A location in Spoolman is not a record of its own; it is the free-text `location` field on each spool. A location exists precisely as long as some spool is in it, which is why locations appear here only once a spool has been assigned to one, and why there is nothing to create or delete.
+
+Renaming therefore rewrites that field on every spool currently in the location. Renaming "Drybox" to "Drybox A" moves all of its spools at once, and renaming a location that holds no spools reports an error rather than silently doing nothing.
+
+> **Requires Spoolman v0.26.0 or newer.** Rename uses `PATCH /api/v1/spool/field/location`, which was added in v0.26.0. On older Spoolman versions the rename will fail; every other feature works as normal.
+
 ## Notifications
 
 FilaBridge can `POST` to a webhook of your choice for the events it uniquely knows about. Your printer's own app already handles print-started/finished alerts, so FilaBridge doesn't duplicate them... it only notifies about things that depend on Spoolman data or on its own view of the printer. Set a **Notification webhook URL** in Settings → Basic Configuration to enable it or leave it empty to disable.

@@ -210,12 +210,9 @@ async function loadLocationTags(dataPromise) {
                 <div class="item-info">
                     <div class="item-name">${url.display_name}</div>
                 </div>
-                <!-- Rename disabled until it operates on spools instead of the
-                     abandoned locations setting; restored in a follow-up PR.
                 <div class="location-actions">
                     ${renderLocationActions(url)}
                 </div>
-                -->
             `;
             
             // Add click handler
@@ -417,8 +414,16 @@ async function renameLocation(currentName) {
             body: JSON.stringify({ name: newName.trim() })
         });
         if (!res.ok) {
+            // The API reports failures as {"error": "..."}; show that sentence
+            // rather than the raw JSON envelope. Falls back to the body text if
+            // the response isn't the shape we expect (e.g. a proxy error page).
             const errorText = await res.text();
-            throw new Error(errorText);
+            let message = errorText;
+            try {
+                const parsed = JSON.parse(errorText);
+                if (parsed && parsed.error) message = parsed.error;
+            } catch (_) { /* not JSON — use the raw text */ }
+            throw new Error(message);
         }
         const result = await res.json();
         await loadLocationTags();
