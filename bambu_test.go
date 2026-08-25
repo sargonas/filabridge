@@ -2,8 +2,18 @@ package main
 
 import (
 	"archive/zip"
+	"bufio"
 	"bytes"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/tls"
+	"crypto/x509"
+	"crypto/x509/pkix"
 	"fmt"
+	"io"
+	"math/big"
+	"net"
 	"strings"
 	"sync"
 	"testing"
@@ -662,5 +672,326 @@ func TestBambuJobName(t *testing.T) {
 	r.Print.SubtaskName = "My Print"
 	if n := bambuJobName(r); n != "My Print" {
 		t.Errorf("subtask-name preference = %q", n)
+	}
+}
+
+// fakeBambuFTPS is a minimal stand-in for the FTPS server on an A1/A1 Mini: it
+// speaks implicit TLS on both channels, rejects EPSV the way that firmware
+// does, and answers PASV with the unroutable host 0.0.0.0 - the quirk that made
+// every sliced-file download fail with "dial tcp 0.0.0.0:<port>".
+type fakeBambuFTPS struct {
+	t        *testing.T
+	listener net.Listener
+	tlsConf  *tls.Config
+	files    map[string][]byte
+	host     string // loopback address the fake printer answers on
+}
+
+func newFakeBambuFTPS(t *testing.T, files map[string][]byte) *fakeBambuFTPS {
+	t.Helper()
+	tlsConf := &tls.Config{Certificates: []tls.Certificate{selfSignedCert(t)}}
+	// Bind a loopback address that is NOT 127.0.0.1 where the OS allows it
+	// (Linux routes all of 127/8 to lo). Dialing the advertised "0.0.0.0"
+	// reaches 127.0.0.1, so only a distinct host makes the unpinned client
+	// fail the way it does against a real printer. Elsewhere the test still
+	// exercises the implicit-TLS control + data channels.
+	host := fakeBambuFTPSHost
+	ln, err := tls.Listen("tcp", net.JoinHostPort(host, "0"), tlsConf)
+	if err != nil {
+		host = "127.0.0.1"
+		ln, err = tls.Listen("tcp", net.JoinHostPort(host, "0"), tlsConf)
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	f := &fakeBambuFTPS{t: t, listener: ln, tlsConf: tlsConf, files: files, host: host}
+	t.Cleanup(func() { _ = ln.Close() })
+	go f.serve()
+	return f
+}
+
+// fakeBambuFTPSHost is a loopback address distinct from 127.0.0.1; see
+// newFakeBambuFTPS for why that distinction matters.
+const fakeBambuFTPSHost = "127.0.0.2"
+
+// port is the ephemeral control port the fake printer is listening on.
+func (f *fakeBambuFTPS) port() int {
+	return f.listener.Addr().(*net.TCPAddr).Port
+}
+
+func (f *fakeBambuFTPS) serve() {
+	for {
+		conn, err := f.listener.Accept()
+		if err != nil {
+			return // listener closed at test cleanup
+		}
+		go f.handle(conn)
+	}
+}
+
+func (f *fakeBambuFTPS) handle(conn net.Conn) {
+	defer func() { _ = conn.Close() }()
+	r := bufio.NewReader(conn)
+	write := func(format string, args ...interface{}) {
+		_, _ = fmt.Fprintf(conn, format+"\r\n", args...)
+	}
+	write("220 fake bambu ftpd")
+
+	var dataLn net.Listener
+	protP := false // set by "PROT P"; a real FTPS server needs it before RETR
+	defer func() {
+		if dataLn != nil {
+			_ = dataLn.Close()
+		}
+	}()
+
+	for {
+		line, err := r.ReadString('\n')
+		if err != nil {
+			return
+		}
+		cmd, arg, _ := strings.Cut(strings.TrimRight(line, "\r\n"), " ")
+		switch strings.ToUpper(cmd) {
+		case "USER":
+			write("331 need password")
+		case "PASS":
+			write("230 logged in")
+		case "FEAT":
+			write("211-Features:")
+			write("211 End")
+		case "TYPE", "OPTS", "PBSZ":
+			write("200 ok")
+		case "PROT":
+			if strings.ToUpper(arg) != "P" {
+				write("504 only PROT P")
+				continue
+			}
+			protP = true
+			write("200 ok")
+		case "PWD":
+			write("257 \"/\"")
+		case "EPSV":
+			write("500 unknown command") // A1 firmware has no EPSV
+		case "PASV":
+			ln, err := net.Listen("tcp", net.JoinHostPort(f.host, "0"))
+			if err != nil {
+				write("425 cannot open data connection")
+				continue
+			}
+			if dataLn != nil {
+				_ = dataLn.Close()
+			}
+			dataLn = ln
+			port := ln.Addr().(*net.TCPAddr).Port
+			// The quirk under test: the advertised host is 0.0.0.0, not the
+			// address the client is talking to.
+			write("227 Entering Passive Mode (0,0,0,0,%d,%d)", port/256, port%256)
+		case "RETR":
+			if !protP {
+				// Mirrors a real FTPS server: without PROT P the data channel
+				// would be cleartext, and the client's TLS handshake is junk.
+				write("522 data channel must be protected (PROT P)")
+				continue
+			}
+			body, ok := f.files[strings.TrimPrefix(arg, "/")]
+			if !ok {
+				write("550 no such file")
+				continue
+			}
+			if dataLn == nil {
+				write("425 no data connection")
+				continue
+			}
+			write("150 opening data connection")
+			dc, err := dataLn.Accept()
+			if err != nil {
+				write("426 data connection failed")
+				continue
+			}
+			tc := tls.Server(dc, f.tlsConf)
+			_, _ = tc.Write(body)
+			_ = tc.Close()
+			_ = dataLn.Close()
+			dataLn = nil
+			write("226 transfer complete")
+		case "QUIT":
+			write("221 bye")
+			return
+		default:
+			write("502 not implemented")
+		}
+	}
+}
+
+// selfSignedCert mints the throwaway certificate the fake printer presents,
+// standing in for the self-signed cert real Bambu hardware serves.
+func selfSignedCert(t *testing.T) tls.Certificate {
+	t.Helper()
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tmpl := &x509.Certificate{
+		SerialNumber: big.NewInt(1),
+		Subject:      pkix.Name{CommonName: "fake-bambu"},
+		NotBefore:    time.Now().Add(-time.Hour),
+		NotAfter:     time.Now().Add(time.Hour),
+		IPAddresses:  []net.IP{net.ParseIP("127.0.0.1"), net.ParseIP(fakeBambuFTPSHost)},
+	}
+	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &key.PublicKey, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return tls.Certificate{Certificate: [][]byte{der}, PrivateKey: key}
+}
+
+// TestFetchBambuFileOverPASVZeroHost is the regression test for the A1 Mini
+// download failure: PASV advertises 0.0.0.0, and the client must dial the
+// printer's own address instead of the advertised one.
+func TestFetchBambuFileOverPASVZeroHost(t *testing.T) {
+	const xml = `<config><plate><metadata key="index" value="1"/>` +
+		`<filament id="1" type="PLA" used_g="24.15"/></plate></config>`
+	threemf := makeThreeMF(t, xml)
+	srv := newFakeBambuFTPS(t, map[string][]byte{"cache/poop_basket.gcode.3mf": threemf})
+
+	conn, err := dialBambuFTPSPort(srv.host, srv.port(), "accesscode")
+	if err != nil {
+		t.Fatalf("dial/login failed: %v", err)
+	}
+	defer func() { _ = conn.Quit() }()
+
+	r, err := conn.Retr("cache/poop_basket.gcode.3mf")
+	if err != nil {
+		t.Fatalf("retrieve failed (PASV host not pinned to the printer?): %v", err)
+	}
+	defer func() { _ = r.Close() }()
+	got, err := io.ReadAll(r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(got, threemf) {
+		t.Fatalf("downloaded %d bytes, want the %d-byte 3mf", len(got), len(threemf))
+	}
+	usage, err := parseSliceInfoUsage(got, 0)
+	if err != nil || usage[1] != 24.15 {
+		t.Fatalf("round-tripped 3mf did not parse: %v %v", usage, err)
+	}
+}
+
+// TestBambuFTPSDataAddr pins the PASV fix itself: whatever host the printer
+// advertises, the data connection goes to the printer's own address.
+func TestBambuFTPSDataAddr(t *testing.T) {
+	for _, tc := range []struct{ advertised, want string }{
+		{"0.0.0.0:2024", "192.168.10.193:2024"}, // A1/A1 Mini firmware
+		{"192.168.10.193:2024", "192.168.10.193:2024"},
+		{"10.9.9.9:2024", "192.168.10.193:2024"}, // stale/NAT'd advertisement
+	} {
+		got, err := bambuFTPSDataAddr("192.168.10.193", tc.advertised)
+		if err != nil {
+			t.Fatalf("%s: %v", tc.advertised, err)
+		}
+		if got != tc.want {
+			t.Errorf("advertised %s -> %s, want %s", tc.advertised, got, tc.want)
+		}
+	}
+	if _, err := bambuFTPSDataAddr("192.168.10.193", "not-an-address"); err == nil {
+		t.Error("malformed PASV address should error, not be silently dialed")
+	}
+}
+
+// TestBambuCaptureKind pins the capture's file classification against the exact
+// filenames a real A1 leaves in / and /cache. A capture run happens once, often
+// on hardware we do not own, so a name this misses is a wasted trip.
+func TestBambuCaptureKind(t *testing.T) {
+	cases := map[string]string{
+		// Observed verbatim on an A1 after an SD-initiated multi-plate job.
+		"1_Cable Wheels.gcode.bbl":   captureKindJobDescriptor,
+		"Cable Wheels_plate_1.gcode": captureKindPlateGcode,
+		"Cable Wheels.gcode.3mf":     captureKindProject,
+		// Case and higher plate numbers must not change the answer.
+		"PROJECT_PLATE_12.GCODE": captureKindPlateGcode,
+		"12_Thing.GCODE.BBL":     captureKindJobDescriptor,
+		// Things in the same directories that are not worth downloading.
+		"verify_job": "",
+		"timelapse":  "",
+		"cache":      "",
+		// A plain gcode with no plate marker is not an extracted plate.
+		"something.gcode": "",
+	}
+	for name, want := range cases {
+		if got := bambuCaptureKind(name); got != want {
+			t.Errorf("bambuCaptureKind(%q) = %q, want %q", name, got, want)
+		}
+	}
+}
+
+// TestGcodeCommentLines covers the header extraction that reads a cached plate
+// gcode's usage numbers, using the real shape of an A1 header: the summary
+// lines sit at the top, and the configuration block below contains a single
+// multi-kilobyte line (change_filament_gcode) that must not be logged whole.
+func TestGcodeCommentLines(t *testing.T) {
+	header := "; model printing time: 1h 7m 38s\n" +
+		"; total filament length [mm] : 9321.12\n" +
+		"; total filament weight [g] : 27.13\n" +
+		"; filament: 1\n" +
+		"G1 X10 Y10 F3000\n" + // real gcode between comments must be skipped
+		"; change_filament_gcode = " + strings.Repeat("A", 5000) + "\n" +
+		"; filament_colour = #00AE42\n"
+
+	lines := gcodeCommentLines([]byte(header), 400, 300)
+
+	joined := strings.Join(lines, "\n")
+	if !strings.Contains(joined, "; total filament weight [g] : 27.13") {
+		t.Errorf("weight line missing from %v", lines)
+	}
+	if !strings.Contains(joined, "; filament_colour = #00AE42") {
+		t.Error("comments after the oversized line were dropped")
+	}
+	for _, l := range lines {
+		if strings.HasPrefix(l, "G1 ") {
+			t.Errorf("non-comment gcode leaked into the header: %q", l)
+		}
+		if len(l) > 300+len(" ...(truncated)") {
+			t.Errorf("line not truncated (%d chars)", len(l))
+		}
+	}
+
+	// The line cap bounds output on a file whose config block runs to hundreds
+	// of comments.
+	many := strings.Repeat("; k = v\n", 50)
+	if got := len(gcodeCommentLines([]byte(many), 10, 300)); got != 10 {
+		t.Errorf("maxLines not honoured: got %d lines, want 10", got)
+	}
+}
+
+// TestFetchBambuFilePrefix covers reading only the head of a large file. The
+// plate gcode is megabytes and is still being written while the printer
+// prepares a print, so the capture must take a bounded prefix and close the
+// transfer early rather than reading to EOF.
+func TestFetchBambuFilePrefix(t *testing.T) {
+	big := bytes.Repeat([]byte("; total filament weight [g] : 27.13\n"), 40000)
+	srv := newFakeBambuFTPS(t, map[string][]byte{"cache/big_plate_1.gcode": big})
+
+	done := make(chan struct{})
+	var got []byte
+	var err error
+	go func() {
+		defer close(done)
+		got, err = fetchBambuFilePrefixPort(srv.host, srv.port(), "accesscode", "cache/big_plate_1.gcode", 4096)
+	}()
+	select {
+	case <-done:
+	case <-time.After(30 * time.Second):
+		t.Fatal("prefix fetch hung: aborting a transfer early must not block")
+	}
+
+	if err != nil {
+		t.Fatalf("prefix fetch: %v", err)
+	}
+	if len(got) != 4096 {
+		t.Fatalf("read %d bytes, want exactly 4096", len(got))
+	}
+	if !bytes.HasPrefix(got, []byte("; total filament weight [g] : 27.13")) {
+		t.Errorf("prefix does not start at the top of the file: %q", got[:40])
 	}
 }

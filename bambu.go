@@ -9,10 +9,13 @@ package main
 // per-filament grams. Those grams feed the same processFilamentUsage() seam
 // PrusaLink uses; an AMS slot maps to a "toolhead".
 //
-// This file currently implements the MQTT state half: a persistent client per
-// printer that subscribes to the report topic, merges Bambu's partial reports
-// into a cached state, and exposes it to the monitor loop. The FTPS fetch +
-// slice_info parse and the active-job/usage wiring land next.
+// A persistent client per printer subscribes to the report topic and merges
+// Bambu's partial reports into a cached state for the monitor loop, which
+// tracks the in-flight job, records usage at print end, and drives the shared
+// low-filament warning path over MQTT print commands.
+//
+// Still incomplete: AMS slot mapping is positional rather than read from the
+// printer, and multi-plate projects always read the first plate's numbers.
 
 import (
 	"archive/zip"
@@ -26,6 +29,7 @@ import (
 	"log"
 	"net"
 	"path"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -98,6 +102,11 @@ type bambuClient struct {
 	report      bambuReport
 	haveReport  bool      // false until the first report arrives
 	lastMessage time.Time // last time any report was merged
+	// lastFull keeps the most recent complete state push verbatim. The printer
+	// sends one on connect (in answer to pushall) and only small deltas after,
+	// so this is the one payload that carries the whole schema - AMS trays
+	// included - for diagnostics that need more than the parsed subset.
+	lastFull []byte
 }
 
 func newBambuClient(ip, serial, accessCode string) *bambuClient {
@@ -216,6 +225,11 @@ func (bc *bambuClient) onMessage(_ mqtt.Client, msg mqtt.Message) {
 	}
 	bc.haveReport = true
 	bc.lastMessage = time.Now()
+	// A complete push carries the AMS block; the frequent deltas do not. Keep
+	// the full one rather than letting a temperature update overwrite it.
+	if bytes.Contains(msg.Payload(), []byte(`"ams"`)) {
+		bc.lastFull = append([]byte(nil), msg.Payload()...)
+	}
 }
 
 // snapshot returns a copy of the cached report and whether any report has been
@@ -224,6 +238,14 @@ func (bc *bambuClient) snapshot() (bambuReport, bool) {
 	bc.mu.RLock()
 	defer bc.mu.RUnlock()
 	return bc.report, bc.haveReport
+}
+
+// fullReportJSON returns the last complete state push, or nil if none has been
+// seen yet.
+func (bc *bambuClient) fullReportJSON() []byte {
+	bc.mu.RLock()
+	defer bc.mu.RUnlock()
+	return bc.lastFull
 }
 
 // invalidateReport forgets the cached state, so a reader gets "nothing known"
@@ -434,6 +456,12 @@ func bambuUsageFromFile(ip, accessCode, gcodeFile string) (map[int]float64, erro
 			lastErr = err
 			continue
 		}
+		if len(usage) == 0 {
+			// File parsed but lists no filament with grams: keep looking, a
+			// same-named file at another path may be the real sliced one.
+			lastErr = fmt.Errorf("%s in %q lists no filament usage", sliceInfoPath, remote)
+			continue
+		}
 		return bambuToToolheadUsage(usage), nil
 	}
 	if lastErr == nil {
@@ -600,9 +628,11 @@ func (b *FilamentBridge) handleBambuPrintEnded(config PrinterConfig, active *act
 	filename := active.Filename
 
 	usage := active.Usage
+	var fetchErr error
 	if len(usage) == 0 {
 		// Estimate was never captured while printing; try once more now.
 		if u, err := b.fetchBambuUsage(config, filename); err != nil {
+			fetchErr = err
 			log.Printf("Warning: end-of-print estimate fetch failed for %s: %v", printerName, err)
 		} else {
 			usage = u
@@ -612,7 +642,13 @@ func (b *FilamentBridge) handleBambuPrintEnded(config PrinterConfig, active *act
 		if usageScale == 0 {
 			return nil // nothing printed and no estimate: nothing to record
 		}
+		// Carry the underlying reason into the dashboard banner: "no usage
+		// data" alone sends the user to the logs to learn whether the file
+		// was missing, the download failed, or the parse came up empty.
 		msg := "no filament usage data found (slice_info)"
+		if fetchErr != nil {
+			msg = fmt.Sprintf("%s: %v", msg, fetchErr)
+		}
 		b.addPrintError(printerName, filename, msg)
 		return fmt.Errorf("%s", msg)
 	}
@@ -679,22 +715,89 @@ func (p *bambuSlicePlate) index() int {
 	return 0
 }
 
-// fetchBambuFile downloads a file from a Bambu printer over implicit-TLS FTPS
-// (port 990, user "bblp", pass = access code). The printer uses a self-signed
-// certificate, so verification is skipped (LAN-only, still encrypted).
-func fetchBambuFile(ip, accessCode, remotePath string) ([]byte, error) {
-	conn, err := ftp.Dial(net.JoinHostPort(ip, strconv.Itoa(bambuFTPSPort)),
+// bambuFTPSDialFunc builds the dial function used for BOTH the control and the
+// data connection of a Bambu FTPS session. It does two things the default
+// dialer cannot:
+//
+//   - Implicit TLS: every connection (control on 990 and each passive data
+//     connection) is wrapped in TLS immediately, with verification skipped for
+//     the printer's self-signed LAN certificate.
+//   - Passive-address pinning: A1/P1 firmware does not answer EPSV, so the
+//     client falls back to PASV - and the printer replies "227 Entering Passive
+//     Mode (0,0,0,0,p1,p2)". Dialing 0.0.0.0 is refused, which kills every LIST
+//     and RETR. The data connection always belongs on the printer's own
+//     address, so ignore the advertised host and keep only the port (the same
+//     thing curl does with --ftp-skip-pasv-ip).
+func bambuFTPSDialFunc(ip string, tlsConfig *tls.Config) func(network, address string) (net.Conn, error) {
+	dialer := &net.Dialer{Timeout: bambuFTPSTimeout}
+	return func(network, address string) (net.Conn, error) {
+		pinned, err := bambuFTPSDataAddr(ip, address)
+		if err != nil {
+			return nil, err
+		}
+		conn, err := dialer.Dial(network, pinned)
+		if err != nil {
+			return nil, err
+		}
+		return tls.Client(conn, tlsConfig), nil
+	}
+}
+
+// bambuFTPSDataAddr keeps the port the printer advertised and swaps in the
+// printer's own host, so a PASV reply of "(0,0,0,0,p1,p2)" still lands on the
+// printer.
+func bambuFTPSDataAddr(ip, advertised string) (string, error) {
+	_, port, err := net.SplitHostPort(advertised)
+	if err != nil {
+		return "", err
+	}
+	return net.JoinHostPort(ip, port), nil
+}
+
+// dialBambuFTPS opens and authenticates an implicit-TLS FTPS session to a Bambu
+// printer (port 990, user "bblp", pass = access code).
+func dialBambuFTPS(ip, accessCode string) (*ftp.ServerConn, error) {
+	return dialBambuFTPSPort(ip, bambuFTPSPort, accessCode)
+}
+
+// dialBambuFTPSPort is dialBambuFTPS with the control port spelled out, so a
+// test can point it at a fake printer on an ephemeral port.
+func dialBambuFTPSPort(ip string, port int, accessCode string) (*ftp.ServerConn, error) {
+	// One config shared by the control and data connections: the printer's
+	// certificate is self-signed (LAN-only, still encrypted), and a shared
+	// session cache lets the data connection resume the control connection's
+	// TLS session, which some Bambu firmware requires.
+	tlsConfig := &tls.Config{ // #nosec G402 - self-signed LAN device
+		InsecureSkipVerify: true,
+		ServerName:         ip, // stable session-cache key across both ports
+		ClientSessionCache: tls.NewLRUClientSessionCache(4),
+	}
+	// Both options together, as the library documents: the dial func makes the
+	// connections, while DialWithTLS is what makes Login send "PBSZ 0"/"PROT P"
+	// so the printer expects an encrypted data channel.
+	conn, err := ftp.Dial(net.JoinHostPort(ip, strconv.Itoa(port)),
 		ftp.DialWithTimeout(bambuFTPSTimeout),
-		ftp.DialWithTLS(&tls.Config{InsecureSkipVerify: true}), // #nosec G402 - self-signed LAN device
+		ftp.DialWithTLS(tlsConfig),
+		ftp.DialWithDialFunc(bambuFTPSDialFunc(ip, tlsConfig)),
 	)
 	if err != nil {
 		return nil, fmt.Errorf("FTPS dial: %w", err)
 	}
-	defer func() { _ = conn.Quit() }()
-
 	if err := conn.Login(bambuMQTTUser, accessCode); err != nil {
+		_ = conn.Quit()
 		return nil, fmt.Errorf("FTPS login: %w", err)
 	}
+	return conn, nil
+}
+
+// fetchBambuFile downloads a file from a Bambu printer over implicit-TLS FTPS.
+func fetchBambuFile(ip, accessCode, remotePath string) ([]byte, error) {
+	conn, err := dialBambuFTPS(ip, accessCode)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = conn.Quit() }()
+
 	r, err := conn.Retr(remotePath)
 	if err != nil {
 		return nil, fmt.Errorf("FTPS retrieve %q: %w", remotePath, err)
@@ -774,101 +877,253 @@ func parseSliceInfoUsage(threemf []byte, plateIndex int) (map[int]float64, error
 	return usage, nil
 }
 
-// probeBambuFTPS is the FTPS half of the developer probe: it logs the SD-card
-// listing, downloads the sliced file for the current job, and prints the
-// per-filament grams parsed from slice_info.config.
-func probeBambuFTPS(ip, accessCode, gcodeFile string) {
-	log.Printf("Bambu probe: FTPS connecting to %s:%d ...", ip, bambuFTPSPort)
-	conn, err := ftp.Dial(net.JoinHostPort(ip, strconv.Itoa(bambuFTPSPort)),
-		ftp.DialWithTimeout(bambuFTPSTimeout),
-		ftp.DialWithTLS(&tls.Config{InsecureSkipVerify: true}), // #nosec G402 - self-signed LAN device
-	)
+// bambuCaptureBytes bounds how much of a cached plate gcode the capture reads.
+// The slicer's summary block sits at the very top of the file, and the printer
+// writes these files progressively while it prepares a print, so reading a
+// prefix is both sufficient and safe on a file that is still growing.
+const bambuCaptureBytes = 96 * 1024
+
+// fetchBambuFilePrefix downloads at most limit bytes of a file over FTPS, for
+// large files whose interesting content is at the top.
+func fetchBambuFilePrefix(ip, accessCode, remotePath string, limit int64) ([]byte, error) {
+	return fetchBambuFilePrefixPort(ip, bambuFTPSPort, accessCode, remotePath, limit)
+}
+
+// fetchBambuFilePrefixPort is fetchBambuFilePrefix with the control port spelled
+// out, so a test can point it at a fake printer on an ephemeral port.
+func fetchBambuFilePrefixPort(ip string, port int, accessCode, remotePath string, limit int64) ([]byte, error) {
+	conn, err := dialBambuFTPSPort(ip, port, accessCode)
 	if err != nil {
-		log.Printf("Bambu probe: FTPS dial failed: %v", err)
-		return
+		return nil, err
 	}
 	defer func() { _ = conn.Quit() }()
-	if err := conn.Login(bambuMQTTUser, accessCode); err != nil {
-		log.Printf("Bambu probe: FTPS login failed: %v", err)
+
+	r, err := conn.Retr(remotePath)
+	if err != nil {
+		return nil, fmt.Errorf("FTPS retrieve %q: %w", remotePath, err)
+	}
+	defer func() { _ = r.Close() }()
+	return io.ReadAll(io.LimitReader(r, limit))
+}
+
+// gcodeCommentLines returns the ";" comment lines from a gcode prefix, which is
+// where Bambu writes its per-print summary (filament weight, length, colour)
+// and the full slicer configuration. Long lines are truncated: a single
+// change_filament_gcode value runs to several KB on one line.
+func gcodeCommentLines(gcode []byte, maxLines, maxLen int) []string {
+	out := make([]string, 0, maxLines)
+	for _, raw := range strings.Split(string(gcode), "\n") {
+		line := strings.TrimRight(raw, "\r")
+		if !strings.HasPrefix(line, ";") {
+			continue
+		}
+		if len(line) > maxLen {
+			line = line[:maxLen] + " ...(truncated)"
+		}
+		out = append(out, line)
+		if len(out) >= maxLines {
+			break
+		}
+	}
+	return out
+}
+
+// prettyJSON re-indents a JSON payload for a human reading a capture log.
+func prettyJSON(raw []byte) string {
+	var buf bytes.Buffer
+	if err := json.Indent(&buf, raw, "", "  "); err != nil {
+		return string(raw)
+	}
+	return buf.String()
+}
+
+// The three kinds of file a Bambu print leaves on the SD card that are worth
+// capturing, as observed on an A1: "1_Cable Wheels.gcode.bbl" (the job
+// descriptor, carrying the AMS mapping), "Cable Wheels_plate_1.gcode" (the
+// extracted plate the printer actually executes) and "Cable Wheels.gcode.3mf"
+// (the project as sliced).
+const (
+	captureKindJobDescriptor = "bbl"
+	captureKindPlateGcode    = "plate"
+	captureKindProject       = "3mf"
+)
+
+// bambuCaptureKind classifies an SD-card filename, or returns "" for a name the
+// capture has no use for. Kept separate from the directory walk so the rules
+// can be pinned against real filenames in a test: getting this wrong means a
+// capture run silently skips the file it was meant to collect.
+func bambuCaptureKind(name string) string {
+	lower := strings.ToLower(name)
+	switch {
+	case strings.HasSuffix(lower, ".bbl"):
+		return captureKindJobDescriptor
+	case strings.HasSuffix(lower, ".gcode") && strings.Contains(lower, "_plate_"):
+		return captureKindPlateGcode
+	case strings.HasSuffix(lower, ".3mf"):
+		return captureKindProject
+	}
+	return ""
+}
+
+// captureBambuFTPS is the FTPS half of the developer probe. It captures, in one
+// pass, everything a Bambu print leaves on the SD card:
+//
+//   - the root and cache directory listings
+//   - every job descriptor (*.bbl), verbatim. This is where the printer records
+//     the slicer's AMS mapping and the true source path of the project file.
+//   - the comment header of every cached plate gcode. That file is what the
+//     printer actually executes, so its "total filament weight [g]" is the
+//     authoritative usage for the plate being printed, whichever plate that is.
+//   - slice_info.config from each project .3mf, with per-plate grams, so the
+//     two sources can be compared.
+//
+// Nothing here depends on there being an active job: an idle printer still has
+// AMS state and a populated cache, which is the whole point when capturing from
+// a printer we are not free to start a print on.
+func captureBambuFTPS(ip, accessCode, gcodeFile string) {
+	log.Printf("=== FTPS capture (%s:%d) ===", ip, bambuFTPSPort)
+	conn, err := dialBambuFTPS(ip, accessCode)
+	if err != nil {
+		log.Printf("FTPS: %v", err)
 		return
 	}
-	log.Printf("Bambu probe: FTPS logged in; listing root and cache:")
+
+	var bblFiles, plateFiles, threeMFs []string
 	for _, dir := range []string{"/", "/" + bambuCacheDir} {
 		entries, err := conn.List(dir)
 		if err != nil {
-			log.Printf("  LIST %s: %v", dir, err)
+			log.Printf("LIST %s: %v", dir, err)
 			continue
 		}
+		log.Printf("--- LIST %s ---", dir)
 		for _, e := range entries {
-			log.Printf("  %s -> %s (%d bytes)", dir, e.Name, e.Size)
+			log.Printf("  %10d  %s", e.Size, e.Name)
+			full := strings.TrimPrefix(strings.TrimSuffix(dir, "/")+"/"+e.Name, "/")
+			switch bambuCaptureKind(e.Name) {
+			case captureKindJobDescriptor:
+				bblFiles = append(bblFiles, full)
+			case captureKindPlateGcode:
+				plateFiles = append(plateFiles, full)
+			case captureKindProject:
+				threeMFs = append(threeMFs, full)
+			}
 		}
 	}
+	_ = conn.Quit()
 
-	if gcodeFile == "" {
-		log.Printf("Bambu probe: no gcode_file from MQTT; skipping download")
-		return
+	// The project file named by MQTT goes first, so a slow run that gets cut
+	// short still captured the one belonging to the current job.
+	if gcodeFile != "" {
+		want := path.Base(gcodeFile)
+		sort.SliceStable(threeMFs, func(i, _ int) bool { return path.Base(threeMFs[i]) == want })
 	}
-	for _, p := range bambuSlicedFileCandidates(gcodeFile) {
+
+	for _, p := range bblFiles {
 		data, err := fetchBambuFile(ip, accessCode, p)
 		if err != nil {
-			log.Printf("Bambu probe: fetch %q: %v", p, err)
+			log.Printf("job descriptor %s: %v", p, err)
 			continue
 		}
-		log.Printf("Bambu probe: downloaded %q (%d bytes)", p, len(data))
-		if xmlData, err := extractSliceInfoXML(data); err == nil {
-			log.Printf("Bambu probe: raw slice_info.config:\n%s", string(xmlData))
-		}
-		usage, err := parseSliceInfoUsage(data, 0)
+		log.Printf("--- job descriptor %s (%d bytes) ---\n%s", p, len(data), prettyJSON(data))
+	}
+
+	for _, p := range plateFiles {
+		data, err := fetchBambuFilePrefix(ip, accessCode, p, bambuCaptureBytes)
 		if err != nil {
-			log.Printf("Bambu probe: slice_info parse failed: %v", err)
-			return
+			log.Printf("plate gcode %s: %v", p, err)
+			continue
 		}
-		log.Printf("Bambu probe: per-filament grams (filament id -> g): %v", usage)
-		return
+		log.Printf("--- plate gcode %s (first %d bytes) ---", p, len(data))
+		for _, line := range gcodeCommentLines(data, 400, 300) {
+			log.Printf("  %s", line)
+		}
 	}
-	log.Printf("Bambu probe: could not locate %q via FTPS", path.Base(gcodeFile))
-}
 
-// runBambuProbe is a developer tool (main -bambu-probe): it connects to a Bambu
-// printer over MQTT using the real client, dumps every raw report for the given
-// duration, then prints the final parsed state. It validates the LAN
-// connection, credentials, and report schema against a real printer without
-// needing a configured install.
-func runBambuProbe(ip, serial, code string, dur time.Duration) {
-	bambuDebugRaw = true
-	log.Printf("Bambu probe: connecting to %s (serial %s)...", ip, serial)
-	bc := newBambuClient(ip, serial, code)
-	if err := bc.connect(); err != nil {
-		log.Fatalf("Bambu probe: connect failed: %v", err)
-	}
-	defer bc.disconnect()
-	log.Printf("Bambu probe: connected=%v; waiting for first report...", bc.isConnected())
-
-	// Wait (up to the budget) for a report carrying the sliced filename.
-	deadline := time.Now().Add(dur)
-	var report bambuReport
-	for time.Now().Before(deadline) {
-		if r, ok := bc.snapshot(); ok && r.Print.GcodeFile != "" {
-			report = r
+	for i, p := range threeMFs {
+		if i >= 2 {
+			log.Printf("(%d further .3mf files left undownloaded)", len(threeMFs)-i)
 			break
 		}
-		time.Sleep(500 * time.Millisecond)
+		data, err := fetchBambuFile(ip, accessCode, p)
+		if err != nil {
+			log.Printf("project file %s: %v", p, err)
+			continue
+		}
+		xmlData, err := extractSliceInfoXML(data)
+		if err != nil {
+			log.Printf("project file %s (%d bytes): %v", p, len(data), err)
+			continue
+		}
+		log.Printf("--- slice_info.config from %s (%d bytes) ---\n%s", p, len(data), string(xmlData))
+
+		var info bambuSliceInfo
+		if err := xml.Unmarshal(xmlData, &info); err != nil {
+			log.Printf("  parse: %v", err)
+			continue
+		}
+		for j := range info.Plates {
+			idx := info.Plates[j].index()
+			usage, err := parseSliceInfoUsage(data, idx)
+			if err != nil {
+				log.Printf("  plate %d: %v", idx, err)
+				continue
+			}
+			log.Printf("  plate %d -> per-filament grams %v", idx, usage)
+		}
+	}
+}
+
+// runBambuProbe is a developer tool (main -bambu-probe): a one-shot capture of
+// everything FilaBridge can learn about a Bambu printer over the LAN. It prints
+// the live MQTT state (including the full AMS block), then hands off to
+// captureBambuFTPS for what is on the SD card.
+//
+// It is read-only in every meaningful sense: it subscribes to the report topic,
+// publishes one "pushall" asking the printer to describe itself, and reads
+// files. It never starts, pauses, or stops a print, which matters when the
+// printer belongs to someone else.
+func runBambuProbe(ip, serial, code string, dur time.Duration) {
+	bambuDebugRaw = true
+	log.Printf("=== Bambu capture: %s (serial %s) ===", ip, serial)
+	bc := newBambuClient(ip, serial, code)
+	if err := bc.connect(); err != nil {
+		log.Fatalf("connect failed: %v (check the IP, serial and access code, and that the printer is in LAN Mode)", err)
+	}
+	defer bc.disconnect()
+
+	// Wait for the first report, which the pushall usually answers in well
+	// under a second, then briefly longer for the complete state push carrying
+	// the AMS block. Deliberately not waiting for an active job: an idle
+	// printer is still worth capturing.
+	deadline := time.Now().Add(dur)
+	for time.Now().Before(deadline) {
+		if _, ok := bc.snapshot(); ok {
+			break
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+	grace := time.Now().Add(5 * time.Second)
+	for time.Now().Before(grace) && len(bc.fullReportJSON()) == 0 {
+		time.Sleep(200 * time.Millisecond)
 	}
 
-	if report.Print.GcodeFile == "" {
-		if r, ok := bc.snapshot(); ok {
-			log.Printf("Bambu probe: state=%q job=%q but no gcode_file (idle printer has no active sliced file)", r.Print.GcodeState, bambuJobName(r))
-		} else {
-			log.Printf("Bambu probe: no reports received. Check IP/serial/access code and that the printer is in LAN Mode.")
-		}
+	report, ok := bc.snapshot()
+	if !ok {
+		log.Printf("no MQTT reports received within %s. Check the serial number and that LAN Mode is enabled.", dur)
 		return
 	}
+	log.Printf("=== MQTT state ===")
+	log.Printf("state=%q job=%q progress=%d%% layer=%d/%d file=%q",
+		report.Print.GcodeState, bambuJobName(report), report.Print.McPercent,
+		report.Print.LayerNum, report.Print.TotalLayerNum, report.Print.GcodeFile)
+	if full := bc.fullReportJSON(); len(full) > 0 {
+		log.Printf("--- full state push ---\n%s", prettyJSON(full))
+	} else {
+		log.Printf("no complete state push seen; only the raw deltas above are available")
+	}
 
-	log.Printf("Bambu probe: state=%q job=%q progress=%d%% file=%q",
-		report.Print.GcodeState, bambuJobName(report), report.Print.McPercent, report.Print.GcodeFile)
-
-	// Validate the FTPS + slice_info half against the live file.
-	probeBambuFTPS(ip, code, report.Print.GcodeFile)
+	captureBambuFTPS(ip, code, report.Print.GcodeFile)
+	log.Printf("=== capture complete ===")
 }
 
 // runBambuWatch is a developer tool (main -bambu-watch): it tails a printer's
