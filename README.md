@@ -16,6 +16,7 @@ Spoolman is an excellent tool to track one's filament inventory. However, manual
 ## Features
 
 - **PrusaLink Compatibility**: Works with any PrusaLink-compatible printer (Prusa CORE One, XL, MK4, Mini, and more)
+- **Bambu Compatibility (experimental)**: Works with any Bambu printer in both cloud and Lan-only mode (must have dev-mode enabled until wider release)
 - **Real-time Dashboard**: Web interface with live updates via WebSocket connections
 - **Multi-Toolhead Support**: Seamlessly handles single and multi-toolhead printers (tested with 5-toolhead Prusa XL, looking for INDX testers!)
 - **Smart Usage Tracking**: Reads the slicer's per-toolhead filament estimates from job metadata (parsing the G-code file as a fallback) to track consumption per toolhead
@@ -27,18 +28,18 @@ Spoolman is an excellent tool to track one's filament inventory. However, manual
 - **Web-based Config**: No config files needed - manage everything through the web UI
 - **Smart Spool Search**: Search and filter spools by ID, material, brand, or name with real-time filtering
 - **Error Handling**: Print error detection with acknowledgment system for failed filament tracking
-- **Webhook Notifications**: Optional outgoing webhook for low-filament warnings (noting an auto-pause), unexpected printer disconnects during a print, and single-filament prints on a multi-toolhead printer. Point it at ntfy, Gotify, Home Assistant, Discord/Slack, or Apprise
-- **Single-Filament Prints on an MMU**: A file sliced with one filament records no slot, so its usage would land on toolhead 0 whatever slot it really printed from. FilaBridge warns at print start and lets you pick the toolhead, before anything is deducted
+- **Webhook Notifications**: Optional outgoing webhook for key notifications. Point it at ntfy, Gotify, Home Assistant, Discord/Slack, Apprise etc
+- **Single-Filament Prints on an MMU**: Smart multi-head detection with manual confirmation fallback when unsure
 - **Auto-mapping**: Automatic spool assignment when selecting from dropdown menus
 - **NFC Tag Support**: Generate QR codes and program NFC tags for spools, filaments, and locations
 - **Smart Scanning**: Two-step NFC workflow - scan spool + location for instant assignment
 - **Quick-Assign Tags**: Single-printer setups get one-scan tags that assign a spool straight to the printer, no location tag needed
 - **Location Tracking**: Track spools in custom locations (dryboxes) or printer toolheads
-- **Smart Housekeeping**: If a new spool is "loaded" to a printer, the previous will be returned to a pre-set default location, or optionally to whichever drybox or shelf it came from
+- **Smart Housekeeping**: If a new spool is "loaded" to a printer, the previous will be returned to where it last was before being used, or a fallback default location.
 
 ## Why FilaBridge?
 
-Managing filament inventory across multiple 3D printers, or even one, can be tedious. FilaBridge automates this by:
+Managing filament inventory across multiple 3D printers, or even one, can be tedious and human error prone. FilaBridge automates this by:
 - Monitoring your printers in real-time with live WebSocket updates
 - Tracking which spools are loaded on which toolheads
 - Automatically updating your Spoolman inventory when prints complete
@@ -47,7 +48,7 @@ Managing filament inventory across multiple 3D printers, or even one, can be ted
 - Using NFC tags or QR codes to quickly assign spools to printers or storage locations
 - Tracking filament locations across your workshop
 
-No more manual updates or guesswork about remaining filament!
+No more manual updates or guesswork when working to keep filament in sync with Spoolman!
 
 ## Screenshots
 
@@ -64,11 +65,16 @@ No more manual updates or guesswork about remaining filament!
 ## Prerequisites
 
 - A PrusaLink-compatible 3D printer (Prusa or any printer with a PrusaLink API)
-- Enable PrusaLink on your printer(s) for local network access, and copy the password
+  - Enable PrusaLink on your printer(s) for local network access, and copy the password
+OR
+
+- A Bambu Printer (experimental)
+  - Enable either cloud accounts or Lan-only mode, and your access code and serial number
 - Spoolman running somewhere
 - **For building from source**: Go 1.25 or higher
 - **(Optional) For NFC features**: NFC-capable smartphone and NFC tags (NTAG213/215/216 recommended)
 - **(Recommendation) NFC Tools Pro** mobile app (for programming tags)
+- **(Optional) Thermal printer** for small QR code stickers
 
 ## Installation
 
@@ -243,7 +249,7 @@ That gives each printer a single tag covering both directions, with no separate 
 
 ## Notifications
 
-FilaBridge can POST to a webhook of your choice for the events it uniquely knows about. Your printer's own app already handles print-started/finished alerts, so FilaBridge doesn't duplicate them... it only notifies about things that depend on Spoolman data or on its own view of the printer. Set a **Notification webhook URL** in Settings → Basic Configuration to enable it or leave it empty to disable.
+FilaBridge can `POST` to a webhook of your choice for the events it uniquely knows about. Your printer's own app already handles print-started/finished alerts, so FilaBridge doesn't duplicate them... it only notifies about things that depend on Spoolman data or on its own view of the printer. Set a **Notification webhook URL** in Settings → Basic Configuration to enable it or leave it empty to disable.
 
 Three events fire:
 
