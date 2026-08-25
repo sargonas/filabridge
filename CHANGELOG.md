@@ -5,6 +5,29 @@ All notable changes to FilaBridge will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v1.3.0] - 2026-08-25
+
+### Fixed
+
+- import locations via /api/v1/location on v0.26 (#44)
+
+### Other
+
+- spoolman now works properly when the URL has a trailing slash in it
+- Merge branch 'main' of https://github.com/sargonas/filabridge
+- Bambu sliced file downloads now work on the A1 Mini
+- Merge pull request #48 from mmydland/fix/44-list-only
+- Merge pull request #47 from sargonas/mmu-fix
+- Merge remote-tracking branch 'origin/main' into mmu-fix
+- Merge pull request #46 from sargonas/feature/scan-spool-first
+- hook up the slot picker for single-filament MMU prints, closes #36
+- make the new interface the default, old one behind FILABRIDGE_OLD_UI
+- NFC: optional "toolhead tag first unloads the spool" workflow
+- Merge pull request #43 from sargonas/bambu-exploration
+- frames are now center justified like the classic v1 UI was, instead of left anchoring due to max-width typo
+- Bambu: low-filament warnings, auto-pause, and fixed offline detection
+- first pass of MMU single-slice fix, need to hookup UX parts once I know ther right path forward
+
 ## [v1.2.2] - 2026-08-03
 
 ### Other
