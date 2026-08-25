@@ -57,11 +57,9 @@ No more manual updates or guesswork about remaining filament!
 ![Spool Tags Management](https://github.com/sargonas/filabridge/blob/main/screenshots/spool_tags.png?raw=true)
 *NFC Management interface for generating QR codes for individual spools*
 
-![Filament Tags Management](https://github.com/sargonas/filabridge/blob/main/screenshots/filament_tags.png?raw=true)
-*Filament type QR code generation for new unopened spools*
+![Optional History Table](https://github.com/sargonas/filabridge/blob/main/screenshots/history.png?raw=true)
+*Optional history table, when enabled*
 
-![Location Tags Management](https://github.com/sargonas/filabridge/blob/main/screenshots/location_tags.png?raw=true)
-*Location management interface for creating printer toolhead and storage location QR codes*
 
 ## Prerequisites
 
