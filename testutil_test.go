@@ -110,6 +110,10 @@ type fakeSpoolman struct {
 
 	PatchCalls []int    // spool IDs that received usage updates
 	Locations  []string // locations returned by /api/v1/location (the distinct strings spools carry)
+	// SPAFallback makes unrecognised paths answer 200 with the web UI's HTML,
+	// the way real Spoolman does, instead of 404. Opt-in, so tests that rely on
+	// a clean 404 for a genuinely missing endpoint keep working.
+	SPAFallback bool
 
 	srv *httptest.Server
 }
@@ -200,6 +204,14 @@ func (f *fakeSpoolman) handle(w http.ResponseWriter, r *http.Request) {
 
 	case r.URL.Path == "/api/v1/info":
 		writeJSON(w, map[string]interface{}{"version": "fake"})
+
+	case f.SPAFallback:
+		// Spoolman serves its single-page app from the same origin as the API
+		// and hands it to any path it does not route, with HTTP 200. That is
+		// what makes a misconfigured URL look like a working one.
+		w.Header().Set("Content-Type", "text/html")
+		w.WriteHeader(http.StatusOK)
+		fmt.Fprint(w, "<!doctype html>\n<html><head><title>Spoolman</title></head><body></body></html>")
 
 	default:
 		w.WriteHeader(http.StatusNotFound)

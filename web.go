@@ -1222,7 +1222,11 @@ func (ws *WebServer) importMappingsHandler(c *gin.Context) {
 		PrinterName string `json:"printer_name" binding:"required"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid JSON"})
+		// Distinguish a missing field from malformed JSON. printer_name is
+		// binding:"required", so an empty one lands here too, and reporting it
+		// as "Invalid JSON" sends the user looking for a problem that is not
+		// there: the usual cause is a printer list that never loaded.
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request: printer_name is required"})
 		return
 	}
 	summary, err := ws.bridge.ImportMappingsFromSpoolman(req.PrinterName)

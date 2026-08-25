@@ -88,10 +88,17 @@ type SpoolmanError struct {
 	Type   string `json:"type"`
 }
 
-// NewSpoolmanClient creates a new Spoolman client
+// NewSpoolmanClient creates a new Spoolman client.
+//
+// The base URL is normalized here so every request path below can be built by
+// plain concatenation. A URL typed with a trailing slash would otherwise
+// produce "//api/v1/spool", which Spoolman does not route to its API: it falls
+// through to the web UI and answers 200 with HTML. Only trailing slashes and
+// surrounding whitespace are removed. Any path is kept, because Spoolman is
+// legitimately hosted under a subpath behind a reverse proxy.
 func NewSpoolmanClient(baseURL string, timeout int, username, password string) *SpoolmanClient {
 	return &SpoolmanClient{
-		baseURL: baseURL,
+		baseURL: normalizeSpoolmanBaseURL(baseURL),
 		httpClient: &http.Client{
 			Timeout: time.Duration(timeout) * time.Second,
 			Transport: &http.Transport{
@@ -129,6 +136,47 @@ func (c *SpoolmanClient) handleAPIError(resp *http.Response) error {
 
 	// Fallback to generic error
 	return fmt.Errorf("spoolman API error (HTTP %d): %s", resp.StatusCode, string(body))
+}
+
+// normalizeSpoolmanBaseURL trims whitespace and trailing slashes from a
+// configured Spoolman URL. See NewSpoolmanClient for why that matters.
+func normalizeSpoolmanBaseURL(baseURL string) string {
+	return strings.TrimRight(strings.TrimSpace(baseURL), "/")
+}
+
+// looksLikeHTML reports whether a response body is markup rather than JSON.
+// Spoolman only ever answers the API with JSON, so a body opening with "<" is
+// its web UI, served because the request never reached the API at all.
+func looksLikeHTML(body []byte) bool {
+	return bytes.HasPrefix(bytes.TrimLeft(body, " \t\r\n"), []byte("<"))
+}
+
+// decodeSpoolmanJSON decodes a Spoolman response into v, turning the most
+// common misconfiguration into an error the user can act on.
+//
+// Spoolman serves its web UI from the same origin as its API and answers a path
+// it does not recognise with that UI and HTTP 200. A base URL with a stray
+// path, a doubled slash, or one pointing at a reverse proxy rather than
+// Spoolman itself therefore does not fail cleanly: it succeeds, and the only
+// symptom is encoding/json reporting `invalid character '<' looking for
+// beginning of value`, which tells the user nothing about what is wrong.
+func decodeSpoolmanJSON(body []byte, requestURL string, v interface{}) error {
+	if looksLikeHTML(body) {
+		return fmt.Errorf("Spoolman returned a web page instead of JSON for %s. "+
+			"Check the Spoolman URL in settings: it should be the root of your Spoolman "+
+			"instance, such as http://spoolman.local:7912, with no /api path on the end", requestURL)
+	}
+	return json.Unmarshal(body, v)
+}
+
+// readSpoolmanJSON reads a response body and decodes it, reporting an HTML page
+// as the configuration error it is.
+func readSpoolmanJSON(resp *http.Response, v interface{}) error {
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return fmt.Errorf("error reading response from Spoolman: %w", err)
+	}
+	return decodeSpoolmanJSON(body, resp.Request.URL.String(), v)
 }
 
 // normalizeSpoolData normalizes spool data to extract information from nested structures
@@ -191,7 +239,7 @@ func (c *SpoolmanClient) GetAllSpools() ([]SpoolmanSpool, error) {
 	}
 
 	var spools []SpoolmanSpool
-	if err := json.NewDecoder(resp.Body).Decode(&spools); err != nil {
+	if err := readSpoolmanJSON(resp, &spools); err != nil {
 		return nil, fmt.Errorf("error decoding spools from Spoolman: %w", err)
 	}
 
@@ -245,7 +293,7 @@ func (c *SpoolmanClient) GetAllFilaments() ([]SpoolmanFilament, error) {
 	}
 
 	var filaments []SpoolmanFilament
-	if err := json.NewDecoder(resp.Body).Decode(&filaments); err != nil {
+	if err := readSpoolmanJSON(resp, &filaments); err != nil {
 		return nil, fmt.Errorf("error decoding filaments from Spoolman: %w", err)
 	}
 
@@ -319,7 +367,7 @@ func (c *SpoolmanClient) GetSpool(spoolID int) (*SpoolmanSpool, error) {
 	}
 
 	var spool SpoolmanSpool
-	if err := json.NewDecoder(resp.Body).Decode(&spool); err != nil {
+	if err := readSpoolmanJSON(resp, &spool); err != nil {
 		return nil, fmt.Errorf("error decoding spool %d from Spoolman: %w", spoolID, err)
 	}
 	spool = c.normalizeSpoolData(spool)
@@ -359,7 +407,13 @@ func (c *SpoolmanClient) UpdateSpoolUsage(spoolID int, filamentUsed float64) err
 	return nil
 }
 
-// TestConnection tests the connection to Spoolman
+// TestConnection tests the connection to Spoolman.
+//
+// It checks the response body, not just the status code. Spoolman answers a
+// path it does not route to its API with the web UI and HTTP 200, so a status
+// check alone passes for a URL that no real call will work against - the test
+// goes green and then every spool, filament and location request fails. The
+// body has to actually be JSON for the connection to count as good.
 func (c *SpoolmanClient) TestConnection() error {
 	req, err := http.NewRequest("GET", c.baseURL+"/api/v1/info", nil)
 	if err != nil {
@@ -377,6 +431,13 @@ func (c *SpoolmanClient) TestConnection() error {
 		return c.handleAPIError(resp)
 	}
 
+	// Only the shape is checked, not any particular field: this has to keep
+	// working across Spoolman versions, and anything that decodes as a JSON
+	// object came from the API rather than the web UI.
+	var info map[string]interface{}
+	if err := readSpoolmanJSON(resp, &info); err != nil {
+		return fmt.Errorf("connected to %s but it did not answer as Spoolman's API: %w", c.baseURL, err)
+	}
 	return nil
 }
 
@@ -428,6 +489,13 @@ func (c *SpoolmanClient) getLocationsFromList() ([]SpoolmanLocation, error) {
 
 	// 1) Try standard array of objects
 	var locations []SpoolmanLocation
+
+	// An HTML body is a misconfigured URL, not an unrecognised JSON shape. Say
+	// so before falling into the shape-guessing below, which would otherwise
+	// report a web page as "unexpected JSON shape".
+	if looksLikeHTML(bodyBytes) {
+		return nil, decodeSpoolmanJSON(bodyBytes, resp.Request.URL.String(), &locations)
+	}
 	if err := json.Unmarshal(bodyBytes, &locations); err == nil {
 		return withNonEmptyNames(locations), nil
 	}

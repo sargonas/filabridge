@@ -5,6 +5,7 @@ import (
 	"net/http/httptest"
 	"reflect"
 	"sort"
+	"strings"
 	"testing"
 )
 
@@ -155,4 +156,86 @@ func TestGetLocationsFromList(t *testing.T) {
 			t.Fatal("expected an error for an unrecognized JSON shape, got nil")
 		}
 	})
+}
+
+// TestNormalizeSpoolmanBaseURL covers the URL cleanup behind issue #50. A
+// trailing slash turns every request path into "//api/v1/...", which Spoolman
+// does not route to its API. A path is preserved, because Spoolman is
+// legitimately served under a subpath behind a reverse proxy.
+func TestNormalizeSpoolmanBaseURL(t *testing.T) {
+	cases := map[string]string{
+		"http://localhost:7912":      "http://localhost:7912",
+		"http://localhost:7912/":     "http://localhost:7912",
+		"http://localhost:7912///":   "http://localhost:7912",
+		"  http://localhost:7912/  ": "http://localhost:7912",
+		"https://host/spoolman":      "https://host/spoolman",
+		"https://host/spoolman/":     "https://host/spoolman",
+		"":                           "",
+	}
+	for in, want := range cases {
+		if got := normalizeSpoolmanBaseURL(in); got != want {
+			t.Errorf("normalizeSpoolmanBaseURL(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+// TestSpoolmanTrailingSlashURL is the regression test for issue #50: a URL
+// entered with a trailing slash must still reach the API. The fake serves its
+// web UI on unrouted paths exactly as Spoolman does, so an unnormalized
+// "//api/v1/spool" would come back as HTML with HTTP 200 rather than failing
+// outright.
+func TestSpoolmanTrailingSlashURL(t *testing.T) {
+	srv := newFakeSpoolman(t)
+	srv.SPAFallback = true
+	srv.Spools[1] = &fakeSpool{ID: 1, Name: "Green PLA", RemainingWeight: 500}
+
+	client := NewSpoolmanClient(srv.URL()+"/", 10, "", "")
+	spools, err := client.GetAllSpools()
+	if err != nil {
+		t.Fatalf("a trailing slash in the configured URL broke the API call: %v", err)
+	}
+	if len(spools) != 1 {
+		t.Fatalf("got %d spools, want 1", len(spools))
+	}
+	if err := client.TestConnection(); err != nil {
+		t.Errorf("connection test failed with a trailing-slash URL: %v", err)
+	}
+}
+
+// TestSpoolmanWebPageInsteadOfAPI covers the error users actually see when the
+// URL points somewhere that is not Spoolman's API. The old message was
+// encoding/json's "invalid character '<' looking for beginning of value",
+// which says nothing about what to fix.
+func TestSpoolmanWebPageInsteadOfAPI(t *testing.T) {
+	srv := newFakeSpoolman(t)
+	srv.SPAFallback = true
+
+	// A stray path that normalization cannot repair: every API call below it
+	// lands on the web UI instead.
+	client := NewSpoolmanClient(srv.URL()+"/not-the-api", 10, "", "")
+
+	_, err := client.GetAllSpools()
+	if err == nil {
+		t.Fatal("a web page decoded as a spool list")
+	}
+	if !strings.Contains(err.Error(), "web page instead of JSON") {
+		t.Errorf("error should explain the misconfiguration, got: %v", err)
+	}
+	if strings.Contains(err.Error(), "invalid character") {
+		t.Errorf("raw json decode error leaked to the user: %v", err)
+	}
+
+	// The connection test must fail too. Checking only the status code let it
+	// pass here, which is what made this so hard to diagnose: the settings page
+	// said the connection was fine while every real call failed.
+	if err := client.TestConnection(); err == nil {
+		t.Error("connection test passed against a server answering with its web UI")
+	}
+
+	// Locations report the same misconfiguration rather than "unexpected JSON shape".
+	if _, err := client.GetLocations(); err == nil {
+		t.Error("locations decoded from a web page")
+	} else if !strings.Contains(err.Error(), "web page instead of JSON") {
+		t.Errorf("locations should report the misconfiguration, got: %v", err)
+	}
 }
