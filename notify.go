@@ -20,7 +20,7 @@ const notificationTimeout = 10 * time.Second
 // or a Discord/Slack relay) alongside structured fields (for automation targets
 // like Home Assistant or n8n). Event-specific fields are omitted when empty.
 type NotificationPayload struct {
-	Event     string    `json:"event"` // "low_filament" | "printer_offline"
+	Event     string    `json:"event"` // "low_filament" | "printer_offline" | "unknown_filament_slot"
 	Title     string    `json:"title"`
 	Message   string    `json:"message"`
 	Printer   string    `json:"printer"`
@@ -36,6 +36,10 @@ type NotificationPayload struct {
 
 	// printer_offline
 	LastState string `json:"last_state,omitempty"`
+
+	// unknown_filament_slot
+	Filename          string  `json:"filename,omitempty"`
+	UnrecordedWeightG float64 `json:"unrecorded_weight_g,omitempty"`
 }
 
 // isActivePrintState reports whether a printer state means a print was in
@@ -86,6 +90,28 @@ func printerOfflinePayload(printerName, lastState string, at time.Time) Notifica
 		Printer:   printerName,
 		Timestamp: at,
 		LastState: lastState,
+	}
+}
+
+// mappingWarningPayload builds the notification for a single-filament print on a
+// multi-toolhead printer. The slice records no slot, so the usage is attributed
+// to the given toolhead by default. It fires at print start rather than at
+// completion precisely so the right toolhead can still be picked while the print
+// runs, which is the difference between debiting the right spool and the wrong
+// one.
+func mappingWarningPayload(printerName, filename string, toolheadID int, grams float64, at time.Time) NotificationPayload {
+	msg := fmt.Sprintf("%s is printing ~%.1fg from a single-filament slice, which does not record which slot it used. FilaBridge will record it against toolhead %d. Confirm that is the toolhead it is really printing from, or pick the right one on the dashboard before the print finishes.",
+		printerName, grams, toolheadID)
+
+	return NotificationPayload{
+		Event:             "unknown_filament_slot",
+		Title:             fmt.Sprintf("Confirm toolhead mapping on %s", printerName),
+		Message:           msg,
+		Printer:           printerName,
+		Timestamp:         at,
+		ToolheadID:        &toolheadID,
+		Filename:          filename,
+		UnrecordedWeightG: grams,
 	}
 }
 
