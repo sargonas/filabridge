@@ -5,7 +5,7 @@
 [![GitHub release](https://img.shields.io/github/v/release/sargonas/filabridge)](https://github.com/sargonas/filabridge/releases)
 [![CI](https://github.com/sargonas/filabridge/actions/workflows/ci.yml/badge.svg)](https://github.com/sargonas/filabridge/actions/workflows/ci.yml)
 
-A self-hosted Go microservice that bridges PrusaLink-compatible printers and Spoolman for (mostly) automatic filament inventory management. Originally designed for Prusa printers (CORE One, XL, MK4, etc.) but will work with any printer that supports the PrusaLink API.
+A self-hosted Go microservice that bridges PrusaLink-compatible and Bambu (in experimental mode) printers and Spoolman for (mostly) automatic filament inventory management. Originally designed for Prusa printers (CORE One, XL, MK4, etc.) but will work with any printer that supports the PrusaLink API and now Bambu printers on both Cloud and LAN-Only mode.
 
 FilaBridge was created by [needo37](https://github.com/needo37/filabridge), who has since archived the original project. This repository continues its development and maintenance. Many thanks to needo37 for building FilaBridge and releasing it under the GPL so it could live on.
 
