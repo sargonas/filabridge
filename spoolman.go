@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -121,6 +122,18 @@ func (c *SpoolmanClient) addAuthHeader(req *http.Request) {
 	}
 }
 
+// SpoolmanAPIError is a non-2xx response from Spoolman. It carries the status
+// code so callers can tell apart failures that mean different things — most
+// usefully a 404, which on a versioned endpoint means "this Spoolman is too old"
+// rather than "the request was wrong". Callers that don't care can treat it as
+// a plain error; the message is unchanged from what it always was.
+type SpoolmanAPIError struct {
+	StatusCode int
+	Message    string
+}
+
+func (e *SpoolmanAPIError) Error() string { return e.Message }
+
 // handleAPIError handles API error responses from Spoolman
 func (c *SpoolmanClient) handleAPIError(resp *http.Response) error {
 	body, err := io.ReadAll(resp.Body)
@@ -131,11 +144,17 @@ func (c *SpoolmanClient) handleAPIError(resp *http.Response) error {
 	// Try to parse as Spoolman error format
 	var spoolmanErr SpoolmanError
 	if err := json.Unmarshal(body, &spoolmanErr); err == nil && spoolmanErr.Detail != "" {
-		return fmt.Errorf("spoolman API error (HTTP %d): %s - %s", resp.StatusCode, spoolmanErr.Title, spoolmanErr.Detail)
+		return &SpoolmanAPIError{
+			StatusCode: resp.StatusCode,
+			Message:    fmt.Sprintf("spoolman API error (HTTP %d): %s - %s", resp.StatusCode, spoolmanErr.Title, spoolmanErr.Detail),
+		}
 	}
 
 	// Fallback to generic error
-	return fmt.Errorf("spoolman API error (HTTP %d): %s", resp.StatusCode, string(body))
+	return &SpoolmanAPIError{
+		StatusCode: resp.StatusCode,
+		Message:    fmt.Sprintf("spoolman API error (HTTP %d): %s", resp.StatusCode, string(body)),
+	}
 }
 
 // normalizeSpoolmanBaseURL trims whitespace and trailing slashes from a
@@ -318,28 +337,40 @@ func (c *SpoolmanClient) GetAllFilaments() ([]SpoolmanFilament, error) {
 // the Spoolman base URL) and verifies a 200 response. opDesc names the
 // operation for error messages, e.g. "updating spool 3".
 func (c *SpoolmanClient) patchJSON(path string, data map[string]interface{}, opDesc string) error {
+	_, err := c.patchJSONResult(path, data, opDesc)
+	return err
+}
+
+// patchJSONResult is patchJSON for the endpoints whose response body carries
+// something we act on, such as the bulk field update's spools_updated count.
+func (c *SpoolmanClient) patchJSONResult(path string, data map[string]interface{}, opDesc string) ([]byte, error) {
 	jsonData, err := json.Marshal(data)
 	if err != nil {
-		return fmt.Errorf("error marshaling data for %s: %w", opDesc, err)
+		return nil, fmt.Errorf("error marshaling data for %s: %w", opDesc, err)
 	}
 
 	req, err := http.NewRequest("PATCH", c.baseURL+path, bytes.NewBuffer(jsonData))
 	if err != nil {
-		return fmt.Errorf("error creating PATCH request: %w", err)
+		return nil, fmt.Errorf("error creating PATCH request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
 	c.addAuthHeader(req)
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
-		return fmt.Errorf("error %s in Spoolman: %w", opDesc, err)
+		return nil, fmt.Errorf("error %s in Spoolman: %w", opDesc, err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return c.handleAPIError(resp)
+		return nil, c.handleAPIError(resp)
 	}
-	return nil
+
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("error reading response for %s: %w", opDesc, err)
+	}
+	return respBody, nil
 }
 
 // UpdateSpool updates spool information (used for filament usage tracking)
@@ -606,40 +637,74 @@ func (c *SpoolmanClient) UpdateSpoolLocation(spoolID int, locationName string) e
 	return nil
 }
 
-// UpdateLocation updates a location name in Spoolman
-func (c *SpoolmanClient) UpdateLocation(locationID int, newName string) error {
-	err := c.patchJSON(fmt.Sprintf("/api/v1/location/%d", locationID),
-		map[string]interface{}{"name": newName},
-		fmt.Sprintf("updating location %d", locationID))
+// UpdateLocationByName renames a location by rewriting the `location` string on
+// every spool that currently carries oldName.
+//
+// A location is not an entity in Spoolman — it is just a free-text field on a
+// spool — so renaming one means a bulk field update, which is what Spoolman's
+// own dashboard group-rename does. The previous implementation PATCHed
+// /api/v1/location/{id}; that endpoint is gone in v0.26, and even where it
+// existed it renamed a settings record without touching any spool, so the
+// rename appeared to succeed and changed nothing.
+//
+// TODO(spoolman-compat): PATCH /api/v1/spool/field/location is new in v0.26.0
+// and absent in v0.25.x, where this returns 404. The intended fallback is a
+// per-spool loop — GET /api/v1/spool?location=<old>, then PATCH
+// /api/v1/spool/{id} with {"location": new} for each, an endpoint that has
+// existed since at least v0.21. renameLocationBulk below is the single seam
+// where that version check and fallback belong; nothing else needs to change.
+func (c *SpoolmanClient) UpdateLocationByName(oldName, newName string) error {
+	updated, err := c.renameLocationBulk(oldName, newName)
 	if err != nil {
 		return err
 	}
-	log.Printf("Successfully updated Spoolman location %d to '%s'", locationID, newName)
+
+	// Spoolman answers 200 with a count even when the old name matched nothing.
+	// A rename that moved no spools changed nothing, so say so rather than
+	// reporting success.
+	if updated == 0 {
+		return fmt.Errorf("no spools are in location '%s'", oldName)
+	}
+
+	log.Printf("Successfully renamed Spoolman location '%s' to '%s' (%d spools)", oldName, newName, updated)
 	return nil
 }
 
-// UpdateLocationByName updates a location in Spoolman by name
-func (c *SpoolmanClient) UpdateLocationByName(oldName, newName string) error {
-	// First, find the location by name
-	locations, err := c.GetLocations()
+// renameLocationBulk performs the rename and reports how many spools moved.
+// It is the single seam for the version compatibility described on
+// UpdateLocationByName: a pre-v0.26 fallback belongs here and nowhere else.
+func (c *SpoolmanClient) renameLocationBulk(oldName, newName string) (int, error) {
+	body, err := c.patchJSONResult("/api/v1/spool/field/location",
+		map[string]interface{}{"value": oldName, "new_value": newName},
+		fmt.Sprintf("renaming location '%s' to '%s'", oldName, newName))
 	if err != nil {
-		return fmt.Errorf("failed to get locations: %w", err)
-	}
-
-	var locationID int
-	found := false
-	for _, loc := range locations {
-		if loc.Name == oldName && !loc.Archived {
-			locationID = loc.ID
-			found = true
-			break
+		// A 404 here means the endpoint itself is missing, not that anything
+		// about the request was wrong: it was added in Spoolman v0.26.0. Say so,
+		// rather than surfacing a bare HTTP error the user cannot act on.
+		var apiErr *SpoolmanAPIError
+		if errors.As(err, &apiErr) && apiErr.StatusCode == http.StatusNotFound {
+			return 0, fmt.Errorf("renaming locations requires Spoolman v0.26.0 or newer; this server does not support it")
 		}
+		return 0, err
 	}
 
-	if !found {
-		return fmt.Errorf("location '%s' not found in Spoolman", oldName)
+	var result struct {
+		SpoolsUpdated *int `json:"spools_updated"`
 	}
 
-	// Update the location using its ID
-	return c.UpdateLocation(locationID, newName)
+	// An HTML body is a misconfigured URL answered by Spoolman's web UI with
+	// HTTP 200, not a response shape we failed to recognise. It has to be an
+	// error: the tolerant fallback below would otherwise report a rename that
+	// never reached the API as having moved a spool.
+	if looksLikeHTML(body) {
+		return 0, decodeSpoolmanJSON(body, c.baseURL+"/api/v1/spool/field/location", &result)
+	}
+
+	if err := json.Unmarshal(body, &result); err != nil || result.SpoolsUpdated == nil {
+		// The PATCH itself succeeded, so don't fail the rename over a response
+		// shape we don't recognize; report it as "moved something".
+		log.Printf("Warning: could not read spools_updated when renaming '%s': %v", oldName, err)
+		return 1, nil
+	}
+	return *result.SpoolsUpdated, nil
 }
