@@ -10,7 +10,7 @@ function escapeHtmlAttribute(value) {
 
 // Printer Management Functions
 function loadPrinters() {
-    fetch('/api/printers')
+    fetch(apiUrl('/api/printers'))
         .then(response => response.json())
         .then(data => {
             const printerList = document.getElementById('printer-list');
@@ -293,7 +293,7 @@ document.getElementById('editPrinterForm').addEventListener('submit', function(e
 
 function editPrinter(printerId) {
     // Get the current printer data
-    fetch('/api/printers')
+    fetch(apiUrl('/api/printers'))
         .then(response => response.json())
         .then(data => {
             const printer = data.printers[printerId];

@@ -7,11 +7,11 @@ let maxReconnectAttempts = 10;
 let reconnectDelay = 1000; // Start with 1 second
 
 function connectWebSocket() {
-    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const wsUrl = `${protocol}//${window.location.host}/ws/status`;
+    const wsUrl = new URL('ws/status', document.baseURI);
+    wsUrl.protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
     
     try {
-        ws = new WebSocket(wsUrl);
+        ws = new WebSocket(wsUrl.toString());
         
         ws.onopen = function(event) {
             console.log('WebSocket connected');
@@ -436,7 +436,7 @@ async function assignMappingWarning(warningId) {
     if (Number.isNaN(toolheadId)) return;
 
     try {
-        const response = await fetch(`/api/mapping-warnings/${encodeURIComponent(warningId)}/assign`, {
+        const response = await fetch(apiUrl(`/api/mapping-warnings/${encodeURIComponent(warningId)}/assign`), {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ toolhead_id: toolheadId }),
@@ -462,7 +462,7 @@ async function assignMappingWarning(warningId) {
 // Acknowledge an unknown-filament-slot warning
 async function acknowledgeMappingWarning(warningId) {
     try {
-        const response = await fetch(`/api/mapping-warnings/${encodeURIComponent(warningId)}/acknowledge`, {
+        const response = await fetch(apiUrl(`/api/mapping-warnings/${encodeURIComponent(warningId)}/acknowledge`), {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
         });
@@ -485,7 +485,7 @@ async function acknowledgeMappingWarning(warningId) {
 // Acknowledge a low-filament warning (resumes the print if it was auto-paused)
 async function acknowledgeRunoutWarning(warningId) {
     try {
-        const response = await fetch(`/api/runout-warnings/${encodeURIComponent(warningId)}/acknowledge`, {
+        const response = await fetch(apiUrl(`/api/runout-warnings/${encodeURIComponent(warningId)}/acknowledge`), {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
         });
@@ -544,7 +544,7 @@ function updatePrintErrors(printErrors) {
 // Acknowledge print error
 async function acknowledgeError(errorId) {
     try {
-        const response = await fetch(`/api/print-errors/${encodeURIComponent(errorId)}/acknowledge`, {
+        const response = await fetch(apiUrl(`/api/print-errors/${encodeURIComponent(errorId)}/acknowledge`), {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
