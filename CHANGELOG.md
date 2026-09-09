@@ -5,6 +5,18 @@ All notable changes to FilaBridge will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v1.4.0] - 2026-09-09
+
+### Other
+
+- Add security note for X-Forwarded headers
+- Update CHANGELOG for version 1.4.0
+- Merge pull request #51 from nebhale/nebhale/path-prefix-reverse-proxies
+- Support configurable reverse proxy paths
+- Add Bambu printer support to README description
+- updated screen shots and text
+- updated screenshots
+
 ## [v1.4.0] - 2026-09-08
 
 ### Added
