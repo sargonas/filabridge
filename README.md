@@ -167,7 +167,8 @@ WebSocket, and NFC endpoints beneath that fixed path. The proxy must preserve
 the prefix when forwarding, or add it back before requests reach FilaBridge if
 the proxy strips it. Proxies should also set `X-Forwarded-Host` and
 `X-Forwarded-Proto` so generated NFC tag URLs use the browser-visible host and
-the correct `http` or `https` scheme.
+the correct `http` or `https` scheme. SECURITY NOTE: `X-Forwarded-*` is trusted 
+unconditionally!
 
 ## Configuration
 
