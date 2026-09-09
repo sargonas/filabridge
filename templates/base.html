@@ -5,30 +5,31 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta name="description" content="FilaBridge - The missing link between printers and filament inventory">
     <meta name="theme-color" content="{{if .LegacyUI}}#667eea{{else}}#1f1f1f{{end}}">
+    <base href="{{.BasePath}}">
     <title>FilaBridge Dashboard</title>
-    <link rel="icon" type="image/svg+xml" href="/static/images/favicon.svg">
+    <link rel="icon" type="image/svg+xml" href="{{.BasePath}}static/images/favicon.svg">
     <!-- External CSS Files -->
-    <link rel="stylesheet" href="/static/css/main.css">
-    <link rel="stylesheet" href="/static/css/components.css">
-    <link rel="stylesheet" href="/static/css/dropdowns.css">
-    <link rel="stylesheet" href="/static/css/tabs.css">
-    <link rel="stylesheet" href="/static/css/printers.css">
-    <link rel="stylesheet" href="/static/css/nfc.css">
-    <link rel="stylesheet" href="/static/css/modals.css">
+    <link rel="stylesheet" href="{{.BasePath}}static/css/main.css">
+    <link rel="stylesheet" href="{{.BasePath}}static/css/components.css">
+    <link rel="stylesheet" href="{{.BasePath}}static/css/dropdowns.css">
+    <link rel="stylesheet" href="{{.BasePath}}static/css/tabs.css">
+    <link rel="stylesheet" href="{{.BasePath}}static/css/printers.css">
+    <link rel="stylesheet" href="{{.BasePath}}static/css/nfc.css">
+    <link rel="stylesheet" href="{{.BasePath}}static/css/modals.css">
     {{if not .LegacyUI}}
     <!-- The current interface, matching Spoolman's redesigned (client_v2) look.
          Loaded last so it restyles the sheets above rather than replacing them:
          same markup, same behaviour, only the styling differs. Set
          FILABRIDGE_OLD_UI=true to skip these and get the pre-1.2.2 look back. -->
-    <link rel="stylesheet" href="/static/css/v2/tokens.css">
-    <link rel="stylesheet" href="/static/css/v2/shell.css">
-    <link rel="stylesheet" href="/static/css/v2/components.css">
-    <link rel="stylesheet" href="/static/css/v2/nfc.css">
+    <link rel="stylesheet" href="{{.BasePath}}static/css/v2/tokens.css">
+    <link rel="stylesheet" href="{{.BasePath}}static/css/v2/shell.css">
+    <link rel="stylesheet" href="{{.BasePath}}static/css/v2/components.css">
+    <link rel="stylesheet" href="{{.BasePath}}static/css/v2/nfc.css">
     {{end}}
 
     <!-- Preload critical JavaScript -->
-    <link rel="preload" href="/static/js/main.js" as="script">
-    <link rel="preload" href="/static/js/dropdowns.js" as="script">
+    <link rel="preload" href="{{.BasePath}}static/js/main.js" as="script">
+    <link rel="preload" href="{{.BasePath}}static/js/dropdowns.js" as="script">
 </head>
 <body data-spoolman-url="{{.SpoolmanBaseURL}}" data-developer-mode="{{.DeveloperMode}}">
     <div class="container">
@@ -61,10 +62,10 @@
     {{template "modals" .}}
 
     <!-- External JavaScript Files -->
-    <script src="/static/js/main.js"></script>
-    <script src="/static/js/dropdowns.js"></script>
-    <script src="/static/js/printers.js"></script>
-    <script src="/static/js/websocket.js"></script>
-    <script src="/static/js/nfc.js"></script>
+    <script src="{{.BasePath}}static/js/main.js"></script>
+    <script src="{{.BasePath}}static/js/dropdowns.js"></script>
+    <script src="{{.BasePath}}static/js/printers.js"></script>
+    <script src="{{.BasePath}}static/js/websocket.js"></script>
+    <script src="{{.BasePath}}static/js/nfc.js"></script>
 </body>
 </html>

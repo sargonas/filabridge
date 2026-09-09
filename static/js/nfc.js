@@ -40,7 +40,7 @@ function switchNfcTab(tabName, clickedElement) {
 
 // fetchNfcUrls fetches all NFC tag URLs (spools, filaments, locations) in one call
 async function fetchNfcUrls() {
-    const response = await fetch('/api/nfc/urls');
+    const response = await fetch(apiUrl('/api/nfc/urls'));
     return response.json();
 }
 
@@ -202,7 +202,7 @@ async function loadLocationTags(dataPromise) {
             let icon = '📦'; // Storage icon for storage locations
             let iconHtml = icon;
             if (url.location_type === 'printer') {
-                iconHtml = '<img src="/static/images/3d-printer-icon.png" alt="3D Printer" style="width: 20px; height: 20px;">';
+                iconHtml = `<img src="${apiUrl('/static/images/3d-printer-icon.png')}" alt="3D Printer" style="width: 20px; height: 20px;">`;
             }
             
             item.innerHTML = `
@@ -430,4 +430,3 @@ async function renameLocation(currentName) {
         alert(e.message || 'Network error'); 
     }
 }
-

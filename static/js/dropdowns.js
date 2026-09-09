@@ -43,7 +43,7 @@ async function loadAvailableSpools(dropdown) {
     const printerName = printerNameElement.textContent;
     
     try {
-        const response = await fetch(`/api/available_spools?printer_name=${encodeURIComponent(printerName)}&toolhead_id=${toolheadId}`);
+        const response = await fetch(apiUrl(`/api/available_spools?printer_name=${encodeURIComponent(printerName)}&toolhead_id=${toolheadId}`));
         const data = await response.json();
         
         if (data.error) {
@@ -302,7 +302,7 @@ async function autoMapSpool(dropdown, selectedValue, selectedText, selectedColor
     setDropdownButton(button, selectedColor, selectedMulti, selectedText, '⏳');
     
     try {
-        const response = await fetch('/api/map_toolhead', {
+        const response = await fetch(apiUrl('/api/map_toolhead'), {
             method: 'POST',
             headers: {'Content-Type': 'application/json'},
             body: JSON.stringify({

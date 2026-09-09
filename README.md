@@ -159,9 +159,28 @@ FilaBridge is built to run as a Docker container or a Linux service alongside a 
 
 FilaBridge is designed for use on a private, trusted network and has no built-in authentication. Stored credentials (PrusaLink API keys and the optional Spoolman password) are write-only: the API and UI never return them once saved. However, anyone who can reach the web interface can still change settings - including pointing FilaBridge at servers they control - so treat interface access as full control. Do not expose FilaBridge directly to the internet. If you need remote access, put it behind a VPN or an authenticating reverse proxy.
 
+FilaBridge can be mounted below a path-prefixed reverse proxy by setting
+`FILABRIDGE_BASE_PATH` to its browser-visible application root, for example
+`/filabridge`. The setting is optional; leave it unset to continue serving at
+`/`. When configured, FilaBridge serves its interface, static assets, API,
+WebSocket, and NFC endpoints beneath that fixed path. The proxy must preserve
+the prefix when forwarding, or add it back before requests reach FilaBridge if
+the proxy strips it. Proxies should also set `X-Forwarded-Host` and
+`X-Forwarded-Proto` so generated NFC tag URLs use the browser-visible host and
+the correct `http` or `https` scheme.
+
 ## Configuration
 
-The system stores all configuration in the SQLite database. For Docker deployments, you can optionally set the `FILABRIDGE_DB_PATH` environment variable to specify where the database should be stored (defaults to `/app/data` in Docker), however I recommend leaving it as is and changing the volume mount instead, if needed.
+The system stores application configuration in the SQLite database. A small
+set of process-level settings is available through environment variables;
+changes to these require a restart:
+
+| Variable | Default | Description |
+| --- | --- | --- |
+| `FILABRIDGE_DB_PATH` | `/app/data` in Docker; current directory for a binary | Directory containing `filabridge.db`. For Docker, prefer changing the volume mount instead. |
+| `FILABRIDGE_BASE_PATH` | empty | Optional fixed reverse-proxy mount path, such as `/filabridge`. A leading slash is optional and a trailing slash is removed. |
+| `FILABRIDGE_OLD_UI` | `false` | Use the pre-1.2.2 interface styling. |
+| `FILABRIDGE_DEVELOPER_MODE` | `false` | Enable incomplete development features such as Bambu Lab support. |
 
 ### First Run
 

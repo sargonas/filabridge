@@ -3,6 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <base href="{{.BasePath}}">
     <title>NFC Scan Progress - FilaBridge</title>
     <style>
         body {
@@ -95,8 +96,8 @@
     <!-- Current Spoolman-style interface. Loaded after the block above so it
          overrides it without the page needing two copies. Set
          FILABRIDGE_OLD_UI=true for the pre-1.2.2 look. -->
-    <link rel="stylesheet" href="/static/css/v2/tokens.css">
-    <link rel="stylesheet" href="/static/css/v2/standalone.css">
+    <link rel="stylesheet" href="{{.BasePath}}static/css/v2/tokens.css">
+    <link rel="stylesheet" href="{{.BasePath}}static/css/v2/standalone.css">
     {{end}}
 </head>
 <body>
@@ -114,7 +115,7 @@
                 <div class="step-text">Scan location tag</div>
             </div>
         </div>
-        <a href="/" class="back-button">Back to Dashboard</a>
+        <a href="{{.BasePath}}" class="back-button">Back to Dashboard</a>
     </div>
 </body>
 </html>

@@ -12,7 +12,12 @@ import (
 )
 
 func newTestServer(t *testing.T) (*WebServer, *fakePrusaLink, *fakeSpoolman) {
+	return newTestServerAtBasePath(t, "")
+}
+
+func newTestServerAtBasePath(t *testing.T, basePath string) (*WebServer, *fakePrusaLink, *fakeSpoolman) {
 	t.Helper()
+	t.Setenv("FILABRIDGE_BASE_PATH", basePath)
 	printer := newFakePrusaLink(t)
 	spoolman := newFakeSpoolman(t)
 	bridge := newTestBridge(t, printer, spoolman)
@@ -37,6 +42,163 @@ func doJSON(t *testing.T, ws *WebServer, method, path, body string) (*httptest.R
 	var parsed map[string]interface{}
 	json.Unmarshal(rec.Body.Bytes(), &parsed)
 	return rec, parsed
+}
+
+func TestConfiguredBasePath(t *testing.T) {
+	tests := map[string]struct {
+		value string
+		want  string
+	}{
+		"unset":           {want: ""},
+		"root":            {value: "/", want: ""},
+		"absolute path":   {value: "/filabridge", want: "/filabridge"},
+		"relative path":   {value: "filabridge", want: "/filabridge"},
+		"trailing slash":  {value: "/filabridge/", want: "/filabridge"},
+		"normalizes path": {value: "/proxy/./apps//filabridge/", want: "/proxy/apps/filabridge"},
+	}
+
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			t.Setenv("FILABRIDGE_BASE_PATH", tc.value)
+			if got := configuredBasePath(); got != tc.want {
+				t.Errorf("configuredBasePath() = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestConfiguredBasePathRoutesAndRendersAllPages(t *testing.T) {
+	basePath := "/api/hassio_ingress/test-token/"
+	ws, _, _ := newTestServerAtBasePath(t, strings.TrimSuffix(basePath, "/"))
+
+	pages := map[string]struct {
+		path  string
+		links []string
+	}{
+		"dashboard": {
+			path: basePath,
+			links: []string{
+				`<link rel="stylesheet" href="` + basePath + `static/css/main.css">`,
+				`<script src="` + basePath + `static/js/websocket.js"></script>`,
+			},
+		},
+		"standalone": {
+			path: basePath + "api/nfc/assign",
+			links: []string{
+				`<link rel="stylesheet" href="` + basePath + `static/css/v2/tokens.css">`,
+				`<a href="` + basePath + `" class="back-button">Back to Dashboard</a>`,
+			},
+		},
+	}
+
+	for name, page := range pages {
+		t.Run(name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodGet, page.path, nil)
+			rec := httptest.NewRecorder()
+			ws.router.ServeHTTP(rec, req)
+			body := rec.Body.String()
+
+			if !strings.Contains(body, `<base href="`+basePath+`">`) {
+				t.Fatalf("page did not render configured base path: %s", body)
+			}
+			for _, link := range page.links {
+				if !strings.Contains(body, link) {
+					t.Errorf("page missing prefixed link %q", link)
+				}
+			}
+		})
+	}
+
+	for _, requestPath := range []string{"/", "/api/status", "/static/css/main.css"} {
+		req := httptest.NewRequest(http.MethodGet, requestPath, nil)
+		rec := httptest.NewRecorder()
+		ws.router.ServeHTTP(rec, req)
+		if rec.Code != http.StatusNotFound {
+			t.Errorf("unprefixed %s returned %d, want 404", requestPath, rec.Code)
+		}
+	}
+
+	for _, requestPath := range []string{basePath + "api/status", basePath + "static/css/main.css"} {
+		req := httptest.NewRequest(http.MethodGet, requestPath, nil)
+		rec := httptest.NewRecorder()
+		ws.router.ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Errorf("prefixed %s returned %d, want 200", requestPath, rec.Code)
+		}
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/healthz", nil)
+	rec := httptest.NewRecorder()
+	ws.router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Errorf("root healthcheck returned %d, want 200", rec.Code)
+	}
+}
+
+func TestFrontendRequestsUseDocumentBase(t *testing.T) {
+	rootFetch := regexp.MustCompile(`fetch\(\s*['\x60"]\/api\/`)
+	for _, name := range []string{"main.js", "dropdowns.js", "printers.js", "websocket.js", "nfc.js"} {
+		data, err := staticFS.ReadFile("static/js/" + name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if rootFetch.Match(data) {
+			t.Errorf("%s contains a fetch that bypasses the document base", name)
+		}
+	}
+
+	websocketJS, err := staticFS.ReadFile("static/js/websocket.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(websocketJS), "new URL('ws/status', document.baseURI)") {
+		t.Error("WebSocket URL is not resolved against the document base")
+	}
+
+	tokensCSS, err := staticFS.ReadFile("static/css/v2/tokens.css")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(tokensCSS), "url('/static/") {
+		t.Error("font URL bypasses the Ingress base path")
+	}
+}
+
+func TestNFCURLsHonorConfiguredBasePath(t *testing.T) {
+	ws, _, spoolman := newTestServerAtBasePath(t, "/filabridge")
+	spoolman.Spools[7] = &fakeSpool{ID: 7, Name: "Violet", RemainingWeight: 750}
+
+	req := httptest.NewRequest(http.MethodGet, "/filabridge/api/nfc/urls", nil)
+	req.Host = "172.30.33.4:5000"
+	req.Header.Set("X-Forwarded-Host", "ha.example.com")
+	req.Header.Set("X-Forwarded-Proto", "https")
+	rec := httptest.NewRecorder()
+	ws.router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("NFC URLs = %d: %s", rec.Code, rec.Body.String())
+	}
+	var payload struct {
+		URLs []struct {
+			Type     string `json:"type"`
+			URL      string `json:"url"`
+			ComboURL string `json:"combo_url"`
+		} `json:"urls"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &payload); err != nil {
+		t.Fatal(err)
+	}
+
+	want := "https://ha.example.com/filabridge/api/nfc/assign?spool=7"
+	for _, item := range payload.URLs {
+		if item.Type == "spool" && item.URL == want {
+			if !strings.HasPrefix(item.ComboURL, want+"&location=") {
+				t.Errorf("combo URL = %q, want prefix %q", item.ComboURL, want+"&location=")
+			}
+			return
+		}
+	}
+	t.Errorf("spool URL %q not found in response: %s", want, rec.Body.String())
 }
 
 // TestDeveloperModeFlag: the dashboard exposes FILABRIDGE_DEVELOPER_MODE to the

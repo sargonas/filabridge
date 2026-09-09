@@ -137,8 +137,8 @@ async function loadPrintHistory() {
         // Fetch history and spools together; spools are only used to show
         // friendly names, so a spool that no longer exists falls back to its ID
         const [historyRes, spoolsRes] = await Promise.all([
-            fetch('/api/print-history'),
-            fetch('/api/spools').catch(() => null)
+            fetch(apiUrl('/api/print-history')),
+            fetch(apiUrl('/api/spools')).catch(() => null)
         ]);
         const historyData = await historyRes.json();
 
@@ -261,7 +261,7 @@ function switchSettingsTab(tabName, clickedElement) {
 
 // Configuration Management
 function loadConfiguration() {
-    fetch('/api/config')
+    fetch(apiUrl('/api/config'))
         .then(response => response.json())
         .then(config => {
             const form = document.getElementById('config-form');
@@ -334,7 +334,7 @@ async function apiRequest(url, options = {}) {
         opts.headers = { 'Content-Type': 'application/json', ...(opts.headers || {}) };
         opts.body = JSON.stringify(opts.body);
     }
-    const response = await fetch(url, opts);
+    const response = await fetch(apiUrl(url), opts);
     const data = await response.json();
     if (data.error) {
         throw new Error(data.error);
@@ -370,7 +370,7 @@ function saveConfiguration() {
 
 // Advanced Settings Functions
 function loadAdvancedSettings() {
-    fetch('/api/config')
+    fetch(apiUrl('/api/config'))
         .then(response => response.json())
         .then(config => {
             document.getElementById('prusalinkTimeout').value = config.prusalink_timeout || '10';
@@ -427,7 +427,7 @@ let autoAssignCheckboxHandler = null;
 
 function loadAutoAssignSettings() {
     // First, load the settings
-    fetch('/api/config/auto-assign-previous-spool')
+    fetch(apiUrl('/api/config/auto-assign-previous-spool'))
         .then(response => response.json())
         .then(data => {
             if (data.error) {
@@ -450,7 +450,7 @@ function loadAutoAssignSettings() {
             setAutoAssignOptionsVisible(enabled);
 
             // Load locations and populate dropdown
-            return fetch('/api/locations')
+            return fetch(apiUrl('/api/locations'))
                 .then(response => response.json())
                 .then(locationsData => {
                     if (locationsData.error) {
@@ -560,7 +560,7 @@ let printHistoryWasEnabled = true;
 
 // NFC Scanning Settings Functions
 function loadNFCScanningSettings() {
-    fetch('/api/config/nfc-toolhead-unload')
+    fetch(apiUrl('/api/config/nfc-toolhead-unload'))
         .then(response => response.json())
         .then(data => {
             const checkbox = document.getElementById('nfcToolheadFirstUnloads');
@@ -586,7 +586,7 @@ function saveNFCScanningSettings() {
 }
 
 function loadPrintHistorySettings() {
-    fetch('/api/config/print-history')
+    fetch(apiUrl('/api/config/print-history'))
         .then(response => response.json())
         .then(data => {
             const checkbox = document.getElementById('printHistoryEnabled');
@@ -693,11 +693,9 @@ function isDeveloperMode() {
 }
 
 function apiUrl(path) {
-    // Ensure path starts with / if not already
-    if (!path.startsWith('/')) {
-        path = '/' + path;
-    }
-    return `${window.location.origin}${path}`;
+    // The document base is supplied by the server. It is "/" for direct
+    // access and Home Assistant's generated prefix when served via Ingress.
+    return new URL(path.replace(/^\/+/, ''), document.baseURI).toString();
 }
 
 // swatchBackground returns a CSS background value for a filament swatch: a

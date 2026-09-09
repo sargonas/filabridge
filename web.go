@@ -10,6 +10,7 @@ import (
 	"log"
 	"net/http"
 	neturl "net/url"
+	pathpkg "path"
 	"sort"
 	"strconv"
 	"strings"
@@ -31,6 +32,7 @@ var staticFS embed.FS
 type WebServer struct {
 	bridge         *FilamentBridge
 	router         *gin.Engine
+	basePath       string
 	operationMutex sync.Mutex // Protects add/update/delete printer operations
 	wsHub          *WebSocketHub
 }
@@ -67,13 +69,20 @@ type WebSocketMessage struct {
 func NewWebServer(bridge *FilamentBridge) *WebServer {
 	gin.SetMode(gin.ReleaseMode)
 	router := gin.New()
+	basePath := ""
+	if cfg := bridge.GetConfigSnapshot(); cfg != nil {
+		basePath = cfg.BasePath
+	}
+	healthPath := basePath + "/healthz"
+	apiPath := basePath + "/api/"
+	staticPath := basePath + "/static/"
 
 	// Add middleware. Request logging skips the healthcheck endpoint (hit every
 	// 30s by Docker) and static assets, which would otherwise dominate the log.
 	router.Use(gin.LoggerWithConfig(gin.LoggerConfig{
-		SkipPaths: []string{"/healthz"},
+		SkipPaths: []string{"/healthz", healthPath},
 		Skip: func(c *gin.Context) bool {
-			return strings.HasPrefix(c.Request.URL.Path, "/static/")
+			return strings.HasPrefix(c.Request.URL.Path, staticPath)
 		},
 	}))
 	router.Use(gin.Recovery())
@@ -83,7 +92,7 @@ func NewWebServer(bridge *FilamentBridge) *WebServer {
 		defer func() {
 			if err := recover(); err != nil {
 				// Check if this is an API route
-				if strings.HasPrefix(c.Request.URL.Path, "/api/") {
+				if strings.HasPrefix(c.Request.URL.Path, apiPath) {
 					c.JSON(http.StatusInternalServerError, gin.H{"error": "Internal server error"})
 					c.Abort()
 				} else {
@@ -104,9 +113,10 @@ func NewWebServer(bridge *FilamentBridge) *WebServer {
 	}
 
 	ws := &WebServer{
-		bridge: bridge,
-		router: router,
-		wsHub:  wsHub,
+		bridge:   bridge,
+		router:   router,
+		basePath: basePath,
+		wsHub:    wsHub,
 	}
 
 	// Start WebSocket hub
@@ -139,16 +149,22 @@ func (ws *WebServer) setupRoutes() {
 	if err != nil {
 		log.Fatalf("Failed to create static filesystem: %v", err)
 	}
-	ws.router.StaticFS("/static", http.FS(staticSubFS))
+	routes := ws.router.Group(ws.basePath)
+	routes.StaticFS("/static", http.FS(staticSubFS))
 
 	// Main dashboard
-	ws.router.GET("/", ws.dashboardHandler)
+	routes.GET("/", ws.dashboardHandler)
 
 	// Liveness probe for Docker/compose healthchecks and monitoring
-	ws.router.GET("/healthz", ws.healthzHandler)
+	routes.GET("/healthz", ws.healthzHandler)
+	if ws.basePath != "" {
+		// Keep the operational healthcheck at the site root so the image's
+		// built-in Docker HEALTHCHECK works for every configured base path.
+		ws.router.GET("/healthz", ws.healthzHandler)
+	}
 
 	// API routes
-	api := ws.router.Group("/api")
+	api := routes.Group("/api")
 	{
 		api.GET("/status", ws.statusHandler)
 		api.GET("/spools", ws.spoolsHandler)
@@ -187,7 +203,7 @@ func (ws *WebServer) setupRoutes() {
 	}
 
 	// WebSocket endpoint
-	ws.router.GET("/ws/status", ws.websocketHandler)
+	routes.GET("/ws/status", ws.websocketHandler)
 }
 
 // WebSocket hub methods
@@ -440,6 +456,7 @@ func (ws *WebServer) dashboardHandler(c *gin.Context) {
 		"SpoolmanBaseURL":    cfg.SpoolmanURL,
 		"DeveloperMode":      cfg.DeveloperMode,
 		"LegacyUI":           cfg.LegacyUI,
+		"BasePath":           ws.browserBasePath(),
 	})
 }
 
@@ -460,14 +477,62 @@ func internalError(c *gin.Context, err error) {
 	c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 }
 
+// browserBasePath is the configured mount path with the trailing slash HTML
+// base URLs require. Direct deployments use the site root.
+func (ws *WebServer) browserBasePath() string {
+	if ws.basePath == "" {
+		return "/"
+	}
+	return ws.basePath + "/"
+}
+
+// requestScheme returns the browser-facing request scheme. Reverse proxies
+// terminate TLS before FilaBridge, so prefer their first X-Forwarded-Proto
+// value and otherwise fall back to the direct connection.
+func requestScheme(r *http.Request) string {
+	if forwarded := r.Header.Get("X-Forwarded-Proto"); forwarded != "" {
+		scheme := strings.ToLower(strings.TrimSpace(strings.Split(forwarded, ",")[0]))
+		if scheme == "http" || scheme == "https" {
+			return scheme
+		}
+	}
+	if r.TLS != nil {
+		return "https"
+	}
+	return "http"
+}
+
+func requestHost(r *http.Request) string {
+	if forwarded := r.Header.Get("X-Forwarded-Host"); forwarded != "" {
+		if host := strings.TrimSpace(strings.Split(forwarded, ",")[0]); host != "" {
+			return host
+		}
+	}
+	return r.Host
+}
+
+// requestAppURL builds a browser-facing URL for routes represented in QR/NFC
+// tags. It includes the configured mount path while preserving direct HTTP and
+// HTTPS deployments.
+func (ws *WebServer) requestAppURL(r *http.Request, route string, rawQuery string) string {
+	u := neturl.URL{
+		Scheme:   requestScheme(r),
+		Host:     requestHost(r),
+		Path:     pathpkg.Join(ws.basePath, route),
+		RawQuery: rawQuery,
+	}
+	return u.String()
+}
+
 // renderPage renders one of the standalone pages (the NFC scan results and the
 // error page), adding the fields every page needs on top of the handler's own
-// data. Currently that is LegacyUI, which selects the pre-1.2.2 interface; the
-// dashboard passes it explicitly since it already builds a full data map.
+// data. The dashboard passes these explicitly since it already builds a full
+// data map.
 func (ws *WebServer) renderPage(c *gin.Context, code int, name string, data gin.H) {
 	if data == nil {
 		data = gin.H{}
 	}
+	data["BasePath"] = ws.browserBasePath()
 	if cfg := ws.bridge.GetConfigSnapshot(); cfg != nil {
 		data["LegacyUI"] = cfg.LegacyUI
 	}
@@ -1587,7 +1652,7 @@ func (ws *WebServer) nfcUrlsHandler(c *gin.Context) {
 
 	// Generate spool URLs
 	for _, spool := range spools {
-		url := fmt.Sprintf("http://%s/api/nfc/assign?spool=%d", c.Request.Host, spool.ID)
+		url := ws.requestAppURL(c.Request, "/api/nfc/assign", fmt.Sprintf("spool=%d", spool.ID))
 
 		// Optional single-scan quick-assign variant (see quickAssignLocation above)
 		comboURL := ""
@@ -1598,8 +1663,8 @@ func (ws *WebServer) nfcUrlsHandler(c *gin.Context) {
 			// result, but a spool-first URL also reads correctly to anyone
 			// inspecting a tag, and never looks like the lone toolhead scan that
 			// the "toolhead tag first unloads" mode treats as an unload.
-			comboURL = fmt.Sprintf("http://%s/api/nfc/assign?spool=%d&location=%s",
-				c.Request.Host, spool.ID, neturl.QueryEscape(quickAssignLocation))
+			comboURL = ws.requestAppURL(c.Request, "/api/nfc/assign", fmt.Sprintf("spool=%d&location=%s",
+				spool.ID, neturl.QueryEscape(quickAssignLocation)))
 			if qrCode, err := qrcode.Encode(comboURL, qrcode.Medium, 256); err != nil {
 				log.Printf("Error generating quick-assign QR code for spool %d: %v", spool.ID, err)
 			} else {
@@ -1723,7 +1788,7 @@ func (ws *WebServer) nfcUrlsHandler(c *gin.Context) {
 		}
 
 		locationParam := location.Name
-		nfcUrl := fmt.Sprintf("http://%s/api/nfc/assign?location=%s", c.Request.Host, neturl.QueryEscape(locationParam))
+		nfcUrl := ws.requestAppURL(c.Request, "/api/nfc/assign", "location="+neturl.QueryEscape(locationParam))
 
 		// Generate QR code (leave it empty and keep going if generation fails)
 		qrCodeBase64 := ""

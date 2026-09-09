@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	pathpkg "path"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -41,6 +42,7 @@ type Config struct {
 	Printers                     map[string]PrinterConfig // Key is printer ID, value is printer config
 	DeveloperMode                bool                     // Experimental features (e.g. Bambu support) via FILABRIDGE_DEVELOPER_MODE
 	LegacyUI                     bool                     // Serve the pre-1.2.2 interface via FILABRIDGE_OLD_UI
+	BasePath                     string                   // Optional reverse-proxy mount path via FILABRIDGE_BASE_PATH
 }
 
 // LoadConfig loads configuration from database
@@ -69,6 +71,7 @@ func LoadConfig(bridge *FilamentBridge) (*Config, error) {
 		Printers:                     make(map[string]PrinterConfig),
 		DeveloperMode:                developerModeEnabled(),
 		LegacyUI:                     legacyUIEnabled(),
+		BasePath:                     configuredBasePath(),
 	}
 
 	// Load printer configs directly from database without making API calls.
@@ -104,6 +107,25 @@ func developerModeEnabled() bool {
 // once the new interface has a few releases behind it.
 func legacyUIEnabled() bool {
 	return envFlagEnabled("FILABRIDGE_OLD_UI")
+}
+
+// configuredBasePath returns the fixed path at which FilaBridge is mounted.
+// An empty value keeps the application at the site root. As with Spoolman's
+// SPOOLMAN_BASE_PATH, operators may omit the leading slash and any trailing
+// slash is removed.
+func configuredBasePath() string {
+	raw := strings.TrimSpace(os.Getenv("FILABRIDGE_BASE_PATH"))
+	if raw == "" || raw == "/" {
+		return ""
+	}
+	if !strings.HasPrefix(raw, "/") {
+		raw = "/" + raw
+	}
+	cleaned := pathpkg.Clean(raw)
+	if cleaned == "." || cleaned == "/" {
+		return ""
+	}
+	return cleaned
 }
 
 // envFlagEnabled reads a boolean environment variable, accepting the spellings
