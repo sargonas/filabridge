@@ -5,6 +5,17 @@ All notable changes to FilaBridge will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v1.4.0] - 2026-09-08
+
+### Added
+
+- optional `FILABRIDGE_BASE_PATH` for running behind a path-prefixed reverse proxy (#51, thanks @nebhale!)
+
+### Changed
+
+- generated NFC and QR tag URLs now follow `X-Forwarded-Host` and `X-Forwarded-Proto`, so tags
+  regenerated behind a reverse proxy use the browser-visible host and scheme instead of always `http://`
+
 ## [v1.3.0] - 2026-08-25
 
 ### Fixed
