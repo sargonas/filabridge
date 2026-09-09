@@ -68,7 +68,7 @@ func TestConfiguredBasePath(t *testing.T) {
 }
 
 func TestConfiguredBasePathRoutesAndRendersAllPages(t *testing.T) {
-	basePath := "/api/hassio_ingress/test-token/"
+	basePath := "/proxy-prefix/test-token/"
 	ws, _, _ := newTestServerAtBasePath(t, strings.TrimSuffix(basePath, "/"))
 
 	pages := map[string]struct {
@@ -160,7 +160,7 @@ func TestFrontendRequestsUseDocumentBase(t *testing.T) {
 		t.Fatal(err)
 	}
 	if strings.Contains(string(tokensCSS), "url('/static/") {
-		t.Error("font URL bypasses the Ingress base path")
+		t.Error("font URL bypasses the configured base path")
 	}
 }
 
@@ -169,8 +169,8 @@ func TestNFCURLsHonorConfiguredBasePath(t *testing.T) {
 	spoolman.Spools[7] = &fakeSpool{ID: 7, Name: "Violet", RemainingWeight: 750}
 
 	req := httptest.NewRequest(http.MethodGet, "/filabridge/api/nfc/urls", nil)
-	req.Host = "172.30.33.4:5000"
-	req.Header.Set("X-Forwarded-Host", "ha.example.com")
+	req.Host = "127.0.0.1:5000"
+	req.Header.Set("X-Forwarded-Host", "proxy.example.com")
 	req.Header.Set("X-Forwarded-Proto", "https")
 	rec := httptest.NewRecorder()
 	ws.router.ServeHTTP(rec, req)
@@ -189,7 +189,7 @@ func TestNFCURLsHonorConfiguredBasePath(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	want := "https://ha.example.com/filabridge/api/nfc/assign?spool=7"
+	want := "https://proxy.example.com/filabridge/api/nfc/assign?spool=7"
 	for _, item := range payload.URLs {
 		if item.Type == "spool" && item.URL == want {
 			if !strings.HasPrefix(item.ComboURL, want+"&location=") {
