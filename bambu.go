@@ -393,6 +393,22 @@ func bambuStateIsTerminal(state string) bool {
 	return false
 }
 
+// bambuSystemJobFiles names gcode the printer's firmware runs on its own, such
+// as calibration routines. Over MQTT these report as ordinary jobs, but they are
+// not prints: the file lives in firmware rather than on the SD card, so there is
+// no sliced .3mf to read usage from, and tracking one only ends in a "no
+// filament usage data" banner the user has no way to act on.
+var bambuSystemJobFiles = map[string]bool{
+	"auto_cali_for_user_param.gcode": true, // flow dynamics calibration (A1)
+}
+
+// bambuIsSystemJob reports whether gcodeFile is a firmware routine rather than a
+// user's print. Matched on the base name, case-insensitively, since firmware may
+// report the file with or without a directory.
+func bambuIsSystemJob(gcodeFile string) bool {
+	return bambuSystemJobFiles[strings.ToLower(path.Base(gcodeFile))]
+}
+
 // bambuDashboardState maps Bambu's gcode_state onto the state vocabulary the
 // rest of FilaBridge speaks, so a Bambu printer's badge reads the same as a
 // PrusaLink one. PREPARE counts as printing: the job is already in flight.
@@ -527,6 +543,13 @@ func (b *FilamentBridge) monitorBambu(printerID string, config PrinterConfig) er
 	b.noteStateChange(printerID, config.Name, state, jobName)
 
 	switch {
+	case bambuStateIsPrinting(state) && bambuIsSystemJob(currentFile):
+		// A firmware routine such as calibration. Leave it untracked: with no
+		// active job there are no FTPS fetches while it runs, no runout check
+		// against an estimate that does not exist, and nothing to record (or
+		// fail to record) when it ends. The dashboard still reads Printing,
+		// which is accurate, since the printer is busy.
+
 	case bambuStateIsPrinting(state) && currentFile != "":
 		aj := &activeJob{PrinterID: printerID, StartedAt: time.Now()}
 		// Continue the tracked job when paused or when the same file is loaded.

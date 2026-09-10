@@ -504,6 +504,60 @@ func TestBambuLowFilamentWarningAndPause(t *testing.T) {
 	}
 }
 
+// TestBambuIsSystemJob: firmware routines are recognized by base name whether
+// the printer reports a bare filename or a path, and a user's print never is.
+func TestBambuIsSystemJob(t *testing.T) {
+	cases := map[string]bool{
+		"auto_cali_for_user_param.gcode":                true,
+		"/usr/etc/print/auto_cali_for_user_param.gcode": true,
+		"AUTO_CALI_FOR_USER_PARAM.GCODE":                true,
+		"cache/part.gcode.3mf":                          false,
+		"auto_cali_for_user_param.gcode.3mf":            false,
+		"":                                              false,
+	}
+	for file, want := range cases {
+		if got := bambuIsSystemJob(file); got != want {
+			t.Errorf("bambuIsSystemJob(%q) = %v, want %v", file, got, want)
+		}
+	}
+}
+
+// TestBambuCalibrationIsNotTracked: a firmware calibration reports over MQTT
+// like any job, but its gcode lives in firmware, not on the SD card, so there is
+// no usage to read. It must not be tracked as a print, and so must not end in a
+// "no filament usage data" banner.
+func TestBambuCalibrationIsNotTracked(t *testing.T) {
+	printer := newFakePrusaLink(t)
+	spoolman := newFakeSpoolman(t)
+	b := newTestBridge(t, printer, spoolman)
+	config, _ := bambuTestPrinter(t, b, bambuStateRunning, "auto_cali_for_user_param.gcode")
+	bc := b.existingBambuClient("printer_bambu")
+
+	bc.onMessage(nil, fakeMQTTMessage{[]byte(`{"print":{"mc_percent":60}}`)})
+	if err := b.monitorBambu("printer_bambu", config); err != nil {
+		t.Fatalf("monitorBambu while calibrating: %v", err)
+	}
+	if active, err := b.getActiveJob("printer_bambu"); err != nil || active != nil {
+		t.Fatalf("calibration tracked as a print: active=%+v err=%v", active, err)
+	}
+	// Untracked, but the printer is busy, and the dashboard should say so.
+	status, err := b.GetStatus()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := status.Printers["printer_bambu"].State; got != StatePrinting {
+		t.Errorf("state while calibrating = %q, want %q", got, StatePrinting)
+	}
+
+	bc.onMessage(nil, fakeMQTTMessage{[]byte(`{"print":{"gcode_state":"FINISH","mc_percent":100}}`)})
+	if err := b.monitorBambu("printer_bambu", config); err != nil {
+		t.Fatalf("monitorBambu after calibration: %v", err)
+	}
+	if errs := b.GetPrintErrors(); len(errs) != 0 {
+		t.Fatalf("calibration raised print errors: %+v", errs)
+	}
+}
+
 // TestBambuStatusBeforeFirstMonitorCycle: a Bambu printer has no endpoint to
 // poll, so with nothing in the status cache the dashboard reads its MQTT
 // client's own state rather than declaring the printer offline for a whole poll
