@@ -1,0 +1,206 @@
+
+== toolheadLocationName ==
+0 "XL - Toolhead 0"
+1 "XL - Toolhead 1"
+2 "XL - Silk Head"
+3 "XL - Toolhead 3"
+4 "XL - Toolhead 4"
+
+== toolheadLocationSet ==
+"TestPrinter - Toolhead 0"
+"XL - Silk Head"
+"XL - Toolhead 0"
+"XL - Toolhead 1"
+"XL - Toolhead 3"
+"XL - Toolhead 4"
+
+== parseLocationParam ==
+"XL - Toolhead 0" -> printer="XL" toolhead=0 location="XL - Toolhead 0" printer_location=true err=<nil>
+"XL - Toolhead 4" -> printer="XL" toolhead=4 location="XL - Toolhead 4" printer_location=true err=<nil>
+"XL - Silk Head" -> printer="XL" toolhead=2 location="XL - Silk Head" printer_location=true err=<nil>
+"XL - Toolhead 2" -> printer="XL" toolhead=2 location="XL - Toolhead 2" printer_location=true err=<nil>
+"XL - Toolhead 5" -> printer="" toolhead=0 location="XL - Toolhead 5" printer_location=false err=<nil>
+"XL - Toolhead 7" -> printer="" toolhead=0 location="XL - Toolhead 7" printer_location=false err=<nil>
+"TestPrinter - Toolhead 0" -> printer="TestPrinter" toolhead=0 location="TestPrinter - Toolhead 0" printer_location=true err=<nil>
+"Ghost - Toolhead 0" -> printer="" toolhead=0 location="Ghost - Toolhead 0" printer_location=false err=<nil>
+"Drybox" -> printer="" toolhead=0 location="Drybox" printer_location=false err=<nil>
+
+== GetStatus toolhead_mappings ==
+{
+  "printer_test": {
+    "0": {
+      "display_name": "Toolhead 0",
+      "mapped_at": "\u003cvolatile\u003e",
+      "printer_name": "TestPrinter",
+      "spool_id": 0,
+      "toolhead_id": 0
+    }
+  },
+  "printer_xl": {
+    "0": {
+      "display_name": "Toolhead 0",
+      "mapped_at": "\u003cvolatile\u003e",
+      "printer_name": "XL",
+      "spool_id": 11,
+      "toolhead_id": 0
+    },
+    "1": {
+      "display_name": "Toolhead 1",
+      "mapped_at": "\u003cvolatile\u003e",
+      "printer_name": "XL",
+      "spool_id": 12,
+      "toolhead_id": 1
+    },
+    "2": {
+      "display_name": "Silk Head",
+      "mapped_at": "\u003cvolatile\u003e",
+      "printer_name": "XL",
+      "spool_id": 0,
+      "toolhead_id": 2
+    },
+    "3": {
+      "display_name": "Toolhead 3",
+      "mapped_at": "\u003cvolatile\u003e",
+      "printer_name": "XL",
+      "spool_id": 0,
+      "toolhead_id": 3
+    },
+    "4": {
+      "display_name": "Toolhead 4",
+      "mapped_at": "\u003cvolatile\u003e",
+      "printer_name": "XL",
+      "spool_id": 14,
+      "toolhead_id": 4
+    }
+  }
+}
+
+== GET /api/printers ==
+{
+  "printers": {
+    "printer_test": {
+      "api_key": "",
+      "api_key_set": true,
+      "ip_address": "\u003cvolatile\u003e",
+      "name": "TestPrinter",
+      "serial": "",
+      "toolhead_names": {
+        "0": "Toolhead 0"
+      },
+      "toolheads": 1,
+      "type": "prusalink"
+    },
+    "printer_xl": {
+      "api_key": "",
+      "api_key_set": true,
+      "ip_address": "\u003cvolatile\u003e",
+      "name": "XL",
+      "serial": "",
+      "toolhead_names": {
+        "0": "Toolhead 0",
+        "1": "Toolhead 1",
+        "2": "Silk Head",
+        "3": "Toolhead 3",
+        "4": "Toolhead 4"
+      },
+      "toolheads": 5,
+      "type": "prusalink"
+    }
+  }
+}
+
+== buildMappingSlots ==
+[
+  {
+    "display_name": "Toolhead 0 (slot 1)",
+    "spool_id": 11,
+    "spool_label": "[11] PLA - TestVendor - Spool 11",
+    "toolhead_id": 0
+  },
+  {
+    "display_name": "Toolhead 1 (slot 2)",
+    "spool_id": 12,
+    "spool_label": "[12] PLA - TestVendor - Spool 12",
+    "toolhead_id": 1
+  },
+  {
+    "display_name": "Silk Head",
+    "spool_id": 0,
+    "toolhead_id": 2
+  },
+  {
+    "display_name": "Toolhead 3 (slot 4)",
+    "spool_id": 0,
+    "toolhead_id": 3
+  },
+  {
+    "display_name": "Toolhead 4 (slot 5)",
+    "spool_id": 14,
+    "spool_label": "[14] PLA - TestVendor - Spool 14",
+    "toolhead_id": 4
+  }
+]
+
+== print history ==
+printer="XL" toolhead=4 spool=14 grams=12.50 job="part.bgcode" status="completed"
+
+== webhook payloads ==
+{
+  "auto_paused": true,
+  "event": "low_filament",
+  "message": "Spool \"Spool 14\" (ID 14) on XL toolhead 4 is short by 60.0g: 20.0g remaining, print needs ~80.0g. The print has been paused; swap the spool, then acknowledge the warning in FilaBridge (or resume at the printer).",
+  "printer": "XL",
+  "remaining_weight_g": 20,
+  "required_weight_g": 80,
+  "spool_id": 14,
+  "spool_name": "Spool 14",
+  "timestamp": "\u003cvolatile\u003e",
+  "title": "Print auto-paused on XL (low filament)",
+  "toolhead_id": 4
+}
+{
+  "event": "unknown_filament_slot",
+  "filename": "part.bgcode",
+  "message": "XL is printing ~33.3g from a single-filament slice, which does not record which slot it used. FilaBridge will record it against toolhead 2. Confirm that is the toolhead it is really printing from, or pick the right one on the dashboard before the print finishes.",
+  "printer": "XL",
+  "timestamp": "\u003cvolatile\u003e",
+  "title": "Confirm toolhead mapping on XL",
+  "toolhead_id": 2,
+  "unrecorded_weight_g": 33.3
+}
+
+== dashboard ==
+<p><strong>Printer:</strong> XL (Toolhead 4)</p>
+<p><strong>Printer:</strong> XL</p>
+<p><strong>Recording against Silk Head.</strong></p>
+<div class="toolhead-mapping-row" data-printer-id="printer_test" data-toolhead-id="0">
+<div class="toolhead-label">Toolhead 0:</div>
+<div class="toolhead-mapping-row" data-printer-id="printer_xl" data-toolhead-id="0">
+<div class="toolhead-label">Toolhead 0:</div>
+<div class="toolhead-mapping-row" data-printer-id="printer_xl" data-toolhead-id="1">
+<div class="toolhead-label">Toolhead 1:</div>
+<div class="toolhead-mapping-row" data-printer-id="printer_xl" data-toolhead-id="2">
+<div class="toolhead-label">Silk Head:</div>
+<div class="toolhead-mapping-row" data-printer-id="printer_xl" data-toolhead-id="3">
+<div class="toolhead-label">Toolhead 3:</div>
+<div class="toolhead-mapping-row" data-printer-id="printer_xl" data-toolhead-id="4">
+<div class="toolhead-label">Toolhead 4:</div>
+<option value="0">Toolhead 0 (slot 1) - [11] PLA - TestVendor - Spool 11</option>
+<option value="1">Toolhead 1 (slot 2) - [12] PLA - TestVendor - Spool 12</option>
+<option value="2" selected>Silk Head - no spool mapped</option>
+<option value="3">Toolhead 3 (slot 4) - no spool mapped</option>
+<option value="4">Toolhead 4 (slot 5) - [14] PLA - TestVendor - Spool 14</option>
+
+== ImportMappingsFromSpoolman ==
+{
+  "conflicts": null,
+  "imported": 4,
+  "unmatched": [
+    "XL - Toolhead 3"
+  ]
+}
+XL/0 -> spool 11
+XL/1 -> spool 12
+XL/2 -> spool 13
+XL/3 -> spool 0
+XL/4 -> spool 14

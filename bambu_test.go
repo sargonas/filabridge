@@ -157,6 +157,101 @@ func TestBambuToToolheadUsage(t *testing.T) {
 	}
 }
 
+// TestBambuSlicedFileCandidates: the A1 reports the project file as gcode_file,
+// so its lookup is unchanged. The X2D reports an internal plate path FTPS cannot
+// reach, so the file named after the job is tried first.
+func TestBambuSlicedFileCandidates(t *testing.T) {
+	cases := []struct {
+		gcodeFile, subtask string
+		want               []string
+	}{
+		{"foo.gcode.3mf", "", []string{"cache/foo.gcode.3mf", "foo.gcode.3mf"}},
+		{"foo.gcode.3mf", "foo", []string{"cache/foo.gcode.3mf", "foo.gcode.3mf"}},
+		{"cache/part.gcode.3mf", "part", []string{"cache/cache/part.gcode.3mf", "cache/part.gcode.3mf", "part.gcode.3mf"}},
+		{"/data/Metadata/plate_1.gcode", "Hotends_Box", []string{
+			"cache/Hotends_Box.gcode.3mf", "Hotends_Box.gcode.3mf",
+			"cache/data/Metadata/plate_1.gcode", "data/Metadata/plate_1.gcode",
+		}},
+	}
+	for _, tc := range cases {
+		got := bambuSlicedFileCandidates(tc.gcodeFile, tc.subtask)
+		if fmt.Sprint(got) != fmt.Sprint(tc.want) {
+			t.Errorf("candidates(%q, %q) = %v, want %v", tc.gcodeFile, tc.subtask, got, tc.want)
+		}
+	}
+}
+
+// TestBambuAttributeUsage: the printer's AMS mapping places each filament when it
+// fits the configured toolheads, and anything it cannot place cleanly falls back
+// to the positional filament id - 1 every printer had before, so nothing that
+// worked regresses.
+func TestBambuAttributeUsage(t *testing.T) {
+	x2d := map[int]float64{1: 94.36, 2: 0.84}
+	cases := []struct {
+		name       string
+		byFilament map[int]float64
+		mapping    []int
+		toolheads  int
+		want       map[int]float64
+		mapped     bool
+	}{
+		{"X2D AMS slot 1 + external", x2d, []int{0, bambuExternalSpool}, 5, map[int]float64{0: 94.36, 4: 0.84}, true},
+		{"no mapping reported", x2d, nil, 5, map[int]float64{0: 94.36, 1: 0.84}, false},
+		// The A1 today: one toolhead, so AMS slot 3 must still land on toolhead 0.
+		{"single toolhead ignores the tray", map[int]float64{1: 12}, []int{2}, 1, map[int]float64{0: 12}, false},
+		{"two external spools are ambiguous", x2d, []int{bambuExternalSpool, bambuExternalSpool}, 6, map[int]float64{0: 94.36, 1: 0.84}, false},
+		{"tray collides with the external slot", map[int]float64{1: 10}, []int{4}, 5, map[int]float64{0: 10}, false},
+		{"mapping shorter than the filaments", x2d, []int{0}, 5, map[int]float64{0: 94.36, 1: 0.84}, false},
+		{"unknown source value", map[int]float64{1: 10}, []int{65535}, 5, map[int]float64{0: 10}, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, mapped := bambuAttributeUsage(tc.byFilament, tc.mapping, tc.toolheads)
+			if mapped != tc.mapped {
+				t.Errorf("mapped = %v, want %v", mapped, tc.mapped)
+			}
+			if fmt.Sprint(got) != fmt.Sprint(tc.want) {
+				t.Errorf("usage = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+// TestBambuReportLenientFields: plate_idx and mapping are read outside the main
+// decode, so a type Bambu never promised (a numeric string, a malformed mapping)
+// can never stop the printer's state from being read.
+func TestBambuReportLenientFields(t *testing.T) {
+	bc := &bambuClient{serial: "TEST"}
+
+	bc.onMessage(nil, fakeMQTTMessage{[]byte(`{"print":{"gcode_state":"RUNNING","plate_idx":"2","mapping":[0,65280]}}`)})
+	first, ok := bc.snapshot()
+	if !ok || first.Print.GcodeState != bambuStateRunning {
+		t.Fatalf("state not read alongside a string plate_idx: %+v", first.Print)
+	}
+	if first.Print.PlateIdx != 2 || fmt.Sprint(first.Print.Mapping) != "[0 65280]" {
+		t.Fatalf("plate %d mapping %v, want 2 [0 65280]", first.Print.PlateIdx, first.Print.Mapping)
+	}
+
+	// A delta without them keeps them, like any other field.
+	bc.onMessage(nil, fakeMQTTMessage{[]byte(`{"print":{"mc_percent":40}}`)})
+	got, _ := bc.snapshot()
+	if got.Print.McPercent != 40 || got.Print.PlateIdx != 2 || fmt.Sprint(got.Print.Mapping) != "[0 65280]" {
+		t.Errorf("delta clobbered the job fields: %+v", got.Print)
+	}
+
+	// A malformed mapping reads as not reported, and the state still updates.
+	bc.onMessage(nil, fakeMQTTMessage{[]byte(`{"print":{"gcode_state":"PAUSE","mapping":"0,1"}}`)})
+	got, _ = bc.snapshot()
+	if got.Print.GcodeState != bambuStatePause || got.Print.Mapping != nil {
+		t.Errorf("malformed mapping: state %q mapping %v, want PAUSE and none", got.Print.GcodeState, got.Print.Mapping)
+	}
+
+	// A snapshot taken earlier is not changed by later reports.
+	if fmt.Sprint(first.Print.Mapping) != "[0 65280]" {
+		t.Errorf("earlier snapshot changed under a later report: %v", first.Print.Mapping)
+	}
+}
+
 func TestBambuJobID(t *testing.T) {
 	start := time.Unix(1_700_000_000, 0)
 	a := bambuJobID("benchy.gcode.3mf", start)
@@ -509,6 +604,8 @@ func TestBambuLowFilamentWarningAndPause(t *testing.T) {
 func TestBambuIsSystemJob(t *testing.T) {
 	cases := map[string]bool{
 		"auto_cali_for_user_param.gcode":                true,
+		"new_machine_auto_cali_for_user.gcode":          true,
+		"/data/Metadata/plate_1.gcode":                  false,
 		"/usr/etc/print/auto_cali_for_user_param.gcode": true,
 		"AUTO_CALI_FOR_USER_PARAM.GCODE":                true,
 		"cache/part.gcode.3mf":                          false,
@@ -929,6 +1026,74 @@ func TestFetchBambuFileOverPASVZeroHost(t *testing.T) {
 	usage, err := parseSliceInfoUsage(got, 0)
 	if err != nil || usage[1] != 24.15 {
 		t.Fatalf("round-tripped 3mf did not parse: %v %v", usage, err)
+	}
+}
+
+// x2dSliceInfo is slice_info.config exactly as captured from a live X2D print,
+// AMS slot 1 into one nozzle and the external spool into the other.
+const x2dSliceInfo = `<?xml version="1.0" encoding="UTF-8"?>
+<config>
+  <header>
+    <header_item key="X-BBL-Client-Type" value="slicer"/>
+    <header_item key="X-BBL-Client-Version" value="02.08.02.61"/>
+  </header>
+  <plate>
+    <metadata key="index" value="1"/>
+    <metadata key="extruder_type" value="0 1"/>
+    <metadata key="nozzle_volume_type" value="0 0"/>
+    <metadata key="printer_model_id" value="N6"/>
+    <metadata key="nozzle_diameters" value="0.4,0.4"/>
+    <metadata key="timelapse_type" value="0"/>
+    <metadata key="prediction" value="10135"/>
+    <metadata key="weight" value="95.19"/>
+    <metadata key="pause_count" value="0"/>
+    <metadata key="first_layer_time" value="825.371887"/>
+    <metadata key="outside" value="false"/>
+    <metadata key="support_used" value="false"/>
+    <metadata key="label_object_enabled" value="true"/>
+    <metadata key="support_material_on_wipe_tower" value="false"/>
+    <metadata key="enable_filament_dynamic_map" value="false"/>
+    <metadata key="has_filament_switcher" value="false"/>
+    <metadata key="filament_maps" value="1 2"/>
+    <metadata key="limit_filament_maps" value="0 0"/>
+    <object identify_id="128" name="Box A2.stl" skipped="false" />
+    <object identify_id="150" name="Deckel A1.stl" skipped="false" />
+    <filament id="1" tray_info_idx="GFL99" type="PLA" color="#FFFFFF" used_m="31.64" used_g="94.36" group_id="0" nozzle_diameter="0.40" volume_type="Standard" used_for_object="true" used_for_support="false" total_load_time="29.00" total_unload_time="0.00"/>
+    <filament id="2" tray_info_idx="GFL99" type="PLA" color="#161616" used_m="0.28" used_g="0.84" group_id="1" nozzle_diameter="0.40" volume_type="Standard" used_for_object="true" used_for_support="false" total_load_time="29.00" total_unload_time="0.00"/>
+    <nozzle id="0" extruder_id="1" nozzle_diameter="0.4" volume_type="Standard"/>
+    <nozzle id="1" extruder_id="2" nozzle_diameter="0.4" volume_type="Standard"/>
+    <layer_filament_lists>
+      <layer_filament_list filament_list="0 1" layer_ranges="0 2" />
+      <layer_filament_list filament_list="0" layer_ranges="3 124" />
+    </layer_filament_lists>
+  </plate>
+</config>`
+
+// TestBambuX2DUsageFromProjectFile runs the X2D case end to end against the fake
+// printer: gcode_file names an internal plate path FTPS cannot reach, the
+// project file sits at the root under the job's name, and the AMS mapping puts
+// the external spool on the last toolhead instead of toolhead 1.
+func TestBambuX2DUsageFromProjectFile(t *testing.T) {
+	const subtask = "Bambu_Lab_A1_A2_H2_X2D_P2S_Hotends_Box"
+	srv := newFakeBambuFTPS(t, map[string][]byte{subtask + ".gcode.3mf": makeThreeMF(t, x2dSliceInfo)})
+	job := bambuJobRef{
+		GcodeFile:   "/data/Metadata/plate_1.gcode",
+		SubtaskName: subtask,
+		PlateIdx:    1,
+		Mapping:     []int{0, bambuExternalSpool},
+	}
+
+	byFilament, err := bambuFilamentUsageFromFilePort(srv.host, srv.port(), "accesscode", job)
+	if err != nil {
+		t.Fatalf("project file not found from the job name: %v", err)
+	}
+	if len(byFilament) != 2 || byFilament[1] != 94.36 || byFilament[2] != 0.84 {
+		t.Fatalf("per-filament grams = %v, want map[1:94.36 2:0.84]", byFilament)
+	}
+
+	usage, mapped := bambuAttributeUsage(byFilament, job.Mapping, 5)
+	if !mapped || len(usage) != 2 || usage[0] != 94.36 || usage[4] != 0.84 {
+		t.Fatalf("attributed usage = %v (mapped %v), want map[0:94.36 4:0.84]", usage, mapped)
 	}
 }
 
