@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"net"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -39,22 +40,34 @@ func (b *FilamentBridge) parseLocationParam(location string) (printerName string
 
 			// First, try to find by custom name (prioritize custom names over numeric parsing)
 			// This ensures that if a user names toolhead 0 as "Toolhead 1", it will match correctly
-			if printerID, printerConfig, found, _ := b.findPrinterByName(printerName); found {
+			if printerID, _, found, _ := b.findPrinterByName(printerName); found {
 				// Get toolhead names for this printer
 				toolheadNames, err := b.GetAllToolheadNames(printerID)
 				if err == nil {
-					// Look for matching display name (custom names take precedence)
-					for tid, displayName := range toolheadNames {
-						if displayName == toolheadPart {
+					// Look for matching display name (custom names take precedence).
+					// Sorted, because a map's order is random and two toolheads can
+					// carry the same name, which otherwise resolves differently from
+					// one scan to the next.
+					tids := make([]int, 0, len(toolheadNames))
+					for tid := range toolheadNames {
+						tids = append(tids, tid)
+					}
+					sort.Ints(tids)
+					for _, tid := range tids {
+						if toolheadNames[tid] == toolheadPart {
 							return printerName, tid, location, true, nil
 						}
 					}
 				}
-				// Also check default names
-				for tid := 0; tid < printerConfig.Toolheads; tid++ {
-					defaultName := fmt.Sprintf("Toolhead %d", tid)
-					if defaultName == toolheadPart {
-						return printerName, tid, location, true, nil
+				// Also check the positions' own labels, which is what a tag printed
+				// without a custom name carries. Includes positions the printer does
+				// not currently have, so a tag for an unplugged AMS slot still reads
+				// as that slot rather than as a storage location.
+				if positions, err := b.listPositions(printerID); err == nil {
+					for _, p := range positions {
+						if p.Label == toolheadPart {
+							return printerName, p.ID, location, true, nil
+						}
 					}
 				}
 			}
@@ -67,10 +80,10 @@ func (b *FilamentBridge) parseLocationParam(location string) (printerName string
 				if err == nil {
 					// Validate that the parsed numeric ID exists for this printer
 					// This prevents matching "Toolhead 1" to a non-existent toolhead when it's actually a custom name
-					if _, printerConfig, found, _ := b.findPrinterByName(printerName); found {
-						// Verify the numeric ID is within valid range; if out of
-						// range, don't return it - treat as a regular location
-						if toolheadID >= 0 && toolheadID < printerConfig.Toolheads {
+					if printerID, _, found, _ := b.findPrinterByName(printerName); found {
+						// Verify the position exists; a number the printer has no
+						// position for is treated as a regular location
+						if _, known := b.position(printerID, toolheadID); known {
 							return printerName, toolheadID, location, true, nil
 						}
 					}

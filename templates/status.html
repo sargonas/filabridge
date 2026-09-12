@@ -112,13 +112,12 @@
                 <h4>Map Spools to Toolheads</h4>
                 <div style="margin-top: 15px;">
                     {{$mapping := index $.Status.ToolheadMappings $printerID}}
-                    {{range $toolheadID := generateToolheadIDs $printerConfig.Toolheads}}
+                    {{range $position := index $.Status.Positions $printerID}}
+                    {{$toolheadID := $position.ID}}
                     {{$mappedSpool := index $mapping $toolheadID}}
-                    {{$displayName := "Toolhead"}}
+                    {{$displayName := $position.Label}}
                     {{if $mappedSpool.DisplayName}}
                         {{$displayName = $mappedSpool.DisplayName}}
-                    {{else}}
-                        {{$displayName = printf "Toolhead %d" $toolheadID}}
                     {{end}}
                     <div class="toolhead-mapping-row" data-printer-id="{{$printerID}}" data-toolhead-id="{{$toolheadID}}">
                         <div class="toolhead-label">{{$displayName}}:</div>

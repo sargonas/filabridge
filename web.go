@@ -126,21 +126,11 @@ func NewWebServer(bridge *FilamentBridge) *WebServer {
 	return ws
 }
 
-// generateToolheadIDs generates a slice of toolhead IDs from 0 to count-1
-func generateToolheadIDs(count int) []int {
-	ids := make([]int, count)
-	for i := 0; i < count; i++ {
-		ids[i] = i
-	}
-	return ids
-}
-
 // setupRoutes configures all the routes
 func (ws *WebServer) setupRoutes() {
-	// Load HTML templates with custom functions from embedded filesystem
-	tmpl := template.Must(template.New("").Funcs(template.FuncMap{
-		"generateToolheadIDs": generateToolheadIDs,
-	}).ParseFS(templatesFS, "templates/*"))
+	// Load HTML templates from the embedded filesystem. The dashboard renders
+	// toolhead rows from the printer's positions, so there is no count to expand.
+	tmpl := template.Must(template.New("").ParseFS(templatesFS, "templates/*"))
 	ws.router.SetHTMLTemplate(tmpl)
 
 	// Static files (embedded in binary)
@@ -665,7 +655,7 @@ func (ws *WebServer) mapToolheadHandler(c *gin.Context) {
 	}
 
 	// Validate the toolhead exists on the target printer
-	_, config, found, err := ws.bridge.findPrinterByName(req.PrinterName)
+	printerID, config, found, err := ws.bridge.findPrinterByName(req.PrinterName)
 	if err != nil {
 		internalError(c, err)
 		return
@@ -674,8 +664,16 @@ func (ws *WebServer) mapToolheadHandler(c *gin.Context) {
 		c.JSON(http.StatusNotFound, gin.H{"error": "Printer not found"})
 		return
 	}
-	if req.ToolheadID >= config.Toolheads {
-		c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("Toolhead ID must be between 0 and %d", config.Toolheads-1)})
+	// The target has to be a place this printer can load filament. Unmapping is
+	// still allowed on a position the printer no longer has, so a spool left on
+	// an unplugged AMS can be freed.
+	position, known := ws.bridge.position(printerID, req.ToolheadID)
+	if !known {
+		c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("%s has no toolhead %d", config.Name, req.ToolheadID)})
+		return
+	}
+	if !position.Present && req.SpoolID != 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("%s is not currently on %s", position.Label, config.Name)})
 		return
 	}
 
@@ -937,8 +935,12 @@ func (ws *WebServer) getPrintersHandler(c *gin.Context) {
 		if err == nil {
 			// Build toolhead names map with defaults
 			toolheadNamesMap := make(map[int]string)
-			for toolheadID := 0; toolheadID < printerConfig.Toolheads; toolheadID++ {
-				toolheadNamesMap[toolheadID] = toolheadDisplayName(toolheadNames, toolheadID)
+			positions, err := ws.bridge.listPositions(printerID)
+			if err != nil {
+				log.Printf("Warning: could not read positions for %s: %v", printerConfig.Name, err)
+			}
+			for _, position := range positions {
+				toolheadNamesMap[position.ID] = positionDisplayName(toolheadNames, position)
 			}
 			printerData["toolhead_names"] = toolheadNamesMap
 		}
@@ -1051,11 +1053,30 @@ func (ws *WebServer) updatePrinterHandler(c *gin.Context) {
 
 	// The API never returns stored keys, so the edit form submits an empty
 	// api_key on a masked round-trip: keep the existing key in that case.
-	if printerConfig.APIKey == "" {
-		if existing, err := ws.bridge.GetAllPrinterConfigs(); err == nil {
-			if current, ok := existing[printerID]; ok {
+	if existing, err := ws.bridge.GetAllPrinterConfigs(); err == nil {
+		if current, ok := existing[printerID]; ok {
+			if printerConfig.APIKey == "" {
 				printerConfig.APIKey = current.APIKey
 			}
+			// A printer's type decides what its filament positions mean, and its
+			// mappings, history and printed tags already reference them. Turning a
+			// PrusaLink printer into a Bambu one in place would leave all of that
+			// pointing at places the new printer does not have.
+			currentType := current.Type
+			if currentType == "" {
+				currentType = PrinterTypePrusaLink
+			}
+			newType := printerConfig.Type
+			if newType == "" {
+				newType = currentType
+			}
+			if newType != currentType {
+				c.JSON(http.StatusBadRequest, gin.H{
+					"error": "A printer's type cannot be changed. Delete this printer and add it again as the other type.",
+				})
+				return
+			}
+			printerConfig.Type = currentType
 		}
 	}
 
@@ -1122,9 +1143,10 @@ func (ws *WebServer) updateToolheadNameHandler(c *gin.Context) {
 		return
 	}
 
-	// Validate toolhead ID is within range
-	if toolheadID < 0 || toolheadID >= printerConfig.Toolheads {
-		c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("Toolhead ID must be between 0 and %d", printerConfig.Toolheads-1)})
+	// Renaming is allowed on any position the printer has, including one that is
+	// currently absent, since its label is still on tags and spools.
+	if _, known := ws.bridge.position(printerID, toolheadID); !known {
+		c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("%s has no toolhead %d", printerConfig.Name, toolheadID)})
 		return
 	}
 
@@ -1633,12 +1655,18 @@ func (ws *WebServer) nfcUrlsHandler(c *gin.Context) {
 	quickAssignLocation := ""
 	if configs, err := ws.bridge.GetAllPrinterConfigs(); err == nil && len(configs) == 1 {
 		for printerID, printerConfig := range configs {
-			if printerConfig.Toolheads == 1 {
-				displayName, err := ws.bridge.GetToolheadName(printerID, 0)
-				if err != nil {
-					displayName = "Toolhead 0"
+			// Only when there is exactly one place to load filament, so a single
+			// scan cannot be ambiguous about where the spool went.
+			if positions, err := ws.bridge.listPositions(printerID); err == nil {
+				var loadable []filamentPosition
+				for _, p := range positions {
+					if p.Present {
+						loadable = append(loadable, p)
+					}
 				}
-				quickAssignLocation = fmt.Sprintf("%s - %s", printerConfig.Name, displayName)
+				if len(loadable) == 1 {
+					quickAssignLocation = ws.bridge.positionLocationName(printerConfig.Name, printerID, loadable[0])
+				}
 			}
 		}
 	}

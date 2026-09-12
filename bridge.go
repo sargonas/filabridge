@@ -162,7 +162,11 @@ func (w MappingWarning) SelectedToolhead() int {
 type PrinterStatus struct {
 	Printers         map[string]PrinterData             `json:"printers"`
 	ToolheadMappings map[string]map[int]ToolheadMapping `json:"toolhead_mappings"`
-	Timestamp        time.Time                          `json:"timestamp"`
+	// Positions lists each printer's filament positions in display order, which
+	// is what the dashboard renders rows from. A count cannot describe a machine
+	// whose places are AMS slots and external holders.
+	Positions map[string][]filamentPosition `json:"positions"`
+	Timestamp time.Time                     `json:"timestamp"`
 }
 
 // PrinterData represents data for a single printer
@@ -253,6 +257,16 @@ func (b *FilamentBridge) initDatabase() error {
 			spool_id INTEGER,
 			mapped_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
 			PRIMARY KEY (printer_id, toolhead_id)
+		)`,
+		`CREATE TABLE IF NOT EXISTS printer_positions (
+			printer_id TEXT NOT NULL,
+			position_id INTEGER NOT NULL,
+			position_key TEXT NOT NULL,
+			label TEXT NOT NULL,
+			present INTEGER NOT NULL DEFAULT 1,
+			created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+			PRIMARY KEY (printer_id, position_id),
+			UNIQUE (printer_id, position_key)
 		)`,
 		`CREATE TABLE IF NOT EXISTS print_history (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -360,6 +374,13 @@ func (b *FilamentBridge) initDatabase() error {
 		return fmt.Errorf("failed to add estimate_slots column: %w", err)
 	}
 
+	// History records what a position was called when the print ran, so old rows
+	// keep their meaning after a rename. Rows from before this have no label.
+	if _, err := b.db.Exec(`ALTER TABLE print_history ADD COLUMN position_label TEXT NOT NULL DEFAULT ''`); err != nil &&
+		!strings.Contains(err.Error(), "duplicate column") {
+		return fmt.Errorf("failed to add position_label column to print_history: %w", err)
+	}
+
 	if _, err := b.db.Exec(`ALTER TABLE print_history ADD COLUMN status TEXT NOT NULL DEFAULT 'completed'`); err != nil &&
 		!strings.Contains(err.Error(), "duplicate column") {
 		return fmt.Errorf("failed to add status column to print_history: %w", err)
@@ -379,6 +400,13 @@ func (b *FilamentBridge) initDatabase() error {
 	// Initialize default configuration
 	if err := b.initializeDefaultConfig(); err != nil {
 		return fmt.Errorf("failed to initialize default configuration: %w", err)
+	}
+
+	// Give every configured printer its filament positions. This is both the
+	// migration for databases that predate them and the self-healing path, so it
+	// is safe to run on every start.
+	if err := b.reconcileAllPositions(); err != nil {
+		return fmt.Errorf("failed to set up filament positions: %w", err)
 	}
 
 	return nil
@@ -929,8 +957,20 @@ func (b *FilamentBridge) checkRunoutWarnings(printerID string, config PrinterCon
 // come from, so neither has anything to confirm.
 func (b *FilamentBridge) checkMappingWarnings(printerID string, config PrinterConfig, aj *activeJob) {
 	// One value in the estimate means the slice named no slot. That only leaves
-	// room for error where the printer has more than one toolhead to choose from.
-	if len(aj.Usage) != 1 || config.Toolheads <= 1 {
+	// room for error where the printer has more than one place to load filament,
+	// which is its positions rather than a configured count.
+	if len(aj.Usage) != 1 {
+		return
+	}
+	loadable := 0
+	if positions, err := b.listPositions(printerID); err == nil {
+		for _, p := range positions {
+			if p.Present {
+				loadable++
+			}
+		}
+	}
+	if loadable <= 1 {
 		return
 	}
 	// A slice that listed several slots named this one positionally, even though
@@ -1017,11 +1057,19 @@ func (b *FilamentBridge) buildMappingSlots(printerID, printerName string, toolhe
 		}
 	}
 
-	slots := make([]MappingWarningSlot, 0, toolheads)
-	for toolheadID := 0; toolheadID < toolheads; toolheadID++ {
+	positions, err := b.listPositions(printerID)
+	if err != nil {
+		log.Printf("Warning: could not read positions for %s: %v", printerName, err)
+	}
+	slots := make([]MappingWarningSlot, 0, len(positions))
+	for _, position := range positions {
+		if !position.Present {
+			continue // nowhere a print could be running from
+		}
+		toolheadID := position.ID
 		slot := MappingWarningSlot{
 			ToolheadID:  toolheadID,
-			DisplayName: mappingSlotName(names, toolheadID),
+			DisplayName: mappingSlotName(names, position),
 		}
 		if m, ok := mappings[toolheadID]; ok && m.SpoolID != 0 {
 			slot.SpoolID = m.SpoolID
@@ -1040,11 +1088,16 @@ func (b *FilamentBridge) buildMappingSlots(printerID, printerName string, toolhe
 // what the user calls it, so it stands alone. Otherwise both numbers are shown,
 // because the whole confusion here is that FilaBridge counts toolheads from 0
 // and an MMU counts slots from 1.
-func mappingSlotName(names map[int]string, toolheadID int) string {
-	if name, ok := names[toolheadID]; ok && name != "" {
+func mappingSlotName(names map[int]string, p filamentPosition) string {
+	if name, ok := names[p.ID]; ok && name != "" {
 		return name
 	}
-	return fmt.Sprintf("Toolhead %d (slot %d)", toolheadID, toolheadID+1)
+	// A numbered toolhead keeps the wording it has always had, which names the
+	// slot the way the printer's own UI counts them, from one.
+	if strings.HasPrefix(p.Key, positionKeyToolhead+":") {
+		return fmt.Sprintf("%s (slot %d)", p.Label, p.ID+1)
+	}
+	return p.Label
 }
 
 // spoolSummary renders a spool the way the toolhead dropdowns do, so the same
@@ -1076,7 +1129,17 @@ func (b *FilamentBridge) AssignMappingWarningToolhead(id string, toolheadID int)
 	if !exists {
 		return MappingWarning{}, fmt.Errorf("mapping warning not found: %s", id)
 	}
-	if toolheadID < 0 || toolheadID >= len(w.Slots) {
+	// The answer has to name one of the offered slots. Their ids are whatever the
+	// printer's positions are, so counting them says nothing about which are
+	// valid.
+	offered := false
+	for _, s := range w.Slots {
+		if s.ToolheadID == toolheadID {
+			offered = true
+			break
+		}
+	}
+	if !offered {
 		return MappingWarning{}, fmt.Errorf("toolhead %d is not a toolhead on %s", toolheadID, w.PrinterName)
 	}
 
@@ -1245,7 +1308,14 @@ func (b *FilamentBridge) SavePrinterConfig(printerID string, config PrinterConfi
 	if err != nil {
 		return fmt.Errorf("failed to save printer config: %w", err)
 	}
-	return nil
+
+	// Keep the printer's positions in step with its toolhead count. Raising the
+	// count adds positions, lowering it marks the extras absent rather than
+	// deleting them, so their mappings and history keep meaning the same place if
+	// the count goes back up.
+	return b.migrateTx("reconcile filament positions", func(tx *sql.Tx) error {
+		return reconcileToolheadPositions(tx, printerID, config.Toolheads)
+	})
 }
 
 // DeletePrinterConfig deletes a printer configuration
@@ -1275,7 +1345,16 @@ func toolheadDisplayName(names map[int]string, toolheadID int) string {
 	if name, ok := names[toolheadID]; ok {
 		return name
 	}
-	return fmt.Sprintf("Toolhead %d", toolheadID)
+	return defaultToolheadLabel(toolheadID)
+}
+
+// positionDisplayName is what a position is called: the user's custom name if
+// they set one, otherwise the label the position was created with.
+func positionDisplayName(names map[int]string, p filamentPosition) string {
+	if name, ok := names[p.ID]; ok {
+		return name
+	}
+	return p.Label
 }
 
 // GetToolheadName gets the display name for a toolhead, or returns default "Toolhead {ID}"
@@ -1290,8 +1369,12 @@ func (b *FilamentBridge) GetToolheadName(printerID string, toolheadID int) (stri
 	).Scan(&displayName)
 
 	if err == sql.ErrNoRows {
-		// Return default name if not found
-		return fmt.Sprintf("Toolhead %d", toolheadID), nil
+		// No custom name, so the position's own label stands. For a numbered
+		// toolhead that is "Toolhead N", exactly as before positions existed.
+		if p, ok := b.position(printerID, toolheadID); ok {
+			return p.Label, nil
+		}
+		return defaultToolheadLabel(toolheadID), nil
 	}
 	if err != nil {
 		return "", fmt.Errorf("failed to get toolhead name: %w", err)
@@ -1615,12 +1698,29 @@ func (b *FilamentBridge) toolheadLocationSet() map[string]bool {
 	if err != nil {
 		return set
 	}
-	for _, cfg := range configs {
-		for tid := 0; tid < cfg.Toolheads; tid++ {
-			set[b.toolheadLocationName(cfg.Name, tid)] = true
+	for printerID, cfg := range configs {
+		// Absent positions count too. Their labels are still written on printed
+		// tags and on spools in Spoolman, and treating one as a storage location
+		// would let a spool record an AMS slot as the place it lives.
+		positions, err := b.listPositions(printerID)
+		if err != nil {
+			continue
+		}
+		for _, p := range positions {
+			set[b.positionLocationName(cfg.Name, printerID, p)] = true
 		}
 	}
 	return set
+}
+
+// positionLocationName is the Spoolman location string for one position: the
+// printer's name and the position's label, which is what a printed tag carries.
+func (b *FilamentBridge) positionLocationName(printerName, printerID string, p filamentPosition) string {
+	label := p.Label
+	if custom, err := b.GetToolheadName(printerID, p.ID); err == nil && custom != "" {
+		label = custom
+	}
+	return fmt.Sprintf("%s - %s", printerName, label)
 }
 
 // rememberSpoolHome records the storage location a spool lives in while it is
@@ -1788,7 +1888,7 @@ type ImportSummary struct {
 func (b *FilamentBridge) ImportMappingsFromSpoolman(printerName string) (ImportSummary, error) {
 	var summary ImportSummary
 
-	_, cfg, found, err := b.findPrinterByName(printerName)
+	printerID, _, found, err := b.findPrinterByName(printerName)
 	if err != nil {
 		return summary, err
 	}
@@ -1810,8 +1910,16 @@ func (b *FilamentBridge) ImportMappingsFromSpoolman(printerName string) (ImportS
 		}
 	}
 
-	for tid := 0; tid < cfg.Toolheads; tid++ {
-		locName := b.toolheadLocationName(printerName, tid)
+	positions, err := b.listPositions(printerID)
+	if err != nil {
+		return summary, err
+	}
+	for _, position := range positions {
+		if !position.Present {
+			continue // nothing can be loaded there now
+		}
+		tid := position.ID
+		locName := b.positionLocationName(printerName, printerID, position)
 		ids := byLocation[locName]
 		switch {
 		case len(ids) == 0:
@@ -2003,6 +2111,16 @@ func (b *FilamentBridge) UnmapToolhead(printerName string, toolheadID int) error
 // the print actually began (captured when the job was first seen printing); a
 // zero value falls back to now. status is "completed" or "cancelled".
 func (b *FilamentBridge) LogPrintUsage(printerName string, toolheadID int, spoolID int, filamentUsed float64, jobName string, printStarted time.Time, status string) error {
+	// Record what the position was called at the time. History is a record of
+	// what happened, so a later rename, or a position going away, must not
+	// change what an old row says.
+	positionLabel := defaultToolheadLabel(toolheadID)
+	if printerID, _, found, err := b.findPrinterByName(printerName); err == nil && found {
+		if name, err := b.GetToolheadName(printerID, toolheadID); err == nil && name != "" {
+			positionLabel = name
+		}
+	}
+
 	b.mutex.Lock()
 	defer b.mutex.Unlock()
 
@@ -2011,8 +2129,8 @@ func (b *FilamentBridge) LogPrintUsage(printerName string, toolheadID int, spool
 	}
 
 	_, err := b.db.Exec(
-		"INSERT INTO print_history (printer_name, toolhead_id, spool_id, filament_used, print_started, print_finished, job_name, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-		printerName, toolheadID, spoolID, filamentUsed, printStarted, time.Now(), jobName, status,
+		"INSERT INTO print_history (printer_name, toolhead_id, spool_id, filament_used, print_started, print_finished, job_name, status, position_label) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+		printerName, toolheadID, spoolID, filamentUsed, printStarted, time.Now(), jobName, status, positionLabel,
 	)
 	if err != nil {
 		return fmt.Errorf("failed to log print usage: %w", err)
@@ -2754,6 +2872,7 @@ func (b *FilamentBridge) GetStatus() (*PrinterStatus, error) {
 	status := &PrinterStatus{
 		Printers:         make(map[string]PrinterData),
 		ToolheadMappings: make(map[string]map[int]ToolheadMapping),
+		Positions:        make(map[string][]filamentPosition),
 		Timestamp:        time.Now(),
 	}
 
@@ -2872,9 +2991,16 @@ func (b *FilamentBridge) GetStatus() (*PrinterStatus, error) {
 
 		// Create enhanced mappings for ALL toolheads (including unmapped ones)
 		enhancedMappings := make(map[int]ToolheadMapping)
-		for toolheadID := 0; toolheadID < printerConfig.Toolheads; toolheadID++ {
-			// Get display name (custom or default)
-			displayName := toolheadDisplayName(toolheadNames, toolheadID)
+		// Every position the printer has, in display order, rather than a count.
+		positions, err := b.listPositions(printerID)
+		if err != nil {
+			log.Printf("Warning: could not read positions for %s: %v", printerName, err)
+		}
+		status.Positions[printerID] = positions
+		for _, position := range positions {
+			toolheadID := position.ID
+			// Get display name (custom, or the position's own label)
+			displayName := positionDisplayName(toolheadNames, position)
 
 			// If this toolhead has a mapping, use it and add display name
 			if mapping, exists := mappings[toolheadID]; exists {

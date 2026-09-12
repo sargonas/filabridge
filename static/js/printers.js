@@ -25,13 +25,20 @@ function loadPrinters() {
                     
                     // Build toolhead names section
                     let toolheadNamesHTML = '';
+                    // The server sends one entry per filament position the printer
+                    // has, already labelled. Counting from zero would miss any
+                    // position whose id is not simply its place in that count.
                     const toolheadNames = printer.toolhead_names || {};
-                    for (let toolheadID = 0; toolheadID < (printer.toolheads || 1); toolheadID++) {
+                    const toolheadIDs = Object.keys(toolheadNames)
+                        .map(id => parseInt(id, 10))
+                        .filter(id => !Number.isNaN(id))
+                        .sort((a, b) => a - b);
+                    for (const toolheadID of toolheadIDs) {
                         const currentName = toolheadNames[toolheadID] || `Toolhead ${toolheadID}`;
                         const escapedName = escapeHtmlAttribute(currentName);
                         toolheadNamesHTML += `
                             <div class="form-row" style="margin-bottom: 10px;">
-                                <label style="min-width: 120px;">Toolhead ${toolheadID}:</label>
+                                <label style="min-width: 120px;">${escapeHtmlAttribute(currentName)}:</label>
                                 <input type="text" 
                                        id="toolhead-name-${printerId}-${toolheadID}" 
                                        value="${escapedName}" 
