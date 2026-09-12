@@ -38,6 +38,7 @@ type FilamentBridge struct {
 	mutex            sync.RWMutex
 	bambuClients     map[string]*bambuClient // Persistent MQTT clients per Bambu printer (developer mode)
 	bambuMutex       sync.Mutex              // Guards bambuClients
+	bambuFiles       *bambuFileIndex         // What each file on a Bambu printer's drive contains
 	// prusaClients holds one long-lived PrusaLink client per printer so every
 	// caller shares a single pooled connection to that printer.
 	prusaClients map[string]*pooledPrusaClient
@@ -185,6 +186,7 @@ func NewFilamentBridge(config *Config) (*FilamentBridge, error) {
 		mappingWarnings:  make(map[string]MappingWarning),
 		runoutChecked:    make(map[string]int),
 		bambuClients:     make(map[string]*bambuClient),
+		bambuFiles:       newBambuFileIndex(),
 
 		prusaClients:       make(map[string]*pooledPrusaClient),
 		printerStatusCache: make(map[string]cachedPrinterStatus),
@@ -246,11 +248,11 @@ func (b *FilamentBridge) initDatabase() error {
 			updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 		)`,
 		`CREATE TABLE IF NOT EXISTS toolhead_mappings (
-			printer_name TEXT,
+			printer_id TEXT,
 			toolhead_id INTEGER,
 			spool_id INTEGER,
 			mapped_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-			PRIMARY KEY (printer_name, toolhead_id)
+			PRIMARY KEY (printer_id, toolhead_id)
 		)`,
 		`CREATE TABLE IF NOT EXISTS print_history (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -296,6 +298,7 @@ func (b *FilamentBridge) initDatabase() error {
 			last_progress REAL NOT NULL DEFAULT 0,
 			started_at TIMESTAMP NOT NULL,
 			usage_json TEXT NOT NULL DEFAULT '',
+			estimate_slots INTEGER NOT NULL DEFAULT 0,
 			updated_at TIMESTAMP NOT NULL
 		)`,
 		// recorded_jobs is an idempotency ledger: a (printer_id, job_id) pair is
@@ -333,6 +336,16 @@ func (b *FilamentBridge) initDatabase() error {
 		}
 	}
 
+	// Toolhead mappings used to be keyed by printer name, so renaming a printer
+	// orphaned its mappings and deleting one then re-adding it under the same
+	// name resurrected them onto different hardware. Re-key them to the printer's
+	// id, which never changes. A mapping whose printer is gone is kept aside
+	// rather than dropped: its spool would otherwise stay silently claimed by a
+	// printer nothing can see.
+	if err := b.migrateMappingsToPrinterID(); err != nil {
+		return err
+	}
+
 	for _, query := range createTables {
 		if _, err := b.db.Exec(query); err != nil {
 			return fmt.Errorf("failed to create table: %w", err)
@@ -342,6 +355,11 @@ func (b *FilamentBridge) initDatabase() error {
 	// Databases created before the status column existed need it added in place;
 	// rows from those versions predate cancelled-print tracking, so 'completed'
 	// is the only value they could represent.
+	if _, err := b.db.Exec(`ALTER TABLE active_jobs ADD COLUMN estimate_slots INTEGER NOT NULL DEFAULT 0`); err != nil &&
+		!strings.Contains(err.Error(), "duplicate column") {
+		return fmt.Errorf("failed to add estimate_slots column: %w", err)
+	}
+
 	if _, err := b.db.Exec(`ALTER TABLE print_history ADD COLUMN status TEXT NOT NULL DEFAULT 'completed'`); err != nil &&
 		!strings.Contains(err.Error(), "duplicate column") {
 		return fmt.Errorf("failed to add status column to print_history: %w", err)
@@ -364,6 +382,102 @@ func (b *FilamentBridge) initDatabase() error {
 	}
 
 	return nil
+}
+
+// migrateTx runs a schema change as one transaction, so a rebuilt table is
+// never left half-copied if the process dies partway.
+func (b *FilamentBridge) migrateTx(name string, fn func(*sql.Tx) error) error {
+	tx, err := b.db.Begin()
+	if err != nil {
+		return fmt.Errorf("%s: begin: %w", name, err)
+	}
+	if err := fn(tx); err != nil {
+		_ = tx.Rollback()
+		return fmt.Errorf("%s: %w", name, err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("%s: commit: %w", name, err)
+	}
+	return nil
+}
+
+// migrateMappingsToPrinterID re-keys toolhead_mappings from the printer's name
+// to its id. Rows whose printer no longer exists cannot be re-keyed, so they are
+// moved to toolhead_mappings_orphaned, where they stop claiming their spool but
+// can still be recovered by hand. Does nothing once the table is already keyed
+// by id, so opening a database twice is safe.
+func (b *FilamentBridge) migrateMappingsToPrinterID() error {
+	var legacyColumn string
+	err := b.db.QueryRow(`SELECT name FROM pragma_table_info('toolhead_mappings') WHERE name='printer_name'`).Scan(&legacyColumn)
+	if err != nil {
+		return nil // no such table yet, or already keyed by id
+	}
+
+	return b.migrateTx("re-key toolhead mappings by printer id", func(tx *sql.Tx) error {
+		if _, err := tx.Exec(`CREATE TABLE toolhead_mappings_new (
+			printer_id TEXT,
+			toolhead_id INTEGER,
+			spool_id INTEGER,
+			mapped_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+			PRIMARY KEY (printer_id, toolhead_id)
+		)`); err != nil {
+			return err
+		}
+		if _, err := tx.Exec(`INSERT OR REPLACE INTO toolhead_mappings_new (printer_id, toolhead_id, spool_id, mapped_at)
+			SELECT c.printer_id, m.toolhead_id, m.spool_id, m.mapped_at
+			FROM toolhead_mappings m JOIN printer_configs c ON c.name = m.printer_name`); err != nil {
+			return err
+		}
+		if _, err := tx.Exec(`CREATE TABLE IF NOT EXISTS toolhead_mappings_orphaned (
+			printer_name TEXT,
+			toolhead_id INTEGER,
+			spool_id INTEGER,
+			mapped_at TIMESTAMP
+		)`); err != nil {
+			return err
+		}
+		if _, err := tx.Exec(`INSERT INTO toolhead_mappings_orphaned (printer_name, toolhead_id, spool_id, mapped_at)
+			SELECT m.printer_name, m.toolhead_id, m.spool_id, m.mapped_at
+			FROM toolhead_mappings m
+			WHERE NOT EXISTS (SELECT 1 FROM printer_configs c WHERE c.name = m.printer_name)`); err != nil {
+			return err
+		}
+		if _, err := tx.Exec(`DROP TABLE toolhead_mappings`); err != nil {
+			return err
+		}
+		if _, err := tx.Exec(`ALTER TABLE toolhead_mappings_new RENAME TO toolhead_mappings`); err != nil {
+			return err
+		}
+		return nil
+	})
+}
+
+// printerNamesByID gives every printer's display name, for reporting mappings in
+// the terms a user recognises. A printer that has since been deleted is simply
+// absent.
+func (b *FilamentBridge) printerNamesByID() map[string]string {
+	names := make(map[string]string)
+	configs, err := b.GetAllPrinterConfigs()
+	if err != nil {
+		return names
+	}
+	for id, cfg := range configs {
+		names[id] = cfg.Name
+	}
+	return names
+}
+
+// printerIDForName resolves the printer a caller named to its id, which is what
+// mappings are stored against.
+func (b *FilamentBridge) printerIDForName(printerName string) (string, error) {
+	printerID, _, found, err := b.findPrinterByName(printerName)
+	if err != nil {
+		return "", err
+	}
+	if !found {
+		return "", fmt.Errorf("printer %q not found", printerName)
+	}
+	return printerID, nil
 }
 
 // initializeDefaultConfig sets up default configuration values
@@ -819,6 +933,13 @@ func (b *FilamentBridge) checkMappingWarnings(printerID string, config PrinterCo
 	if len(aj.Usage) != 1 || config.Toolheads <= 1 {
 		return
 	}
+	// A slice that listed several slots named this one positionally, even though
+	// the zeroes were dropped on the way in, so there is nothing to confirm
+	// (issue #52). Jobs stored before the count was recorded have 0 and keep the
+	// old behaviour.
+	if aj.EstimateSlots > 1 {
+		return
+	}
 	enabled, err := b.GetNotifyUnknownSlotEnabled()
 	if err != nil || !enabled {
 		return
@@ -1136,6 +1257,14 @@ func (b *FilamentBridge) DeletePrinterConfig(printerID string) error {
 	if err != nil {
 		return fmt.Errorf("failed to delete printer config: %w", err)
 	}
+	// Take the printer's toolhead rows with it. Left behind they would keep
+	// their spools claimed, and a printer added later could inherit them.
+	if _, err := b.db.Exec("DELETE FROM toolhead_mappings WHERE printer_id = ?", printerID); err != nil {
+		log.Printf("Warning: failed to remove toolhead mappings for deleted printer %s: %v", printerID, err)
+	}
+	if _, err := b.db.Exec("DELETE FROM toolhead_names WHERE printer_id = ?", printerID); err != nil {
+		log.Printf("Warning: failed to remove toolhead names for deleted printer %s: %v", printerID, err)
+	}
 	return nil
 }
 
@@ -1349,15 +1478,22 @@ func (b *FilamentBridge) UpdateConfig(config *Config) error {
 	return nil
 }
 
-// GetToolheadMapping gets spool ID mapped to a specific toolhead
+// GetToolheadMapping gets spool ID mapped to a specific toolhead. Mappings are
+// stored against the printer's id, so they survive a rename and never attach to
+// a different printer that later takes the same name.
 func (b *FilamentBridge) GetToolheadMapping(printerName string, toolheadID int) (int, error) {
+	printerID, err := b.printerIDForName(printerName)
+	if err != nil {
+		return 0, err
+	}
+
 	b.mutex.RLock()
 	defer b.mutex.RUnlock()
 
 	var spoolID int
-	err := b.db.QueryRow(
-		"SELECT spool_id FROM toolhead_mappings WHERE printer_name = ? AND toolhead_id = ?",
-		printerName, toolheadID,
+	err = b.db.QueryRow(
+		"SELECT spool_id FROM toolhead_mappings WHERE printer_id = ? AND toolhead_id = ?",
+		printerID, toolheadID,
 	).Scan(&spoolID)
 
 	if err == sql.ErrNoRows {
@@ -1372,13 +1508,21 @@ func (b *FilamentBridge) GetToolheadMapping(printerName string, toolheadID int) 
 
 // SetToolheadMapping maps a spool to a specific toolhead
 func (b *FilamentBridge) SetToolheadMapping(printerName string, toolheadID int, spoolID int) error {
+	printerID, err := b.printerIDForName(printerName)
+	if err != nil {
+		return err
+	}
+	// Named outside the lock, so the conflict below can still be reported in the
+	// terms the user knows the printer by.
+	nameByID := b.printerNamesByID()
+
 	b.mutex.Lock()
 
 	// Get the previous spool ID before replacing it (for auto-assignment feature)
 	var previousSpoolID int
-	err := b.db.QueryRow(
-		"SELECT spool_id FROM toolhead_mappings WHERE printer_name = ? AND toolhead_id = ?",
-		printerName, toolheadID,
+	err = b.db.QueryRow(
+		"SELECT spool_id FROM toolhead_mappings WHERE printer_id = ? AND toolhead_id = ?",
+		printerID, toolheadID,
 	).Scan(&previousSpoolID)
 	if err != nil && err != sql.ErrNoRows {
 		b.mutex.Unlock()
@@ -1388,8 +1532,8 @@ func (b *FilamentBridge) SetToolheadMapping(printerName string, toolheadID int, 
 
 	// Check if this spool is already assigned to a different toolhead
 	rows, err := b.db.Query(
-		"SELECT printer_name, toolhead_id FROM toolhead_mappings WHERE spool_id = ? AND NOT (printer_name = ? AND toolhead_id = ?)",
-		spoolID, printerName, toolheadID,
+		"SELECT printer_id, toolhead_id FROM toolhead_mappings WHERE spool_id = ? AND NOT (printer_id = ? AND toolhead_id = ?)",
+		spoolID, printerID, toolheadID,
 	)
 	if err != nil {
 		b.mutex.Unlock()
@@ -1399,19 +1543,23 @@ func (b *FilamentBridge) SetToolheadMapping(printerName string, toolheadID int, 
 
 	// If we find any rows, this spool is already assigned elsewhere
 	if rows.Next() {
-		var existingPrinterName string
+		var existingPrinterID string
 		var existingToolheadID int
-		if err := rows.Scan(&existingPrinterName, &existingToolheadID); err != nil {
+		if err := rows.Scan(&existingPrinterID, &existingToolheadID); err != nil {
 			b.mutex.Unlock()
 			return fmt.Errorf("failed to scan existing assignment: %w", err)
 		}
 		b.mutex.Unlock()
+		existingPrinterName := nameByID[existingPrinterID]
+		if existingPrinterName == "" {
+			existingPrinterName = existingPrinterID
+		}
 		return fmt.Errorf("spool %d is already assigned to %s toolhead %d", spoolID, existingPrinterName, existingToolheadID)
 	}
 
 	_, err = b.db.Exec(
-		"INSERT OR REPLACE INTO toolhead_mappings (printer_name, toolhead_id, spool_id, mapped_at) VALUES (?, ?, ?, ?)",
-		printerName, toolheadID, spoolID, time.Now(),
+		"INSERT OR REPLACE INTO toolhead_mappings (printer_id, toolhead_id, spool_id, mapped_at) VALUES (?, ?, ?, ?)",
+		printerID, toolheadID, spoolID, time.Now(),
 	)
 	if err != nil {
 		b.mutex.Unlock()
@@ -1691,9 +1839,14 @@ func (b *FilamentBridge) ImportMappingsFromSpoolman(printerName string) (ImportS
 // re-import the real state. Spoolman locations are deliberately left untouched so
 // a manual move there is never undone.
 func (b *FilamentBridge) ClearToolheadMappings(printerName string) (int, error) {
+	printerID, err := b.printerIDForName(printerName)
+	if err != nil {
+		return 0, err
+	}
+
 	b.mutex.Lock()
 	defer b.mutex.Unlock()
-	res, err := b.db.Exec("DELETE FROM toolhead_mappings WHERE printer_name = ?", printerName)
+	res, err := b.db.Exec("DELETE FROM toolhead_mappings WHERE printer_id = ?", printerID)
 	if err != nil {
 		return 0, fmt.Errorf("failed to clear toolhead mappings: %w", err)
 	}
@@ -1706,23 +1859,32 @@ func (b *FilamentBridge) ClearToolheadMappings(printerName string) (int, error) 
 // removes the spool from any other toolhead it was on, preserving the
 // one-spool-one-toolhead invariant.
 func (b *FilamentBridge) importSetMapping(printerName string, toolheadID, spoolID int) error {
+	printerID, err := b.printerIDForName(printerName)
+	if err != nil {
+		return err
+	}
+
 	b.mutex.Lock()
 	defer b.mutex.Unlock()
 	if _, err := b.db.Exec("DELETE FROM toolhead_mappings WHERE spool_id = ?", spoolID); err != nil {
 		return err
 	}
-	_, err := b.db.Exec(
-		"INSERT OR REPLACE INTO toolhead_mappings (printer_name, toolhead_id, spool_id, mapped_at) VALUES (?, ?, ?, ?)",
-		printerName, toolheadID, spoolID, time.Now(),
+	_, err = b.db.Exec(
+		"INSERT OR REPLACE INTO toolhead_mappings (printer_id, toolhead_id, spool_id, mapped_at) VALUES (?, ?, ?, ?)",
+		printerID, toolheadID, spoolID, time.Now(),
 	)
 	return err
 }
 
 // GetToolheadMappings gets all toolhead mappings for a printer
 func (b *FilamentBridge) GetToolheadMappings(printerName string) (map[int]ToolheadMapping, error) {
+	printerID, err := b.printerIDForName(printerName)
+	if err != nil {
+		return nil, err
+	}
 	rows, err := b.db.Query(
-		"SELECT toolhead_id, spool_id, mapped_at FROM toolhead_mappings WHERE printer_name = ?",
-		printerName,
+		"SELECT toolhead_id, spool_id, mapped_at FROM toolhead_mappings WHERE printer_id = ?",
+		printerID,
 	)
 	if err != nil {
 		return nil, err
@@ -1747,10 +1909,13 @@ func (b *FilamentBridge) GetToolheadMappings(printerName string) (map[int]Toolhe
 	return mappings, nil
 }
 
-// GetAllToolheadMappings gets all toolhead mappings across all printers
+// GetAllToolheadMappings gets all toolhead mappings across all printers, keyed
+// by printer name as the UI and NFC paths refer to them. Rows whose printer has
+// been deleted have no name to report and are left out.
 func (b *FilamentBridge) GetAllToolheadMappings() (map[string]map[int]ToolheadMapping, error) {
+	nameByID := b.printerNamesByID()
 	rows, err := b.db.Query(
-		"SELECT printer_name, toolhead_id, spool_id, mapped_at FROM toolhead_mappings ORDER BY printer_name, toolhead_id",
+		"SELECT printer_id, toolhead_id, spool_id, mapped_at FROM toolhead_mappings ORDER BY printer_id, toolhead_id",
 	)
 	if err != nil {
 		return nil, err
@@ -1759,11 +1924,15 @@ func (b *FilamentBridge) GetAllToolheadMappings() (map[string]map[int]ToolheadMa
 
 	mappings := make(map[string]map[int]ToolheadMapping)
 	for rows.Next() {
-		var printerName string
+		var printerID string
 		var toolheadID, spoolID int
 		var mappedAt time.Time
-		if err := rows.Scan(&printerName, &toolheadID, &spoolID, &mappedAt); err != nil {
+		if err := rows.Scan(&printerID, &toolheadID, &spoolID, &mappedAt); err != nil {
 			return nil, err
+		}
+		printerName, known := nameByID[printerID]
+		if !known {
+			continue
 		}
 
 		if mappings[printerName] == nil {
@@ -1783,13 +1952,18 @@ func (b *FilamentBridge) GetAllToolheadMappings() (map[string]map[int]ToolheadMa
 
 // UnmapToolhead removes a spool mapping from a toolhead
 func (b *FilamentBridge) UnmapToolhead(printerName string, toolheadID int) error {
+	printerID, err := b.printerIDForName(printerName)
+	if err != nil {
+		return err
+	}
+
 	b.mutex.Lock()
 
 	// Capture the mapped spool so its Spoolman location can be updated below
 	var spoolID int
-	err := b.db.QueryRow(
-		"SELECT spool_id FROM toolhead_mappings WHERE printer_name = ? AND toolhead_id = ?",
-		printerName, toolheadID,
+	err = b.db.QueryRow(
+		"SELECT spool_id FROM toolhead_mappings WHERE printer_id = ? AND toolhead_id = ?",
+		printerID, toolheadID,
 	).Scan(&spoolID)
 	if err != nil && err != sql.ErrNoRows {
 		b.mutex.Unlock()
@@ -1797,8 +1971,8 @@ func (b *FilamentBridge) UnmapToolhead(printerName string, toolheadID int) error
 	}
 
 	res, err := b.db.Exec(
-		"DELETE FROM toolhead_mappings WHERE printer_name = ? AND toolhead_id = ?",
-		printerName, toolheadID,
+		"DELETE FROM toolhead_mappings WHERE printer_id = ? AND toolhead_id = ?",
+		printerID, toolheadID,
 	)
 	b.mutex.Unlock()
 	if err != nil {
@@ -1919,6 +2093,10 @@ type activeJob struct {
 	LastProgress float64         // highest progress fraction (0..1) seen while printing
 	StartedAt    time.Time       // when the job was first seen printing
 	Usage        map[int]float64 // full slicer filament estimate (g) per toolhead, from file.meta
+	// EstimateSlots is how many slots the slicer listed the estimate in. One
+	// slot names nothing, several name the slot positionally even when only one
+	// is non-zero. 0 means a job stored before this was recorded.
+	EstimateSlots int
 }
 
 // getActiveJob returns the persisted in-flight job for a printer, or nil if none.
@@ -1928,9 +2106,9 @@ func (b *FilamentBridge) getActiveJob(printerID string) (*activeJob, error) {
 		usageJSON string
 	)
 	err := b.db.QueryRow(
-		`SELECT printer_id, job_id, filename, last_progress, started_at, usage_json FROM active_jobs WHERE printer_id = ?`,
+		`SELECT printer_id, job_id, filename, last_progress, started_at, usage_json, estimate_slots FROM active_jobs WHERE printer_id = ?`,
 		printerID,
-	).Scan(&aj.PrinterID, &aj.JobID, &aj.Filename, &aj.LastProgress, &aj.StartedAt, &usageJSON)
+	).Scan(&aj.PrinterID, &aj.JobID, &aj.Filename, &aj.LastProgress, &aj.StartedAt, &usageJSON, &aj.EstimateSlots)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -1949,7 +2127,7 @@ func (b *FilamentBridge) getActiveJob(printerID string) (*activeJob, error) {
 	// anything downstream sees it: low-filament checks, usage recording and print
 	// history all read the job through here. Idempotent, and re-answering simply
 	// moves the same value again.
-	if toolheadID, ok := b.mappingSlotOverride(printerID, aj.JobID); ok && len(aj.Usage) == 1 {
+	if toolheadID, ok := b.mappingSlotOverride(printerID, aj.JobID); ok && len(aj.Usage) == 1 && aj.EstimateSlots <= 1 {
 		for _, grams := range aj.Usage {
 			aj.Usage = map[int]float64{toolheadID: grams}
 		}
@@ -1966,12 +2144,13 @@ func (b *FilamentBridge) upsertActiveJob(aj *activeJob) error {
 		}
 	}
 	_, err := b.db.Exec(
-		`INSERT INTO active_jobs (printer_id, job_id, filename, last_progress, started_at, usage_json, updated_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?)
+		`INSERT INTO active_jobs (printer_id, job_id, filename, last_progress, started_at, usage_json, estimate_slots, updated_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)
 		 ON CONFLICT(printer_id) DO UPDATE SET
 		     job_id=excluded.job_id, filename=excluded.filename, last_progress=excluded.last_progress,
-		     started_at=excluded.started_at, usage_json=excluded.usage_json, updated_at=excluded.updated_at`,
-		aj.PrinterID, aj.JobID, aj.Filename, aj.LastProgress, aj.StartedAt, usageJSON, time.Now(),
+		     started_at=excluded.started_at, usage_json=excluded.usage_json,
+		     estimate_slots=excluded.estimate_slots, updated_at=excluded.updated_at`,
+		aj.PrinterID, aj.JobID, aj.Filename, aj.LastProgress, aj.StartedAt, usageJSON, aj.EstimateSlots, time.Now(),
 	)
 	return err
 }
@@ -2302,14 +2481,14 @@ func (b *FilamentBridge) monitorPrusaLink(printerID string, config PrinterConfig
 		//      file. Attempt-limited per job in case the printer refuses file
 		//      reads while printing.
 		if len(aj.Usage) == 0 {
-			if usage := filamentUsageFromMeta(jobInfo.File.Meta); len(usage) > 0 {
-				aj.Usage = usage
+			if est := filamentUsageFromMeta(jobInfo.File.Meta); !est.Empty() {
+				aj.Usage, aj.EstimateSlots = est.Grams, est.Slots
 			} else if aj.Filename != "" && b.shouldScanForEstimate(printerID, aj.Filename) {
-				if usage, err := client.ScanGcodeFilamentUsage(aj.Filename, cfg.PrusaLinkFileDownloadTimeout); err != nil {
+				if est, err := client.ScanGcodeFilamentUsage(aj.Filename, cfg.PrusaLinkFileDownloadTimeout); err != nil {
 					log.Printf("Warning: could not scan %s for filament estimate (will retry): %v", aj.Filename, err)
-				} else if len(usage) > 0 {
-					aj.Usage = usage
-					log.Printf("Captured filament estimate for %s from file header: %v", config.Name, usage)
+				} else if !est.Empty() {
+					aj.Usage, aj.EstimateSlots = est.Grams, est.Slots
+					log.Printf("Captured filament estimate for %s from file header: %v", config.Name, est.Grams)
 				}
 				b.finishScanForEstimate(printerID)
 			}
@@ -2447,8 +2626,8 @@ func (b *FilamentBridge) handlePrintEnded(config PrinterConfig, prusaClient *Pru
 		// PrusaLink's notoriously low transfer speed.
 		log.Printf("No stored estimate for %s; scanning file header for filament usage: %s", printerName, filename)
 		scanned, scanErr := prusaClient.ScanGcodeFilamentUsage(filename, fileDownloadTimeout)
-		if scanErr == nil && len(scanned) > 0 {
-			usage = scanned
+		if scanErr == nil && !scanned.Empty() {
+			usage = scanned.Grams
 			source = "file header scan"
 		} else {
 			if scanErr != nil {
@@ -2466,7 +2645,7 @@ func (b *FilamentBridge) handlePrintEnded(config PrinterConfig, prusaClient *Pru
 				b.addPrintError(printerName, filename, errorMsg)
 				return fmt.Errorf("%s", errorMsg)
 			}
-			usage = parsed
+			usage = parsed.Grams
 			source = "G-code file"
 		}
 	}

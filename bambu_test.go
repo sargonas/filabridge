@@ -14,6 +14,7 @@ import (
 	"io"
 	"math/big"
 	"net"
+	"sort"
 	"strings"
 	"sync"
 	"testing"
@@ -873,6 +874,8 @@ func TestBambuJobName(t *testing.T) {
 // does, and answers PASV with the unroutable host 0.0.0.0 - the quirk that made
 // every sliced-file download fail with "dial tcp 0.0.0.0:<port>".
 type fakeBambuFTPS struct {
+	mu       sync.Mutex
+	retrs    int // downloads served, so a test can show the index avoids repeats
 	t        *testing.T
 	listener net.Listener
 	tlsConf  *tls.Config
@@ -901,6 +904,49 @@ func newFakeBambuFTPS(t *testing.T, files map[string][]byte) *fakeBambuFTPS {
 	t.Cleanup(func() { _ = ln.Close() })
 	go f.serve()
 	return f
+}
+
+// downloads reports how many files the fake has served.
+func (f *fakeBambuFTPS) downloads() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.retrs
+}
+
+// hasDir reports whether any served file sits in dir, since the fake has no
+// directory entries of its own.
+func (f *fakeBambuFTPS) hasDir(dir string) bool {
+	for name := range f.files {
+		if strings.HasPrefix(name, dir+"/") {
+			return true
+		}
+	}
+	return false
+}
+
+// listing renders the files directly inside dir the way vsFTPd does, which is
+// what the printer runs and what the ftp client parses.
+func (f *fakeBambuFTPS) listing(dir string) string {
+	var names []string
+	for name := range f.files {
+		parent := ""
+		if i := strings.LastIndex(name, "/"); i >= 0 {
+			parent = name[:i]
+		}
+		if parent == dir {
+			names = append(names, name)
+		}
+	}
+	sort.Strings(names)
+	var b strings.Builder
+	for _, name := range names {
+		base := name
+		if i := strings.LastIndex(name, "/"); i >= 0 {
+			base = name[i+1:]
+		}
+		fmt.Fprintf(&b, "-rwxr-xr-x    1 103      107  %11d Sep 11 17:41 %s\r\n", len(f.files[name]), base)
+	}
+	return b.String()
 }
 
 // fakeBambuFTPSHost is a loopback address distinct from 127.0.0.1; see
@@ -979,6 +1025,32 @@ func (f *fakeBambuFTPS) handle(conn net.Conn) {
 			// The quirk under test: the advertised host is 0.0.0.0, not the
 			// address the client is talking to.
 			write("227 Entering Passive Mode (0,0,0,0,%d,%d)", port/256, port%256)
+		case "LIST", "NLST":
+			if !protP {
+				write("522 data channel must be protected (PROT P)")
+				continue
+			}
+			dir := strings.Trim(strings.TrimSpace(arg), "/")
+			if dir != "" && !f.hasDir(dir) {
+				write("550 no such directory")
+				continue
+			}
+			if dataLn == nil {
+				write("425 no data connection")
+				continue
+			}
+			write("150 here comes the listing")
+			dc, err := dataLn.Accept()
+			if err != nil {
+				write("426 data connection failed")
+				continue
+			}
+			tc := tls.Server(dc, f.tlsConf)
+			_, _ = tc.Write([]byte(f.listing(dir)))
+			_ = tc.Close()
+			_ = dataLn.Close()
+			dataLn = nil
+			write("226 transfer complete")
 		case "RETR":
 			if !protP {
 				// Mirrors a real FTPS server: without PROT P the data channel
@@ -991,6 +1063,9 @@ func (f *fakeBambuFTPS) handle(conn net.Conn) {
 				write("550 no such file")
 				continue
 			}
+			f.mu.Lock()
+			f.retrs++ // only files actually served, not misses
+			f.mu.Unlock()
 			if dataLn == nil {
 				write("425 no data connection")
 				continue
@@ -1125,7 +1200,7 @@ func TestBambuX2DUsageFromProjectFile(t *testing.T) {
 		Mapping:     []int{0, bambuExternalSpool},
 	}
 
-	byFilament, err := bambuFilamentUsageFromFilePort(srv.host, srv.port(), "accesscode", job)
+	byFilament, err := bambuFilamentUsageFromFilePort(srv.host, srv.port(), "accesscode", job, newBambuFileIndex())
 	if err != nil {
 		t.Fatalf("project file not found from the job name: %v", err)
 	}

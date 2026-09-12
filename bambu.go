@@ -90,8 +90,9 @@ type bambuPrint struct {
 	// Parsed out of band by mergeLenient, never by the main decode. Bambu's
 	// field types vary by model and firmware, and a type mismatch in the main
 	// decode would reject the whole report, taking the printer's state with it.
-	PlateIdx int   `json:"-"` // plate being printed, 0 when not reported
-	Mapping  []int `json:"-"` // AMS tray (or bambuExternalSpool) per slicer filament
+	PlateIdx int            `json:"-"` // plate being printed, 0 when not reported
+	Mapping  []int          `json:"-"` // AMS tray (or bambuExternalSpool) per slicer filament
+	Sources  map[int]string `json:"-"` // mapping value -> material loaded there
 }
 
 // bambuExternalSpool is the value a job's mapping uses for a filament fed from
@@ -122,6 +123,11 @@ func (p *bambuPrint) mergeLenient(payload []byte) {
 			m = nil
 		}
 		p.Mapping = m
+	}
+	// Only a full report carries the filament blocks. A delta leaves the last
+	// answer standing, like every other field here.
+	if sources := parseBambuSources(payload); sources != nil {
+		p.Sources = sources
 	}
 }
 
@@ -566,55 +572,47 @@ func bambuJobID(filename string, startedAt time.Time) int {
 // bambuJobRef is what finding and attributing a job's filament usage needs from
 // the printer's report.
 type bambuJobRef struct {
-	GcodeFile   string // the project file on A1-class printers, an internal plate path on the X2D
-	SubtaskName string // job name, which names the project file on the X2D
-	PlateIdx    int    // 0 when not reported: use the first plate
-	Mapping     []int  // AMS tray per slicer filament, nil when not reported
+	GcodeFile   string         // the project file on A1-class printers, an internal plate path on the X2D
+	SubtaskName string         // the project's title, only ever a hint at the filename
+	PlateIdx    int            // 0 when not reported: use the first plate
+	Mapping     []int          // AMS tray per slicer filament, nil when not reported
+	Layers      int            // the plate's layer count, which identifies the file
+	Sources     map[int]string // mapping value -> material loaded there
 }
 
 func bambuJobRefFrom(p bambuPrint) bambuJobRef {
-	return bambuJobRef{GcodeFile: p.GcodeFile, SubtaskName: p.SubtaskName, PlateIdx: p.PlateIdx, Mapping: p.Mapping}
+	return bambuJobRef{
+		GcodeFile:   p.GcodeFile,
+		SubtaskName: p.SubtaskName,
+		PlateIdx:    p.PlateIdx,
+		Mapping:     p.Mapping,
+		Layers:      p.TotalLayerNum,
+		Sources:     p.Sources,
+	}
 }
 
-// bambuFilamentUsageFromFile downloads the sliced .3mf over FTPS and returns
-// slice_info.config's grams per slicer filament (1-based ids, not toolheads).
-func bambuFilamentUsageFromFile(ip, accessCode string, job bambuJobRef) (map[int]float64, error) {
-	return bambuFilamentUsageFromFilePort(ip, bambuFTPSPort, accessCode, job)
+// bambuFilamentUsageFromFile finds the sliced file this job is printing and
+// returns slice_info.config's grams per slicer filament (1-based ids, not
+// toolheads). bambu_files.go covers how the file is identified.
+func bambuFilamentUsageFromFile(ip, accessCode string, job bambuJobRef, idx *bambuFileIndex) (map[int]float64, error) {
+	return bambuFilamentUsageFromFilePort(ip, bambuFTPSPort, accessCode, job, idx)
 }
 
 // bambuFilamentUsageFromFilePort is bambuFilamentUsageFromFile against an
 // explicit port, so tests can point it at a fake printer.
-func bambuFilamentUsageFromFilePort(ip string, port int, accessCode string, job bambuJobRef) (map[int]float64, error) {
-	var lastErr error
-	for _, remote := range bambuSlicedFileCandidates(job.GcodeFile, job.SubtaskName) {
-		data, err := fetchBambuFilePort(ip, port, accessCode, remote)
-		if err != nil {
-			lastErr = err
-			continue
-		}
-		usage, err := parseSliceInfoUsage(data, job.PlateIdx)
-		if err != nil {
-			lastErr = err
-			continue
-		}
-		if len(usage) == 0 {
-			// File parsed but lists no filament with grams: keep looking, a
-			// same-named file at another path may be the real sliced one.
-			lastErr = fmt.Errorf("%s in %q lists no filament usage", sliceInfoPath, remote)
-			continue
-		}
-		return usage, nil
+func bambuFilamentUsageFromFilePort(ip string, port int, accessCode string, job bambuJobRef, idx *bambuFileIndex) (map[int]float64, error) {
+	file, err := bambuFindSlicedFile(ip, port, accessCode, job, idx)
+	if err != nil {
+		return nil, err
 	}
-	if lastErr == nil {
-		lastErr = fmt.Errorf("sliced file %q not found on printer", job.GcodeFile)
-	}
-	return nil, lastErr
+	log.Printf("Bambu: this print is %s (%d layers, grams %v)", file.Path, file.Layers, file.Usage)
+	return file.Usage, nil
 }
 
 // fetchBambuUsage downloads the sliced .3mf over FTPS and returns per-toolhead
 // filament grams from slice_info.config.
 func (b *FilamentBridge) fetchBambuUsage(config PrinterConfig, job bambuJobRef) (map[int]float64, error) {
-	byFilament, err := bambuFilamentUsageFromFile(config.IPAddress, config.APIKey, job)
+	byFilament, err := bambuFilamentUsageFromFile(config.IPAddress, config.APIKey, job, b.bambuFiles)
 	if err != nil {
 		return nil, err
 	}
@@ -1052,16 +1050,25 @@ func extractSliceInfoXML(threemf []byte) ([]byte, error) {
 // index (0 selects the sole plate). Keys are the filament IDs as they appear in
 // slice_info (1-based); the caller maps them to FilaBridge toolheads.
 func parseSliceInfoUsage(threemf []byte, plateIndex int) (map[int]float64, error) {
+	usage, _, err := parseSliceInfoPlate(threemf, plateIndex)
+	return usage, err
+}
+
+// parseSliceInfoPlate reads a plate's per-filament grams and the material each
+// filament was sliced for. The material is what tells two slices of one model
+// apart when they differ only by filament, which a filename cannot be trusted
+// to say.
+func parseSliceInfoPlate(threemf []byte, plateIndex int) (map[int]float64, map[int]string, error) {
 	xmlData, err := extractSliceInfoXML(threemf)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	var info bambuSliceInfo
 	if err := xml.Unmarshal(xmlData, &info); err != nil {
-		return nil, fmt.Errorf("parse slice_info: %w", err)
+		return nil, nil, fmt.Errorf("parse slice_info: %w", err)
 	}
 	if len(info.Plates) == 0 {
-		return nil, fmt.Errorf("no plates in slice_info")
+		return nil, nil, fmt.Errorf("no plates in slice_info")
 	}
 
 	plate := &info.Plates[0]
@@ -1080,6 +1087,7 @@ func parseSliceInfoUsage(threemf []byte, plateIndex int) (map[int]float64, error
 	}
 
 	usage := make(map[int]float64)
+	types := make(map[int]string)
 	for _, fil := range plate.Filaments {
 		id, err := strconv.Atoi(strings.TrimSpace(fil.ID))
 		if err != nil {
@@ -1090,8 +1098,9 @@ func parseSliceInfoUsage(threemf []byte, plateIndex int) (map[int]float64, error
 			continue // skip unused slots
 		}
 		usage[id] = grams
+		types[id] = strings.TrimSpace(fil.Type)
 	}
-	return usage, nil
+	return usage, types, nil
 }
 
 // bambuCaptureBytes bounds how much of a cached plate gcode the capture reads.
@@ -1382,7 +1391,7 @@ func runBambuWatch(ip, serial, code string, dur time.Duration) {
 				log.Printf("Bambu watch: TERMINAL %q at %d%% (completed=%v). Fetching final estimate for %q...", st, r.Print.McPercent, completed, lastFile)
 				job := bambuJobRefFrom(r.Print)
 				job.GcodeFile = lastFile
-				usage, err := bambuFilamentUsageFromFile(ip, code, job)
+				usage, err := bambuFilamentUsageFromFile(ip, code, job, newBambuFileIndex())
 				if err != nil {
 					log.Printf("Bambu watch: estimate fetch failed: %v", err)
 				} else {

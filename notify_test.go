@@ -439,6 +439,54 @@ func TestUnknownSlotWarnsEvenWhenToolheadIsMapped(t *testing.T) {
 	}
 }
 
+// TestPositionalEstimateNeverWarns covers issue #52: a Prusa XL slice that lists
+// one value per toolhead names the slot by position, even when only one of them
+// is non-zero. The zeroes are dropped on the way in, so the usage map alone
+// cannot tell that case apart from a single-filament slice that named nothing,
+// and the warning used to fire on a print whose toolhead was never in doubt.
+func TestPositionalEstimateNeverWarns(t *testing.T) {
+	printer := newFakePrusaLink(t)
+	spoolman := newFakeSpoolman(t)
+	spoolman.Spools[9] = &fakeSpool{ID: 9, Name: "Toolhead 1 spool", RemainingWeight: 900}
+	b := multiToolheadTestBridge(t, printer, spoolman, 5)
+	if err := b.SetToolheadMapping("TestPrinter", 1, 9); err != nil {
+		t.Fatal(err)
+	}
+	srv, ch := webhookCapture(t)
+	if err := b.SetConfigValue(ConfigKeyNotifyWebhookURL, srv.URL); err != nil {
+		t.Fatal(err)
+	}
+
+	printer.set(func(f *fakePrusaLink) {
+		f.State = "PRINTING"
+		f.JobID = 94
+		f.Filename = "xl_single_filament.bgcode"
+		f.FileBody = bgcodeFixture("0.00, 153.53, 0.00, 0.00, 0.00", 1024)
+	})
+	cycle(t, b)
+
+	if got := b.GetMappingWarnings(); len(got) != 0 {
+		t.Errorf("warned about a slot the slice named positionally: %+v", got)
+	}
+	select {
+	case p := <-ch:
+		t.Errorf("sent a notification for a positional estimate: %+v", p)
+	case <-time.After(300 * time.Millisecond):
+	}
+
+	// The estimate still lands on the toolhead the slicer named.
+	aj, err := b.getActiveJob("printer_test")
+	if err != nil || aj == nil {
+		t.Fatalf("active job: %v", err)
+	}
+	if len(aj.Usage) != 1 || aj.Usage[1] != 153.53 {
+		t.Errorf("usage = %v, want map[1:153.53]", aj.Usage)
+	}
+	if aj.EstimateSlots != 5 {
+		t.Errorf("stored slot count = %d, want 5 (it has to survive the round trip)", aj.EstimateSlots)
+	}
+}
+
 // TestSingleToolheadPrinterNeverWarnsOnUnknownSlot: with one toolhead there is
 // nowhere else the filament could have come from, so the attribution is always
 // right and saying anything would be noise.

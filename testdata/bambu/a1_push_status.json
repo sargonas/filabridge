@@ -1,0 +1,175 @@
+{
+  "print": {
+    "ams": {
+      "ams": [],
+      "ams_exist_bits": "0",
+      "insert_flag": true,
+      "power_on_flag": false,
+      "tray_exist_bits": "0",
+      "tray_is_bbl_bits": "0",
+      "tray_now": "254",
+      "tray_pre": "254",
+      "tray_read_done_bits": "0",
+      "tray_reading_bits": "0",
+      "tray_tar": "254",
+      "version": 5
+    },
+    "ams_rfid_status": 3,
+    "ams_status": 768,
+    "bed_target_temper": 65,
+    "bed_temper": 45.21875,
+    "big_fan1_speed": "0",
+    "big_fan2_speed": "0",
+    "cali_version": 1,
+    "chamber_temper": 5,
+    "command": "push_status",
+    "cooling_fan_speed": "0",
+    "fan_gear": 0,
+    "filam_bak": [],
+    "flag3": 221855,
+    "force_upgrade": false,
+    "gcode_file": "Benchy_Optimised_For_All_Filaments_.gcode.3mf",
+    "gcode_file_prepare_percent": "100",
+    "gcode_state": "RUNNING",
+    "heatbreak_fan_speed": "8",
+    "hms": [],
+    "home_flag": 847070611,
+    "hw_switch_state": 1,
+    "ipcam": {
+      "ipcam_dev": "1",
+      "ipcam_record": "disable",
+      "mode_bits": 3,
+      "resolution": "1080p",
+      "timelapse": "disable",
+      "tutk_server": "disable"
+    },
+    "k": "0.0200",
+    "layer_num": 0,
+    "lifecycle": "product",
+    "lights_report": [
+      {
+        "mode": "off",
+        "node": "chamber_light"
+      }
+    ],
+    "mc_percent": 0,
+    "mc_print_line_number": "0",
+    "mc_print_stage": "2",
+    "mc_print_sub_stage": 1,
+    "mc_remaining_time": 52,
+    "mess_production_state": "active",
+    "msg": 0,
+    "net": {
+      "conf": 16,
+      "info": [
+        {
+          "ip": 2449647808,
+          "mask": 16777215
+        },
+        {
+          "ip": 0,
+          "mask": 0
+        }
+      ]
+    },
+    "nozzle_diameter": "0.4",
+    "nozzle_target_temper": 140,
+    "nozzle_temper": 140.5625,
+    "nozzle_type": "hardened_steel",
+    "online": {
+      "ahb": false,
+      "rfid": false,
+      "version": 1442398095
+    },
+    "print_error": 0,
+    "print_type": "local",
+    "profile_id": "0",
+    "project_id": "0",
+    "queue_est": 0,
+    "queue_number": 0,
+    "queue_sts": 0,
+    "queue_total": 0,
+    "s_obj": [],
+    "sdcard": true,
+    "sequence_id": "2587",
+    "spd_lvl": 2,
+    "spd_mag": 100,
+    "stg": [
+      2,
+      13,
+      24,
+      4,
+      8,
+      3,
+      14,
+      1
+    ],
+    "stg_cur": 13,
+    "subtask_id": "0",
+    "subtask_name": "Benchy_Optimised_For_All_Filaments_",
+    "task_id": "0",
+    "total_layer_num": 240,
+    "upgrade_state": {
+      "consistency_request": false,
+      "cur_state_code": 1,
+      "dis_state": 0,
+      "err_code": 0,
+      "force_upgrade": false,
+      "idx2": 3331364663,
+      "mc_for_ams_firmware": {
+        "current_firmware_id": 1,
+        "current_run_firmware_id": 1,
+        "firmware": [
+          {
+            "id": 0,
+            "name": "AMS Lite"
+          },
+          {
+            "id": 1,
+            "name": "AMS/AMS 2 Pro/AMS HT"
+          }
+        ],
+        "status": "IDLE"
+      },
+      "message": "",
+      "module": "",
+      "new_ver_list": [],
+      "new_version_state": 0,
+      "progress": "",
+      "sequence_id": 0,
+      "status": "IDLE"
+    },
+    "upload": {
+      "message": "",
+      "progress": 0,
+      "status": "idle"
+    },
+    "vt_tray": {
+      "bed_temp": "0",
+      "bed_temp_type": "0",
+      "cali_idx": -1,
+      "id": "254",
+      "k": 0.019999999552965164,
+      "n": 1,
+      "nozzle_temp_max": "240",
+      "nozzle_temp_min": "190",
+      "remain": 0,
+      "tag_uid": "0000000000000000",
+      "tray_color": "5A657BFF",
+      "tray_diameter": "0.00",
+      "tray_id_name": "",
+      "tray_info_idx": "GFL99",
+      "tray_sub_brands": "",
+      "tray_temp": "0",
+      "tray_time": "0",
+      "tray_type": "PLA",
+      "tray_uuid": "00000000000000000000000000000000",
+      "tray_weight": "0",
+      "xcam_info": "000000000000000000000000"
+    },
+    "wifi_signal": "-61dBm",
+    "xcam": {
+      "buildplate_marker_detector": true
+    }
+  }
+}

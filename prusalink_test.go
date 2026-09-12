@@ -34,52 +34,66 @@ func TestParseGcodeFilamentUsage(t *testing.T) {
 	client := &PrusaLinkClient{}
 
 	cases := []struct {
-		name string
-		in   string
-		want map[int]float64
+		name  string
+		in    string
+		want  map[int]float64
+		slots int // how many slots the slicer listed, which names the toolhead
 	}{
-		{"bgcode style", "junk|filament used [g]=372.68|more", map[int]float64{0: 372.68}},
-		{"ascii style", "; filament used [g] = 1.23, 4.56\n", map[int]float64{0: 1.23, 1: 4.56}},
-		{"multi toolhead", "filament used [g]=1.0,0,3.5", map[int]float64{0: 1.0, 2: 3.5}}, // zero weights skipped
-		{"absent", "no metadata here", map[int]float64{}},
+		{"bgcode style", "junk|filament used [g]=372.68|more", map[int]float64{0: 372.68}, 1},
+		{"ascii style", "; filament used [g] = 1.23, 4.56\n", map[int]float64{0: 1.23, 1: 4.56}, 2},
+		{"multi toolhead", "filament used [g]=1.0,0,3.5", map[int]float64{0: 1.0, 2: 3.5}, 3}, // zero weights skipped
+		// The Prusa XL case from issue #52: one non-zero value among five, which
+		// names toolhead 1 positionally. The zeroes are dropped, so only the slot
+		// count still says the slot was named.
+		{"single filament of five", "filament used [g]=0.00, 153.53, 0.00, 0.00, 0.00", map[int]float64{1: 153.53}, 5},
+		{"absent", "no metadata here", map[int]float64{}, 0},
 	}
 	for _, c := range cases {
 		got, err := client.ParseGcodeFilamentUsage([]byte(c.in))
 		if err != nil {
 			t.Fatalf("%s: %v", c.name, err)
 		}
-		if len(got) != len(c.want) {
-			t.Fatalf("%s: got %v, want %v", c.name, got, c.want)
+		if len(got.Grams) != len(c.want) {
+			t.Fatalf("%s: got %v, want %v", c.name, got.Grams, c.want)
 		}
 		for k, v := range c.want {
-			if got[k] != v {
-				t.Errorf("%s: toolhead %d = %v, want %v", c.name, k, got[k], v)
+			if got.Grams[k] != v {
+				t.Errorf("%s: toolhead %d = %v, want %v", c.name, k, got.Grams[k], v)
 			}
+		}
+		if got.Slots != c.slots {
+			t.Errorf("%s: slots = %d, want %d", c.name, got.Slots, c.slots)
 		}
 	}
 }
 
 func TestFilamentUsageFromMeta(t *testing.T) {
 	cases := []struct {
-		name string
-		meta map[string]interface{}
-		want map[int]float64
+		name  string
+		meta  map[string]interface{}
+		want  map[int]float64
+		slots int
 	}{
-		{"nil meta", nil, map[int]float64{}},
-		{"string value", map[string]interface{}{"filament used [g]": "12.5,3.0"}, map[int]float64{0: 12.5, 1: 3.0}},
-		{"float value", map[string]interface{}{"filament used [g]": 9.75}, map[int]float64{0: 9.75}},
-		{"array value", map[string]interface{}{"filament used [g]": []interface{}{1.5, "2.5"}}, map[int]float64{0: 1.5, 1: 2.5}},
-		{"missing key", map[string]interface{}{"other": "x"}, map[int]float64{}},
+		{"nil meta", nil, map[int]float64{}, 0},
+		{"string value", map[string]interface{}{"filament used [g]": "12.5,3.0"}, map[int]float64{0: 12.5, 1: 3.0}, 2},
+		{"float value", map[string]interface{}{"filament used [g]": 9.75}, map[int]float64{0: 9.75}, 1},
+		{"array value", map[string]interface{}{"filament used [g]": []interface{}{1.5, "2.5"}}, map[int]float64{0: 1.5, 1: 2.5}, 2},
+		// Positional, even though four of the five entries are dropped.
+		{"single filament of five", map[string]interface{}{"filament used [g]": "0,153.53,0,0,0"}, map[int]float64{1: 153.53}, 5},
+		{"missing key", map[string]interface{}{"other": "x"}, map[int]float64{}, 0},
 	}
 	for _, c := range cases {
 		got := filamentUsageFromMeta(c.meta)
-		if len(got) != len(c.want) {
-			t.Fatalf("%s: got %v, want %v", c.name, got, c.want)
+		if len(got.Grams) != len(c.want) {
+			t.Fatalf("%s: got %v, want %v", c.name, got.Grams, c.want)
 		}
 		for k, v := range c.want {
-			if got[k] != v {
-				t.Errorf("%s: toolhead %d = %v, want %v", c.name, k, got[k], v)
+			if got.Grams[k] != v {
+				t.Errorf("%s: toolhead %d = %v, want %v", c.name, k, got.Grams[k], v)
 			}
+		}
+		if got.Slots != c.slots {
+			t.Errorf("%s: slots = %d, want %d", c.name, got.Slots, c.slots)
 		}
 	}
 }
@@ -119,8 +133,8 @@ func TestScanEarlyExitOnHugeFile(t *testing.T) {
 	if err != nil {
 		t.Fatalf("scan: %v", err)
 	}
-	if usage[0] != 372.68 {
-		t.Fatalf("got %v, want 372.68", usage)
+	if usage.Grams[0] != 372.68 {
+		t.Fatalf("got %v, want 372.68", usage.Grams)
 	}
 	if elapsed := time.Since(start); elapsed > 5*time.Second {
 		t.Fatalf("scanner did not exit early: took %v", elapsed)
@@ -137,8 +151,8 @@ func TestScanValuesAtEndOfFile(t *testing.T) {
 	if err != nil {
 		t.Fatalf("scan: %v", err)
 	}
-	if usage[0] != 5.25 {
-		t.Fatalf("got %v, want 5.25", usage)
+	if usage.Grams[0] != 5.25 {
+		t.Fatalf("got %v, want 5.25", usage.Grams)
 	}
 }
 
@@ -153,8 +167,8 @@ func TestScanChunkBoundarySafety(t *testing.T) {
 	if err != nil {
 		t.Fatalf("scan: %v", err)
 	}
-	if usage[0] != 372.68 {
-		t.Fatalf("got %v, want exactly 372.68 (boundary truncation?)", usage)
+	if usage.Grams[0] != 372.68 {
+		t.Fatalf("got %v, want exactly 372.68 (boundary truncation?)", usage.Grams)
 	}
 }
 
@@ -167,8 +181,8 @@ func TestScanGivesUpAtCap(t *testing.T) {
 	if err != nil {
 		t.Fatalf("scan: %v", err)
 	}
-	if len(usage) != 0 {
-		t.Fatalf("expected empty usage, got %v", usage)
+	if !usage.Empty() {
+		t.Fatalf("expected empty usage, got %v", usage.Grams)
 	}
 }
 
