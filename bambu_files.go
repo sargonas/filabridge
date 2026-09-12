@@ -21,7 +21,6 @@ package main
 import (
 	"archive/zip"
 	"bytes"
-	"encoding/json"
 	"fmt"
 	"io"
 	"log"
@@ -311,107 +310,39 @@ func retrBambuFile(conn *ftp.ServerConn, remote string) ([]byte, error) {
 	return io.ReadAll(r)
 }
 
+// parseBambuSources reads what is loaded where, as a lookup from a mapping value
+// to its material. nil when the report carries no filament blocks, which is how
+// a delta report leaves the previous answer standing.
+func parseBambuSources(payload []byte) map[int]string {
+	layout, _ := parseBambuLayout(payload)
+	if layout.Empty() {
+		return nil
+	}
+	return bambuSourceMaterials(layout)
+}
+
 // bambuSourceMaterials maps a mapping value to the material loaded there, so a
 // file sliced for PETG is not mistaken for the PLA slice of the same model. Both
 // the flat tray numbering of single-AMS printers and the unit<<8|slot form the
-// X2D uses are recorded, since only values the printer actually reports in
-// mapping are ever looked up. Externals are keyed by their slot id both bare and
-// shifted, covering vt_tray (A1) and vir_slot (X2D).
-func bambuSourceMaterials(units []bambuAMSUnit, externals []bambuExternalSlot) map[int]string {
+// X2D uses are recorded, since only values a printer actually reports are ever
+// looked up. Externals are keyed by their slot id both bare and shifted,
+// covering vt_tray (A1) and vir_slot (X2D).
+func bambuSourceMaterials(layout bambuLayout) map[int]string {
 	out := make(map[int]string)
 	set := func(key int, material string) {
 		if material != "" {
 			out[key] = material
 		}
 	}
-	for _, u := range units {
+	for _, u := range layout.Units {
 		for _, t := range u.Trays {
 			set(u.ID<<8|t.ID, t.Material)
 			set(u.ID*4+t.ID, t.Material)
 		}
 	}
-	for _, e := range externals {
+	for _, e := range layout.Externals {
 		set(e.ID, e.Material)
 		set(e.ID<<8, e.Material)
 	}
 	return out
-}
-
-// The printer's loaded filament, parsed leniently out of a full report: ids
-// arrive as strings, unloaded trays carry no material at all, and the blocks are
-// absent from the small delta reports A1-class printers send.
-type bambuTray struct {
-	ID       int
-	Material string
-}
-
-type bambuAMSUnit struct {
-	ID    int
-	Trays []bambuTray
-}
-
-type bambuExternalSlot struct {
-	ID       int
-	Material string
-}
-
-// parseBambuSources reads what is loaded where, as a lookup from a mapping value
-// to its material. It returns nil when the payload carries no filament blocks,
-// which is how a delta report leaves the previous answer standing.
-func parseBambuSources(payload []byte) map[int]string {
-	var raw struct {
-		Print struct {
-			AMS struct {
-				AMS []struct {
-					ID   lenientJSONInt `json:"id"`
-					Tray []struct {
-						ID   lenientJSONInt `json:"id"`
-						Type string         `json:"tray_type"`
-					} `json:"tray"`
-				} `json:"ams"`
-			} `json:"ams"`
-			VirSlot []struct {
-				ID   lenientJSONInt `json:"id"`
-				Type string         `json:"tray_type"`
-			} `json:"vir_slot"`
-			VTTray struct {
-				ID   lenientJSONInt `json:"id"`
-				Type string         `json:"tray_type"`
-			} `json:"vt_tray"`
-		} `json:"print"`
-	}
-	if json.Unmarshal(payload, &raw) != nil {
-		return nil
-	}
-
-	var units []bambuAMSUnit
-	for _, u := range raw.Print.AMS.AMS {
-		unit := bambuAMSUnit{ID: int(u.ID)}
-		for _, t := range u.Tray {
-			unit.Trays = append(unit.Trays, bambuTray{ID: int(t.ID), Material: t.Type})
-		}
-		units = append(units, unit)
-	}
-
-	var externals []bambuExternalSlot
-	for _, v := range raw.Print.VirSlot {
-		externals = append(externals, bambuExternalSlot{ID: int(v.ID), Material: v.Type})
-	}
-	if raw.Print.VTTray.ID != 0 || raw.Print.VTTray.Type != "" {
-		externals = append(externals, bambuExternalSlot{ID: int(raw.Print.VTTray.ID), Material: raw.Print.VTTray.Type})
-	}
-
-	if len(units) == 0 && len(externals) == 0 {
-		return nil
-	}
-	return bambuSourceMaterials(units, externals)
-}
-
-// lenientJSONInt accepts the number or the quoted number Bambu uses
-// interchangeably for the same field across models and firmware.
-type lenientJSONInt int
-
-func (n *lenientJSONInt) UnmarshalJSON(raw []byte) error {
-	*n = lenientJSONInt(lenientInt(raw))
-	return nil
 }
