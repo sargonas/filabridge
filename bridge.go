@@ -1358,6 +1358,11 @@ func (b *FilamentBridge) DeletePrinterConfig(printerID string) error {
 	if _, err := b.db.Exec("DELETE FROM toolhead_names WHERE printer_id = ?", printerID); err != nil {
 		log.Printf("Warning: failed to remove toolhead names for deleted printer %s: %v", printerID, err)
 	}
+	// Its filament positions go too. Nothing references them once the mappings
+	// and names above are gone, and a printer added later gets its own.
+	if _, err := b.db.Exec("DELETE FROM printer_positions WHERE printer_id = ?", printerID); err != nil {
+		log.Printf("Warning: failed to remove filament positions for deleted printer %s: %v", printerID, err)
+	}
 	return nil
 }
 

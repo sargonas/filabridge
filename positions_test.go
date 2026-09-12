@@ -193,6 +193,28 @@ func TestMappingWarningAcceptsSparsePositionIds(t *testing.T) {
 	}
 }
 
+// TestDeletingAPrinterTakesItsPositions: removing a printer leaves nothing of it
+// behind, so adding one later starts clean rather than inheriting places that
+// belonged to different hardware.
+func TestDeletingAPrinterTakesItsPositions(t *testing.T) {
+	printer := newFakePrusaLink(t)
+	spoolman := newFakeSpoolman(t)
+	b := newTestBridge(t, printer, spoolman)
+
+	if err := b.SavePrinterConfig("printer_gone", PrinterConfig{Name: "Retired", IPAddress: "127.0.0.1:2", APIKey: "k", Toolheads: 3}); err != nil {
+		t.Fatal(err)
+	}
+	if got := positionSummary(t, b, "printer_gone"); len(got) != 3 {
+		t.Fatalf("setup: positions = %v", got)
+	}
+	if err := b.DeletePrinterConfig("printer_gone"); err != nil {
+		t.Fatal(err)
+	}
+	if got := positionSummary(t, b, "printer_gone"); len(got) != 0 {
+		t.Errorf("deleted printer left positions behind: %v", got)
+	}
+}
+
 // TestAbsentPositionsStayPrinterLocations: a position the printer does not
 // currently have is still a printer location. Its label is on printed tags and
 // on spools in Spoolman, and if it read as ordinary storage a spool could record
