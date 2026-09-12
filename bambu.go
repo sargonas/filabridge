@@ -810,10 +810,7 @@ func (b *FilamentBridge) handleBambuPrintEnded(config PrinterConfig, active *act
 		// Carry the underlying reason into the dashboard banner: "no usage
 		// data" alone sends the user to the logs to learn whether the file
 		// was missing, the download failed, or the parse came up empty.
-		msg := "no filament usage data found (slice_info)"
-		if fetchErr != nil {
-			msg = fmt.Sprintf("%s: %v", msg, fetchErr)
-		}
+		msg := bambuMissingEstimateError(fetchErr)
 		b.addPrintError(printerName, filename, msg)
 		return fmt.Errorf("%s", msg)
 	}
@@ -840,6 +837,24 @@ func (b *FilamentBridge) handleBambuPrintEnded(config PrinterConfig, active *act
 	}
 	log.Printf("Recording Bambu filament usage for %s (%s): %+v", printerName, filename, usage)
 	return b.processFilamentUsage(printerName, usage, filename, printStarted, status)
+}
+
+// bambuMissingEstimateError explains a print that ended with no filament
+// estimate. The sliced file is the only place per-filament grams exist, so a
+// print whose file cannot be read is not recorded at all. The likeliest cause on
+// an X2-series printer is a print started from internal storage: FTPS serves
+// only the removable drive, and the report names no file, so there is nothing to
+// read. The dashboard already asks the user to update Spoolman by hand, so this
+// says why rather than what to do. The underlying error is carried along when
+// there is one, since "not found" and "the download failed" need different fixes.
+func bambuMissingEstimateError(fetchErr error) string {
+	msg := "could not read the sliced file for this print, so no filament was recorded. " +
+		"Prints started from the printer's internal storage cannot be tracked, " +
+		"send them to the removable drive instead"
+	if fetchErr != nil {
+		msg = fmt.Sprintf("%s (%v)", msg, fetchErr)
+	}
+	return msg
 }
 
 // bambuSliceInfo mirrors Metadata/slice_info.config inside a Bambu .3mf. Each

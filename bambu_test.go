@@ -217,6 +217,48 @@ func TestBambuAttributeUsage(t *testing.T) {
 	}
 }
 
+// TestBambuMappingIgnoresUnusedSlots: a project can carry more filament slots
+// than a print uses, and the printer marks the unused ones 65535. Only the slots
+// belonging to filaments that actually used grams decide anything, so those
+// placeholders must not push the whole job onto the positional fallback. Values
+// captured from a live X2D print of one filament from AMS tray 2.
+func TestBambuMappingIgnoresUnusedSlots(t *testing.T) {
+	usage, mapped := bambuAttributeUsage(map[int]float64{3: 11.4}, []int{65535, 65535, 2}, 5)
+	if !mapped {
+		t.Fatalf("unused 65535 slots rejected a usable mapping: %v", usage)
+	}
+	if len(usage) != 1 || usage[2] != 11.4 {
+		t.Fatalf("usage = %v, want map[2:11.4] (AMS tray 2)", usage)
+	}
+
+	// A filament that actually printed but whose own slot is 65535 has no known
+	// source, so the mapping cannot be trusted for this job.
+	if _, ok := bambuAttributeUsage(map[int]float64{1: 11.4}, []int{65535}, 5); ok {
+		t.Error("a used filament with no mapped source must not resolve")
+	}
+}
+
+// TestBambuMissingEstimateError: the dashboard banner has to explain why nothing
+// was recorded. The likeliest cause is a print started from internal storage,
+// which cannot be read at all, and the underlying error still has to survive for
+// the cases that are fixable.
+func TestBambuMissingEstimateError(t *testing.T) {
+	plain := bambuMissingEstimateError(nil)
+	for _, want := range []string{"could not read the sliced file", "internal storage", "removable drive"} {
+		if !strings.Contains(plain, want) {
+			t.Errorf("message %q does not mention %q", plain, want)
+		}
+	}
+	// The dashboard already tells the user to update Spoolman by hand.
+	if strings.Contains(strings.ToLower(plain), "update spoolman") {
+		t.Errorf("message repeats what the dashboard already says: %q", plain)
+	}
+	withErr := bambuMissingEstimateError(fmt.Errorf(`FTPS retrieve "x.3mf": 550`))
+	if !strings.Contains(withErr, "550") {
+		t.Errorf("underlying cause lost: %q", withErr)
+	}
+}
+
 // TestBambuReportLenientFields: plate_idx and mapping are read outside the main
 // decode, so a type Bambu never promised (a numeric string, a malformed mapping)
 // can never stop the printer's state from being read.
