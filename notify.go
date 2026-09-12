@@ -27,9 +27,12 @@ type NotificationPayload struct {
 	Timestamp time.Time `json:"timestamp"`
 
 	// low_filament
-	SpoolID          int     `json:"spool_id,omitempty"`
-	SpoolName        string  `json:"spool_name,omitempty"`
+	SpoolID   int    `json:"spool_id,omitempty"`
+	SpoolName string `json:"spool_name,omitempty"`
+	// ToolheadID stays for the consumers already reading it. PositionLabel is
+	// what the place is called ("AMS A Slot 3"), which a number cannot say.
 	ToolheadID       *int    `json:"toolhead_id,omitempty"`
+	PositionLabel    string  `json:"position_label,omitempty"`
 	RequiredWeightG  float64 `json:"required_weight_g,omitempty"`
 	RemainingWeightG float64 `json:"remaining_weight_g,omitempty"`
 	AutoPaused       bool    `json:"auto_paused,omitempty"`
@@ -52,11 +55,23 @@ func isActivePrintState(state string) bool {
 
 // lowFilamentPayload builds the notification for a low-filament warning, noting
 // when the print was auto-paused as a result.
+// positionPhrase names a place in a sentence. A numbered toolhead keeps the
+// wording it has always had, since these messages go to webhooks people have
+// already built around. Anywhere else reads better as its own name: "AMS A Slot
+// 3" says more than "toolhead 6".
+func positionPhrase(positionKey, label string, toolheadID int) string {
+	if label == "" || strings.HasPrefix(positionKey, positionKeyToolhead+":") || positionKey == "" {
+		return fmt.Sprintf("toolhead %d", toolheadID)
+	}
+	return label
+}
+
 func lowFilamentPayload(w RunoutWarning, at time.Time) NotificationPayload {
 	shortage := w.RequiredWeight - w.RemainingWeight
 	var msg strings.Builder
-	fmt.Fprintf(&msg, "Spool \"%s\" (ID %d) on %s toolhead %d is short by %.1fg: %.1fg remaining, print needs ~%.1fg.",
-		w.SpoolName, w.SpoolID, w.PrinterName, w.ToolheadID, shortage, w.RemainingWeight, w.RequiredWeight)
+	fmt.Fprintf(&msg, "Spool \"%s\" (ID %d) on %s %s is short by %.1fg: %.1fg remaining, print needs ~%.1fg.",
+		w.SpoolName, w.SpoolID, w.PrinterName, positionPhrase(w.PositionKey, w.PositionLabel, w.ToolheadID),
+		shortage, w.RemainingWeight, w.RequiredWeight)
 
 	title := fmt.Sprintf("Low filament on %s", w.PrinterName)
 	if w.AutoPaused {
@@ -74,6 +89,7 @@ func lowFilamentPayload(w RunoutWarning, at time.Time) NotificationPayload {
 		SpoolID:          w.SpoolID,
 		SpoolName:        w.SpoolName,
 		ToolheadID:       &toolheadID,
+		PositionLabel:    w.PositionLabel,
 		RequiredWeightG:  w.RequiredWeight,
 		RemainingWeightG: w.RemainingWeight,
 		AutoPaused:       w.AutoPaused,

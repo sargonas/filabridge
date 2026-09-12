@@ -108,6 +108,8 @@ type RunoutWarning struct {
 	PrinterID       string    `json:"printer_id"`
 	PrinterName     string    `json:"printer_name"`
 	ToolheadID      int       `json:"toolhead_id"`
+	PositionKey     string    `json:"position_key,omitempty"`   // what the place is: toolhead:1, ams:0:2
+	PositionLabel   string    `json:"position_label,omitempty"` // what it is called: "AMS A Slot 3"
 	SpoolID         int       `json:"spool_id"`
 	SpoolName       string    `json:"spool_name"`
 	JobID           int       `json:"job_id"`
@@ -927,11 +929,20 @@ func (b *FilamentBridge) checkRunoutWarnings(printerID string, config PrinterCon
 		}
 
 		id := fmt.Sprintf("runout_%s_%d_%d_%d", sanitizeErrorID(printerName), aj.JobID, toolheadID, time.Now().Unix())
+		positionKey, positionLabel := toolheadPositionKey(toolheadID), defaultToolheadLabel(toolheadID)
+		if p, ok := b.position(printerID, toolheadID); ok {
+			positionKey, positionLabel = p.Key, p.Label
+			if custom, err := b.GetToolheadName(printerID, toolheadID); err == nil && custom != "" {
+				positionLabel = custom
+			}
+		}
 		warning := RunoutWarning{
 			ID:              id,
 			PrinterID:       printerID,
 			PrinterName:     printerName,
 			ToolheadID:      toolheadID,
+			PositionKey:     positionKey,
+			PositionLabel:   positionLabel,
 			SpoolID:         spoolID,
 			SpoolName:       spool.Name,
 			JobID:           aj.JobID,

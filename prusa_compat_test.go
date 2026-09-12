@@ -124,6 +124,7 @@ func TestPrusaCompatGolden(t *testing.T) {
 	section("webhook payloads")
 	out.WriteString(goldenJSON(t, lowFilamentPayload(RunoutWarning{
 		ID: "runout_xl", PrinterID: "printer_xl", PrinterName: "XL", ToolheadID: 4,
+		PositionKey: toolheadPositionKey(4), PositionLabel: defaultToolheadLabel(4),
 		SpoolID: 14, SpoolName: "Spool 14", JobID: 9, RequiredWeight: 80, RemainingWeight: 20, AutoPaused: true,
 	}, at)))
 	out.WriteString(goldenJSON(t, mappingWarningPayload("XL", "part.bgcode", 2, 33.3, at)))

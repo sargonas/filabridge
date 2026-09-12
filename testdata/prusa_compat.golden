@@ -149,6 +149,7 @@ printer="XL" toolhead=4 spool=14 grams=12.50 job="part.bgcode" status="completed
   "auto_paused": true,
   "event": "low_filament",
   "message": "Spool \"Spool 14\" (ID 14) on XL toolhead 4 is short by 60.0g: 20.0g remaining, print needs ~80.0g. The print has been paused; swap the spool, then acknowledge the warning in FilaBridge (or resume at the printer).",
+  "position_label": "Toolhead 4",
   "printer": "XL",
   "remaining_weight_g": 20,
   "required_weight_g": 80,

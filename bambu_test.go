@@ -147,17 +147,6 @@ func TestBambuReportPartialMerge(t *testing.T) {
 	}
 }
 
-func TestBambuToToolheadUsage(t *testing.T) {
-	// slice_info filament ids are 1-based; toolheads are 0-based.
-	got := bambuToToolheadUsage(map[int]float64{1: 24.15, 3: 7.0})
-	if got[0] != 24.15 || got[2] != 7.0 {
-		t.Fatalf("1-based -> 0-based mapping wrong: %v", got)
-	}
-	if _, ok := got[1]; ok {
-		t.Errorf("filament id 1 should map to toolhead 0, not 1: %v", got)
-	}
-}
-
 // TestBambuSlicedFileCandidates: the A1 reports the project file as gcode_file,
 // so its lookup is unchanged. The X2D reports an internal plate path FTPS cannot
 // reach, so the file named after the job is tried first.
@@ -179,63 +168,6 @@ func TestBambuSlicedFileCandidates(t *testing.T) {
 		if fmt.Sprint(got) != fmt.Sprint(tc.want) {
 			t.Errorf("candidates(%q, %q) = %v, want %v", tc.gcodeFile, tc.subtask, got, tc.want)
 		}
-	}
-}
-
-// TestBambuAttributeUsage: the printer's AMS mapping places each filament when it
-// fits the configured toolheads, and anything it cannot place cleanly falls back
-// to the positional filament id - 1 every printer had before, so nothing that
-// worked regresses.
-func TestBambuAttributeUsage(t *testing.T) {
-	x2d := map[int]float64{1: 94.36, 2: 0.84}
-	cases := []struct {
-		name       string
-		byFilament map[int]float64
-		mapping    []int
-		toolheads  int
-		want       map[int]float64
-		mapped     bool
-	}{
-		{"X2D AMS slot 1 + external", x2d, []int{0, bambuExternalSpool}, 5, map[int]float64{0: 94.36, 4: 0.84}, true},
-		{"no mapping reported", x2d, nil, 5, map[int]float64{0: 94.36, 1: 0.84}, false},
-		// The A1 today: one toolhead, so AMS slot 3 must still land on toolhead 0.
-		{"single toolhead ignores the tray", map[int]float64{1: 12}, []int{2}, 1, map[int]float64{0: 12}, false},
-		{"two external spools are ambiguous", x2d, []int{bambuExternalSpool, bambuExternalSpool}, 6, map[int]float64{0: 94.36, 1: 0.84}, false},
-		{"tray collides with the external slot", map[int]float64{1: 10}, []int{4}, 5, map[int]float64{0: 10}, false},
-		{"mapping shorter than the filaments", x2d, []int{0}, 5, map[int]float64{0: 94.36, 1: 0.84}, false},
-		{"unknown source value", map[int]float64{1: 10}, []int{65535}, 5, map[int]float64{0: 10}, false},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			got, mapped := bambuAttributeUsage(tc.byFilament, tc.mapping, tc.toolheads)
-			if mapped != tc.mapped {
-				t.Errorf("mapped = %v, want %v", mapped, tc.mapped)
-			}
-			if fmt.Sprint(got) != fmt.Sprint(tc.want) {
-				t.Errorf("usage = %v, want %v", got, tc.want)
-			}
-		})
-	}
-}
-
-// TestBambuMappingIgnoresUnusedSlots: a project can carry more filament slots
-// than a print uses, and the printer marks the unused ones 65535. Only the slots
-// belonging to filaments that actually used grams decide anything, so those
-// placeholders must not push the whole job onto the positional fallback. Values
-// captured from a live X2D print of one filament from AMS tray 2.
-func TestBambuMappingIgnoresUnusedSlots(t *testing.T) {
-	usage, mapped := bambuAttributeUsage(map[int]float64{3: 11.4}, []int{65535, 65535, 2}, 5)
-	if !mapped {
-		t.Fatalf("unused 65535 slots rejected a usable mapping: %v", usage)
-	}
-	if len(usage) != 1 || usage[2] != 11.4 {
-		t.Fatalf("usage = %v, want map[2:11.4] (AMS tray 2)", usage)
-	}
-
-	// A filament that actually printed but whose own slot is 65535 has no known
-	// source, so the mapping cannot be trusted for this job.
-	if _, ok := bambuAttributeUsage(map[int]float64{1: 11.4}, []int{65535}, 5); ok {
-		t.Error("a used filament with no mapped source must not resolve")
 	}
 }
 
@@ -1188,16 +1120,18 @@ const x2dSliceInfo = `<?xml version="1.0" encoding="UTF-8"?>
 
 // TestBambuX2DUsageFromProjectFile runs the X2D case end to end against the fake
 // printer: gcode_file names an internal plate path FTPS cannot reach, the
-// project file sits at the root under the job's name, and the AMS mapping puts
-// the external spool on the last toolhead instead of toolhead 1.
+// project file sits at the root under the job's name, and the grams land on the
+// AMS slot and the external holder the printer says fed them.
 func TestBambuX2DUsageFromProjectFile(t *testing.T) {
 	const subtask = "Bambu_Lab_A1_A2_H2_X2D_P2S_Hotends_Box"
 	srv := newFakeBambuFTPS(t, map[string][]byte{subtask + ".gcode.3mf": makeThreeMF(t, x2dSliceInfo)})
+	layout, _ := parseBambuLayout([]byte(x2dLayoutReport(4, 1)))
 	job := bambuJobRef{
 		GcodeFile:   "/data/Metadata/plate_1.gcode",
 		SubtaskName: subtask,
 		PlateIdx:    1,
-		Mapping:     []int{0, bambuExternalSpool},
+		Mapping:     []int{0, bambuExternalSpoolValue},
+		Layout:      layout,
 	}
 
 	byFilament, err := bambuFilamentUsageFromFilePort(srv.host, srv.port(), "accesscode", job, newBambuFileIndex())
@@ -1208,9 +1142,21 @@ func TestBambuX2DUsageFromProjectFile(t *testing.T) {
 		t.Fatalf("per-filament grams = %v, want map[1:94.36 2:0.84]", byFilament)
 	}
 
-	usage, mapped := bambuAttributeUsage(byFilament, job.Mapping, 5)
-	if !mapped || len(usage) != 2 || usage[0] != 94.36 || usage[4] != 0.84 {
-		t.Fatalf("attributed usage = %v (mapped %v), want map[0:94.36 4:0.84]", usage, mapped)
+	// Positions as discovery would have allocated them for this layout.
+	positions := []filamentPosition{
+		{ID: 0, Key: "ams:0:0", Label: "AMS A Slot 1", Present: true},
+		{ID: 1, Key: "ams:0:1", Label: "AMS A Slot 2", Present: true},
+		{ID: 2, Key: "ams:0:2", Label: "AMS A Slot 3", Present: true},
+		{ID: 3, Key: "ams:0:3", Label: "AMS A Slot 4", Present: true},
+		{ID: 4, Key: "ext:254", Label: "External Left", Present: true},
+		{ID: 5, Key: "ext:255", Label: "External Right", Present: true},
+	}
+	usage, err := bambuAttributeByPosition(byFilament, job, positions)
+	if err != nil {
+		t.Fatalf("attribution failed: %v", err)
+	}
+	if len(usage) != 2 || usage[0] != 94.36 || usage[5] != 0.84 {
+		t.Fatalf("usage = %v, want AMS A Slot 1 (id 0) and External Right (id 5)", usage)
 	}
 }
 

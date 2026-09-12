@@ -146,9 +146,9 @@ func TestBambuFreshUploadUsesHint(t *testing.T) {
 		GcodeFile:   "/data/Metadata/plate_1.gcode",
 		SubtaskName: "Hotends_Box",
 		PlateIdx:    1,
-		Mapping:     []int{0, bambuExternalSpool},
+		Mapping:     []int{0, bambuExternalSpoolValue},
 		Layers:      125,
-		Sources:     map[int]string{0: "PLA", bambuExternalSpool: "PLA"},
+		Sources:     map[int]string{0: "PLA", bambuExternalSpoolValue: "PLA"},
 	}
 	file, err := bambuFindSlicedFile(srv.host, srv.port(), "accesscode", job, newBambuFileIndex())
 	if err != nil {
@@ -256,8 +256,8 @@ func TestParseBambuSources(t *testing.T) {
 		t.Errorf("AMS tray 2 = %q, want PETG (all: %v)", got[2], got)
 	}
 	// The external spool holder, reported as vir_slot 255 with black PLA.
-	if got[bambuExternalSpool] != "PLA" {
-		t.Errorf("external spool = %q, want PLA at %d", got[bambuExternalSpool], bambuExternalSpool)
+	if got[bambuExternalSpoolValue] != "PLA" {
+		t.Errorf("external spool = %q, want PLA at %d", got[bambuExternalSpoolValue], bambuExternalSpoolValue)
 	}
 	// A delta report carries no filament blocks, and must leave the last answer
 	// standing rather than clearing it.

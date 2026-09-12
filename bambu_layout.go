@@ -22,6 +22,10 @@ const (
 	bambuSlotUnused   = 65535 // a project filament slot this print does not use
 	bambuExternalMain = 255   // vir_slot 255, and vt_tray on single nozzle printers
 	bambuExternalAlt  = 254   // the second holder on a dual nozzle machine
+
+	// bambuExternalSpoolValue is how the main external holder appears in a
+	// mapping, being slot 255 in the unit<<8|slot form (0xFF00).
+	bambuExternalSpoolValue = bambuExternalMain << 8
 )
 
 // lenientJSONInt accepts the number or the quoted number Bambu uses

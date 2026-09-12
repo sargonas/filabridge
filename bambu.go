@@ -14,10 +14,9 @@ package main
 // tracks the in-flight job, records usage at print end, and drives the shared
 // low-filament warning path over MQTT print commands.
 //
-// Still incomplete: toolheads are a flat index, so the AMS mapping the printer
-// reports can only be placed where it fits the configured count (the external
-// spool holder is the last toolhead), and anything else falls back to the
-// slicer's filament order.
+// Filament lands on the position the printer says fed it: bambu_layout.go reads
+// what places the printer has, positions.go allocates them, and a source that
+// cannot be resolved is reported rather than guessed at.
 
 import (
 	"archive/zip"
@@ -91,13 +90,10 @@ type bambuPrint struct {
 	// field types vary by model and firmware, and a type mismatch in the main
 	// decode would reject the whole report, taking the printer's state with it.
 	PlateIdx int            `json:"-"` // plate being printed, 0 when not reported
-	Mapping  []int          `json:"-"` // AMS tray (or bambuExternalSpool) per slicer filament
+	Mapping  []int          `json:"-"` // source per slicer filament, decoded by decodeBambuSource
 	Sources  map[int]string `json:"-"` // mapping value -> material loaded there
+	TrayNow  int            `json:"-"` // the source currently feeding the printer
 }
-
-// bambuExternalSpool is the value a job's mapping uses for a filament fed from
-// the external spool holder rather than an AMS tray.
-const bambuExternalSpool = 65280
 
 // mergeLenient picks plate_idx and mapping out of a report. Like every other
 // field they are left alone when a report does not carry them. A value of an
@@ -109,10 +105,16 @@ func (p *bambuPrint) mergeLenient(payload []byte) {
 		Print struct {
 			PlateIdx json.RawMessage `json:"plate_idx"`
 			Mapping  json.RawMessage `json:"mapping"`
+			AMS      struct {
+				TrayNow json.RawMessage `json:"tray_now"`
+			} `json:"ams"`
 		} `json:"print"`
 	}
 	if json.Unmarshal(payload, &raw) != nil {
 		return
+	}
+	if len(raw.Print.AMS.TrayNow) > 0 {
+		p.TrayNow = lenientInt(raw.Print.AMS.TrayNow)
 	}
 	if len(raw.Print.PlateIdx) > 0 {
 		p.PlateIdx = lenientInt(raw.Print.PlateIdx)
@@ -513,70 +515,6 @@ func bambuDashboardState(state string) string {
 	}
 }
 
-// bambuToToolheadUsage converts slice_info's 1-based filament ids to
-// FilaBridge's 0-based toolhead numbering (external spool / AMS slot 1 -> 0).
-func bambuToToolheadUsage(byFilament map[int]float64) map[int]float64 {
-	out := make(map[int]float64, len(byFilament))
-	for id, grams := range byFilament {
-		toolhead := id - 1
-		if toolhead < 0 {
-			toolhead = 0
-		}
-		out[toolhead] = grams
-	}
-	return out
-}
-
-// bambuAttributeUsage turns slice_info's per-filament grams into per-toolhead
-// grams. When the printer reports which AMS tray each filament was loaded from,
-// that decides the toolhead: tray N is toolhead N, and the external spool holder
-// is the last configured toolhead. Anything the mapping cannot place cleanly
-// falls back to the positional filament id - 1 every printer got before the
-// mapping was read, so a printer the mapping does not fit behaves as it always
-// has. The second result reports whether the mapping was used.
-//
-// Interim: "external is the last toolhead" stands in for real filament position
-// identities, which replace the flat toolhead index entirely.
-func bambuAttributeUsage(byFilament map[int]float64, mapping []int, toolheads int) (map[int]float64, bool) {
-	if out, ok := bambuUsageByMapping(byFilament, mapping, toolheads); ok {
-		return out, true
-	}
-	return bambuToToolheadUsage(byFilament), false
-}
-
-// bambuUsageByMapping places each filament by its mapping entry, and refuses
-// (ok false) unless every filament lands on its own configured toolhead with the
-// AMS trays below the external slot. That rules out a single toolhead printer,
-// where there is nowhere else to put it, two external spools on a dual nozzle
-// machine, which the flat index cannot tell apart, and trays from a second AMS
-// beyond the configured count.
-func bambuUsageByMapping(byFilament map[int]float64, mapping []int, toolheads int) (map[int]float64, bool) {
-	if len(mapping) == 0 || toolheads <= 1 {
-		return nil, false
-	}
-	external := toolheads - 1
-	out := make(map[int]float64, len(byFilament))
-	for id, grams := range byFilament {
-		if id < 1 || id > len(mapping) {
-			return nil, false
-		}
-		var toolhead int
-		switch src := mapping[id-1]; {
-		case src == bambuExternalSpool:
-			toolhead = external
-		case src >= 0 && src < external:
-			toolhead = src
-		default:
-			return nil, false
-		}
-		if _, taken := out[toolhead]; taken {
-			return nil, false
-		}
-		out[toolhead] = grams
-	}
-	return out, true
-}
-
 // bambuJobID synthesizes a stable, non-zero job id for a Bambu print. Local
 // prints report task_id "0", so there is no natural id to dedupe on; filename +
 // print-start time uniquely identifies a print and stays stable for the life of
@@ -602,6 +540,8 @@ type bambuJobRef struct {
 	Mapping     []int          // AMS tray per slicer filament, nil when not reported
 	Layers      int            // the plate's layer count, which identifies the file
 	Sources     map[int]string // mapping value -> material loaded there
+	TrayNow     int            // the source currently feeding the printer
+	Layout      bambuLayout    // the places this printer says it has
 }
 
 func bambuJobRefFrom(p bambuPrint) bambuJobRef {
@@ -612,6 +552,7 @@ func bambuJobRefFrom(p bambuPrint) bambuJobRef {
 		Mapping:     p.Mapping,
 		Layers:      p.TotalLayerNum,
 		Sources:     p.Sources,
+		TrayNow:     p.TrayNow,
 	}
 }
 
@@ -635,16 +576,84 @@ func bambuFilamentUsageFromFilePort(ip string, port int, accessCode string, job 
 
 // fetchBambuUsage downloads the sliced .3mf over FTPS and returns per-toolhead
 // filament grams from slice_info.config.
-func (b *FilamentBridge) fetchBambuUsage(config PrinterConfig, job bambuJobRef) (map[int]float64, error) {
+func (b *FilamentBridge) fetchBambuUsage(printerID string, config PrinterConfig, job bambuJobRef) (map[int]float64, error) {
 	byFilament, err := bambuFilamentUsageFromFile(config.IPAddress, config.APIKey, job, b.bambuFiles)
 	if err != nil {
 		return nil, err
 	}
-	usage, mapped := bambuAttributeUsage(byFilament, job.Mapping, config.Toolheads)
-	if len(job.Mapping) > 0 && !mapped {
-		log.Printf("Bambu %s: AMS mapping %v does not fit %d configured toolhead(s), attributing filament by position instead", config.Name, job.Mapping, config.Toolheads)
+	positions, err := b.listPositions(printerID)
+	if err != nil {
+		return nil, err
+	}
+	usage, err := bambuAttributeByPosition(byFilament, job, positions)
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", config.Name, err)
 	}
 	return usage, nil
+}
+
+// bambuAttributeByPosition puts each filament's grams on the position the
+// printer says fed it. Nothing is guessed: a source that cannot be resolved to a
+// position is an error naming the grams at stake, because recording them
+// somewhere plausible is how a spool silently goes wrong.
+//
+// Two filaments can share one source (a colour used on two objects), in which
+// case their grams add up on that position.
+func bambuAttributeByPosition(byFilament map[int]float64, job bambuJobRef, positions []filamentPosition) (map[int]float64, error) {
+	idByKey := make(map[string]int, len(positions))
+	var present []filamentPosition
+	for _, p := range positions {
+		idByKey[p.Key] = p.ID
+		if p.Present {
+			present = append(present, p)
+		}
+	}
+
+	if len(job.Mapping) == 0 {
+		return bambuAttributeWithoutMapping(byFilament, job, idByKey, present)
+	}
+
+	usage := make(map[int]float64, len(byFilament))
+	for filament, grams := range byFilament {
+		if filament < 1 || filament > len(job.Mapping) {
+			return nil, fmt.Errorf("the printer said nothing about where filament %d came from, so its %.2fg was not recorded", filament, grams)
+		}
+		source := job.Mapping[filament-1]
+		key, ok := decodeBambuSource(source, job.Layout)
+		if !ok {
+			return nil, fmt.Errorf("filament %d came from a source this printer did not describe (%d), so its %.2fg was not recorded", filament, source, grams)
+		}
+		positionID, known := idByKey[key]
+		if !known {
+			return nil, fmt.Errorf("filament %d came from %s, which is not one of this printer's known positions, so its %.2fg was not recorded", filament, key, grams)
+		}
+		usage[positionID] += grams
+	}
+	return usage, nil
+}
+
+// bambuAttributeWithoutMapping handles printers that never report a mapping, as
+// an A1 does not. With one place to load filament there is nothing to decide.
+// Otherwise the tray the printer says is loaded answers a single-filament print,
+// and anything else is left to the user rather than guessed.
+func bambuAttributeWithoutMapping(byFilament map[int]float64, job bambuJobRef, idByKey map[string]int, present []filamentPosition) (map[int]float64, error) {
+	total := 0.0
+	for _, grams := range byFilament {
+		total += grams
+	}
+
+	if len(present) == 1 {
+		return map[int]float64{present[0].ID: total}, nil
+	}
+	if len(byFilament) == 1 && job.TrayNow != 0 {
+		if key, ok := decodeBambuSource(job.TrayNow, job.Layout); ok {
+			if positionID, known := idByKey[key]; known {
+				log.Printf("Bambu: this print reported no filament mapping, so its %.2fg is recorded against %s, the position the printer says is loaded", total, key)
+				return map[int]float64{positionID: total}, nil
+			}
+		}
+	}
+	return nil, fmt.Errorf("the printer reported no filament mapping and has %d places filament could have come from, so %.2fg was not recorded", len(present), total)
 }
 
 // monitorBambu monitors a single Bambu printer for one poll cycle. It mirrors
@@ -694,6 +703,7 @@ func (b *FilamentBridge) monitorBambu(printerID string, config PrinterConfig) er
 	// when that answer changed, since an X2D repeats its full state every few
 	// seconds.
 	b.syncBambuPositions(printerID, client)
+	layout, _ := client.layoutSnapshot()
 
 	active, err := b.getActiveJob(printerID)
 	if err != nil {
@@ -731,8 +741,13 @@ func (b *FilamentBridge) monitorBambu(printerID string, config PrinterConfig) er
 		}
 		// Capture the slicer estimate once, from the sliced .3mf over FTPS.
 		// Bounded retries so a missing/locked file doesn't hammer the printer.
-		if len(aj.Usage) == 0 && b.shouldScanForEstimate(printerID, currentFile) {
-			if usage, err := b.fetchBambuUsage(config, bambuJobRefFrom(p)); err != nil {
+		// Wait until the printer has said what places it has: without them there
+		// is nothing to attribute the filament to, and the attempt would only
+		// spend the scan budget.
+		if len(aj.Usage) == 0 && !layout.Empty() && b.shouldScanForEstimate(printerID, currentFile) {
+			job := bambuJobRefFrom(p)
+			job.Layout = layout
+			if usage, err := b.fetchBambuUsage(printerID, config, job); err != nil {
 				log.Printf("Warning: could not fetch Bambu filament estimate for %s (will retry): %v", config.Name, err)
 			} else if len(usage) > 0 {
 				aj.Usage = usage
@@ -822,8 +837,9 @@ func (b *FilamentBridge) handleBambuPrintEnded(config PrinterConfig, active *act
 				job = bambuJobRefFrom(r.Print)
 				job.GcodeFile = filename
 			}
+			job.Layout, _ = bc.layoutSnapshot()
 		}
-		if u, err := b.fetchBambuUsage(config, job); err != nil {
+		if u, err := b.fetchBambuUsage(active.PrinterID, config, job); err != nil {
 			fetchErr = err
 			log.Printf("Warning: end-of-print estimate fetch failed for %s: %v", printerName, err)
 		} else {
