@@ -694,7 +694,7 @@ function isDeveloperMode() {
 
 function apiUrl(path) {
     // The document base is supplied by the server. It is "/" for direct
-    // access and Home Assistant's generated prefix when served via Ingress.
+    // access and the mount path when served behind a path-prefixing reverse proxy.
     return new URL(path.replace(/^\/+/, ''), document.baseURI).toString();
 }
 
