@@ -60,9 +60,13 @@ type WebSocketMessage struct {
 	Printers         map[string]PrinterData             `json:"printers"`
 	Spools           []SpoolmanSpool                    `json:"spools"`
 	ToolheadMappings map[string]map[int]ToolheadMapping `json:"toolhead_mappings"`
-	PrintErrors      []PrintError                       `json:"print_errors,omitempty"`
-	RunoutWarnings   []RunoutWarning                    `json:"runout_warnings,omitempty"`
-	MappingWarnings  []MappingWarning                   `json:"mapping_warnings,omitempty"`
+	// Positions lets the page notice that a printer's filament positions have
+	// changed under it. The rows are rendered server-side, so a discovered AMS
+	// would otherwise stay invisible until the next reload.
+	Positions       map[string][]filamentPosition `json:"positions"`
+	PrintErrors     []PrintError                  `json:"print_errors,omitempty"`
+	RunoutWarnings  []RunoutWarning               `json:"runout_warnings,omitempty"`
+	MappingWarnings []MappingWarning              `json:"mapping_warnings,omitempty"`
 }
 
 // NewWebServer creates a new web server with Gin
@@ -264,6 +268,7 @@ func (ws *WebServer) BroadcastStatus() {
 		Printers:         status.Printers,
 		Spools:           spools,
 		ToolheadMappings: status.ToolheadMappings,
+		Positions:        status.Positions,
 		PrintErrors:      printErrors,
 		RunoutWarnings:   runoutWarnings,
 		MappingWarnings:  mappingWarnings,
@@ -577,11 +582,15 @@ func validatePrinterConfig(config PrinterConfig) error {
 	if config.IPAddress == "" {
 		return fmt.Errorf("address is required")
 	}
-	if config.Toolheads < 1 {
-		return fmt.Errorf("toolheads must be at least 1")
-	}
-	if config.Toolheads > 10 {
-		return fmt.Errorf("toolheads cannot exceed 10")
+	// A Bambu printer's filament positions come from what it reports, so there
+	// is no count to validate: an X1 with four AMS units has seventeen places.
+	if config.Type != PrinterTypeBambu {
+		if config.Toolheads < 1 {
+			return fmt.Errorf("toolheads must be at least 1")
+		}
+		if config.Toolheads > 10 {
+			return fmt.Errorf("toolheads cannot exceed 10")
+		}
 	}
 	switch config.Type {
 	case "", PrinterTypePrusaLink, PrinterTypeBambu:

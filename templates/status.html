@@ -99,7 +99,8 @@
                 </span>
             </div>
             
-            <p><strong>Toolheads:</strong> {{$printerConfig.Toolheads}}</p>
+            {{$positions := index $.Status.Positions $printerID}}
+            <p><strong>Filament positions:</strong> {{len $positions}}</p>
 
             <div class="mapping-section">
                 <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
@@ -112,7 +113,10 @@
                 <h4>Map Spools to Toolheads</h4>
                 <div style="margin-top: 15px;">
                     {{$mapping := index $.Status.ToolheadMappings $printerID}}
-                    {{range $position := index $.Status.Positions $printerID}}
+                    {{if not $positions}}
+                    <p class="muted">Waiting for {{$printerData.Name}} to report what filament positions it has. They appear here once it does.</p>
+                    {{end}}
+                    {{range $position := $positions}}
                     {{$toolheadID := $position.ID}}
                     {{$mappedSpool := index $mapping $toolheadID}}
                     {{$displayName := $position.Label}}
@@ -120,7 +124,7 @@
                         {{$displayName = $mappedSpool.DisplayName}}
                     {{end}}
                     <div class="toolhead-mapping-row" data-printer-id="{{$printerID}}" data-toolhead-id="{{$toolheadID}}">
-                        <div class="toolhead-label">{{$displayName}}:</div>
+                        <div class="toolhead-label">{{$displayName}}{{if not $position.Present}} (not on the printer){{end}}:</div>
                         <div class="custom-dropdown toolhead-dropdown">
                             <div class="dropdown-button">
                                 <div style="display: flex; align-items: center; gap: 10px;">

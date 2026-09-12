@@ -167,6 +167,13 @@ type bambuClient struct {
 	// so this is the one payload that carries the whole schema - AMS trays
 	// included - for diagnostics that need more than the parsed subset.
 	lastFull []byte
+
+	// layout is what the printer last said it is made of, and layoutSeq counts
+	// the times that answer changed. The monitor loop reconciles the printer's
+	// filament positions only when the count moves, rather than on every report:
+	// an X2D sends a full state push every few seconds.
+	layout    bambuLayout
+	layoutSeq uint64
 }
 
 func newBambuClient(ip, serial, accessCode string) *bambuClient {
@@ -291,6 +298,23 @@ func (bc *bambuClient) onMessage(_ mqtt.Client, msg mqtt.Message) {
 	if bytes.Contains(msg.Payload(), []byte(`"ams"`)) {
 		bc.lastFull = append([]byte(nil), msg.Payload()...)
 	}
+	// Only a complete push can say what the printer has. A delta says nothing
+	// about the layout, and must leave the last answer standing rather than
+	// reading as a printer that lost its AMS.
+	if layout, complete := parseBambuLayout(msg.Payload()); complete {
+		if bambuLayoutSignature(layout) != bambuLayoutSignature(bc.layout) {
+			bc.layout = layout
+			bc.layoutSeq++
+		}
+	}
+}
+
+// layoutSnapshot returns the printer's last known layout and the count of
+// changes, so a caller can tell whether it has already acted on this one.
+func (bc *bambuClient) layoutSnapshot() (bambuLayout, uint64) {
+	bc.mu.RLock()
+	defer bc.mu.RUnlock()
+	return bc.layout, bc.layoutSeq
 }
 
 // snapshot returns a copy of the cached report and whether any report has been
@@ -665,6 +689,11 @@ func (b *FilamentBridge) monitorBambu(printerID string, config PrinterConfig) er
 	currentFile := p.GcodeFile
 
 	b.cachePrinterStatus(printerID, bambuDashboardState(state), nil)
+
+	// Give the printer its filament positions from what it says it has. Only
+	// when that answer changed, since an X2D repeats its full state every few
+	// seconds.
+	b.syncBambuPositions(printerID, client)
 
 	active, err := b.getActiveJob(printerID)
 	if err != nil {

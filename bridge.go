@@ -39,6 +39,8 @@ type FilamentBridge struct {
 	bambuClients     map[string]*bambuClient // Persistent MQTT clients per Bambu printer (developer mode)
 	bambuMutex       sync.Mutex              // Guards bambuClients
 	bambuFiles       *bambuFileIndex         // What each file on a Bambu printer's drive contains
+	positionsMu      sync.Mutex              // Guards writes to printer_positions
+	bambuLayoutSeen  map[string]uint64       // Last layout change applied per printer
 	// prusaClients holds one long-lived PrusaLink client per printer so every
 	// caller shares a single pooled connection to that printer.
 	prusaClients map[string]*pooledPrusaClient
@@ -191,6 +193,7 @@ func NewFilamentBridge(config *Config) (*FilamentBridge, error) {
 		runoutChecked:    make(map[string]int),
 		bambuClients:     make(map[string]*bambuClient),
 		bambuFiles:       newBambuFileIndex(),
+		bambuLayoutSeen:  make(map[string]uint64),
 
 		prusaClients:       make(map[string]*pooledPrusaClient),
 		printerStatusCache: make(map[string]cachedPrinterStatus),
@@ -407,6 +410,11 @@ func (b *FilamentBridge) initDatabase() error {
 	// is safe to run on every start.
 	if err := b.reconcileAllPositions(); err != nil {
 		return fmt.Errorf("failed to set up filament positions: %w", err)
+	}
+	// One-way: a Bambu printer's old numbered toolheads stood in for AMS slots
+	// the user had to guess at, and the printer's own layout replaces them.
+	if err := b.reserveBambuToolheadPositions(); err != nil {
+		return fmt.Errorf("failed to reserve Bambu positions: %w", err)
 	}
 
 	return nil
@@ -1312,8 +1320,12 @@ func (b *FilamentBridge) SavePrinterConfig(printerID string, config PrinterConfi
 	// Keep the printer's positions in step with its toolhead count. Raising the
 	// count adds positions, lowering it marks the extras absent rather than
 	// deleting them, so their mappings and history keep meaning the same place if
-	// the count goes back up.
+	// the count goes back up. A Bambu printer has no count to follow: its
+	// positions are whatever it reports it has.
 	return b.migrateTx("reconcile filament positions", func(tx *sql.Tx) error {
+		if ptype == PrinterTypeBambu {
+			return reserveReferencedPositions(tx, printerID)
+		}
 		return reconcileToolheadPositions(tx, printerID, config.Toolheads)
 	})
 }

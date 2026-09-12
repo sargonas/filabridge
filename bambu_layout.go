@@ -13,6 +13,7 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 )
 
 // Sources the printer reports for a filament. The first two are the ids of the
@@ -217,6 +218,14 @@ func bambuLayoutPositions(layout bambuLayout) []string {
 		keys = append(keys, externalPositionKey(e.ID))
 	}
 	return keys
+}
+
+// bambuLayoutSignature is a comparable form of a layout, so a printer repeating
+// the same state every few seconds does not look like a change. Only what
+// decides positions is included: which places exist, and how many nozzles, which
+// is what names the external holders.
+func bambuLayoutSignature(layout bambuLayout) string {
+	return fmt.Sprintf("%d|%s", layout.Nozzles, strings.Join(bambuLayoutPositions(layout), ","))
 }
 
 // bambuPositionLabel names a position the way the user sees it on the printer.

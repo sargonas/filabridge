@@ -102,17 +102,40 @@ function updateDashboard(data) {
         updateSpoolData(data.spools);
     }
     
+    // A printer can tell us it has different filament positions than the page
+    // was rendered with, which happens the first time a Bambu printer reports
+    // its layout or when an AMS is plugged in. The rows come from the server, so
+    // the page has to be rebuilt to show them.
+    if (data.positions && positionsChanged(data.positions)) {
+        window.location.reload();
+        return;
+    }
+
     // Update toolhead mappings
     if (data.toolhead_mappings) {
         updateToolheadMappings(data.toolhead_mappings);
     }
-    
+
     // Update print errors
     updateRunoutWarnings(data.runout_warnings || []);
     updateMappingWarnings(data.mapping_warnings || []);
     if (data.print_errors) {
         updatePrintErrors(data.print_errors);
     }
+}
+
+// positionsChanged reports whether any printer's filament positions differ from
+// the rows this page was rendered with. Only printers the page actually shows
+// are compared, so a card that is not on screen never triggers a reload.
+function positionsChanged(positions) {
+    return Object.entries(positions).some(([printerId, printerPositions]) => {
+        const rows = document.querySelectorAll(`.toolhead-mapping-row[data-printer-id="${printerId}"]`);
+        const card = document.querySelector(`[data-printer-id="${printerId}"]`);
+        if (!card) return false;
+        const rendered = Array.from(rows).map(row => row.getAttribute('data-toolhead-id')).sort();
+        const reported = (printerPositions || []).map(p => String(p.id)).sort();
+        return rendered.join(',') !== reported.join(',');
+    });
 }
 
 function updatePrinterStatuses(printers) {
