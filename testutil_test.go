@@ -108,11 +108,14 @@ type fakeSpoolman struct {
 	mu     sync.Mutex
 	Spools map[int]*fakeSpool
 
-	PatchCalls []int    // spool IDs that received usage updates
-	Locations  []string // locations returned by /api/v1/location (the distinct strings spools carry)
+	PatchCalls      []int       // spool IDs that received usage updates
+	Locations       []string    // locations returned by /api/v1/location (the distinct strings spools carry)
+	FieldRenames    [][2]string // {value, new_value} of each PATCH /api/v1/spool/field/location
+	NoFieldEndpoint bool        // simulate pre-v0.26: /api/v1/spool/field/location 404s
 	// SPAFallback makes unrecognised paths answer 200 with the web UI's HTML,
 	// the way real Spoolman does, instead of 404. Opt-in, so tests that rely on
-	// a clean 404 for a genuinely missing endpoint keep working.
+	// a clean 404 for a genuinely missing endpoint keep working — including
+	// NoFieldEndpoint above, which needs that 404 to reach the version check.
 	SPAFallback bool
 
 	srv *httptest.Server
@@ -171,6 +174,31 @@ func (f *fakeSpoolman) handle(w http.ResponseWriter, r *http.Request) {
 		}
 		w.WriteHeader(http.StatusNotFound)
 		fmt.Fprint(w, `{"detail":"no such spool"}`)
+
+	// Bulk field rename (Spoolman v0.26+): rewrites `location` on every spool
+	// carrying `value`. Must precede the /api/v1/spool/{id} PATCH case below,
+	// which would otherwise swallow this path.
+	case r.URL.Path == "/api/v1/spool/field/location" && r.Method == http.MethodPatch:
+		if f.NoFieldEndpoint {
+			// Pre-v0.26 Spoolman: the route does not exist.
+			w.WriteHeader(http.StatusNotFound)
+			fmt.Fprint(w, `{"detail":"Not Found"}`)
+			return
+		}
+		var body struct {
+			Value    string `json:"value"`
+			NewValue string `json:"new_value"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		f.FieldRenames = append(f.FieldRenames, [2]string{body.Value, body.NewValue})
+		updated := 0
+		for _, sp := range f.Spools {
+			if sp.Location == body.Value {
+				sp.Location = body.NewValue
+				updated++
+			}
+		}
+		writeJSON(w, map[string]int{"spools_updated": updated})
 
 	case strings.HasPrefix(r.URL.Path, "/api/v1/spool/") && r.Method == http.MethodPatch:
 		id := spoolIDFromPath(r.URL.Path)
