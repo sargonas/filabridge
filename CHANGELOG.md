@@ -5,6 +5,26 @@ All notable changes to FilaBridge will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v1.4.1] - 2026-09-12
+
+### Changed
+
+- use generic names in base path fixtures
+
+### Other
+
+- Merge branch 'main' of https://github.com/sargonas/filabridge
+- bugfix: delete a printer's filament positions along with it
+- Merge pull request #53 from nebhale/nebhale/ha-cleanup
+- help attribute filament to the position a bambu printer identifies
+- discover a Bambu printer's filament positions from the printer
+- read a Bambu printer's filament layout and decode its sources
+- Phase 2 of Bambu refactoring. Printers are now tracked as filament positions, not toolheads
+- further bambu enhancements from x2d learnings
+- clearer banner when a Bambu print's sliced file can't be read
+- initial x2d with ams support fixes
+- added ignore filter for Bambu calibrations, as they execute gcode that looks like a print
+
 ## [v1.4.0] - 2026-09-09
 
 ### Other
