@@ -730,6 +730,12 @@ func (b *FilamentBridge) monitorBambu(printerID string, config PrinterConfig) er
 			aj.Usage = active.Usage
 		}
 		aj.Filename = currentFile
+		// What the printer calls the job, which on an X2D is the only readable
+		// name there is: its gcode_file is the same internal path for every print.
+		aj.JobName = p.SubtaskName
+		if aj.JobName == "" && active != nil && active.JobID == aj.JobID {
+			aj.JobName = active.JobName
+		}
 		if aj.JobID == 0 {
 			aj.JobID = bambuJobID(currentFile, aj.StartedAt)
 		}
@@ -824,6 +830,12 @@ func (b *FilamentBridge) monitorBambu(printerID string, config PrinterConfig) er
 func (b *FilamentBridge) handleBambuPrintEnded(config PrinterConfig, active *activeJob, usageScale float64, completed bool) error {
 	printerName := resolvePrinterName(config)
 	filename := active.Filename
+	// History and banners show the job's name, not the file's path, which on an
+	// X2D is an internal path every print shares.
+	displayName := active.JobName
+	if displayName == "" {
+		displayName = filename
+	}
 
 	usage := active.Usage
 	var fetchErr error
@@ -854,7 +866,7 @@ func (b *FilamentBridge) handleBambuPrintEnded(config PrinterConfig, active *act
 		// data" alone sends the user to the logs to learn whether the file
 		// was missing, the download failed, or the parse came up empty.
 		msg := bambuMissingEstimateError(fetchErr)
-		b.addPrintError(printerName, filename, msg)
+		b.addPrintError(printerName, displayName, msg)
 		return fmt.Errorf("%s", msg)
 	}
 
@@ -878,8 +890,8 @@ func (b *FilamentBridge) handleBambuPrintEnded(config PrinterConfig, active *act
 	if !completed {
 		status = "cancelled"
 	}
-	log.Printf("Recording Bambu filament usage for %s (%s): %+v", printerName, filename, usage)
-	return b.processFilamentUsage(printerName, usage, filename, printStarted, status)
+	log.Printf("Recording Bambu filament usage for %s (%s, file %s): %+v", printerName, displayName, filename, usage)
+	return b.processFilamentUsage(printerName, usage, displayName, printStarted, status)
 }
 
 // bambuMissingEstimateError explains a print that ended with no filament

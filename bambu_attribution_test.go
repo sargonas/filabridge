@@ -142,6 +142,56 @@ func TestAttributionWithoutMapping(t *testing.T) {
 	}
 }
 
+// TestBambuHistoryUsesTheJobName: an X2D reports the same internal path as
+// gcode_file for every print, so history recorded under the filename reads as
+// one job repeated forever. It is recorded under the name the printer gives the
+// job instead, and falls back to the filename only when the printer names none.
+func TestBambuHistoryUsesTheJobName(t *testing.T) {
+	printer := newFakePrusaLink(t)
+	spoolman := newFakeSpoolman(t)
+	spoolman.Spools[23] = &fakeSpool{ID: 23, Name: "ASA", RemainingWeight: 900}
+	b := newTestBridge(t, printer, spoolman)
+	config, _ := bambuTestPrinter(t, b, bambuStateFinish, "")
+	if err := b.SetToolheadMapping("X1C", 0, 23); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, tc := range []struct {
+		jobID   int
+		jobName string
+		want    string
+	}{
+		{101, "ASA_swatch.stl", "ASA_swatch.stl"},
+		{102, "", "/data/Metadata/plate_1.gcode"},
+	} {
+		active := &activeJob{
+			PrinterID: "printer_bambu", JobID: tc.jobID,
+			Filename: "/data/Metadata/plate_1.gcode", JobName: tc.jobName,
+			StartedAt: testTime(), LastProgress: 1, Usage: map[int]float64{0: 6.02},
+		}
+
+		// The name has to survive being stored mid-print and read back at the end.
+		if err := b.upsertActiveJob(active); err != nil {
+			t.Fatal(err)
+		}
+		stored, err := b.getActiveJob("printer_bambu")
+		if err != nil || stored == nil || stored.JobName != tc.jobName {
+			t.Fatalf("stored job name = %+v (%v), want %q", stored, err, tc.jobName)
+		}
+
+		if err := b.handleBambuPrintEnded(config, stored, 1, true); err != nil {
+			t.Fatalf("recording job %d: %v", tc.jobID, err)
+		}
+		history, err := b.GetPrintHistory(1)
+		if err != nil || len(history) == 0 {
+			t.Fatalf("no history row for job %d: %v", tc.jobID, err)
+		}
+		if history[0].JobName != tc.want {
+			t.Errorf("history job name = %q, want %q", history[0].JobName, tc.want)
+		}
+	}
+}
+
 // TestRunoutNotificationNamesThePosition: webhook consumers keep the toolhead_id
 // they already read, and a numbered toolhead keeps its exact wording. A place
 // with a name of its own says that instead, since "toolhead 5" means nothing on

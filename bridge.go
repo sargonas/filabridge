@@ -318,6 +318,7 @@ func (b *FilamentBridge) initDatabase() error {
 			started_at TIMESTAMP NOT NULL,
 			usage_json TEXT NOT NULL DEFAULT '',
 			estimate_slots INTEGER NOT NULL DEFAULT 0,
+			job_name TEXT NOT NULL DEFAULT '',
 			updated_at TIMESTAMP NOT NULL
 		)`,
 		// recorded_jobs is an idempotency ledger: a (printer_id, job_id) pair is
@@ -377,6 +378,10 @@ func (b *FilamentBridge) initDatabase() error {
 	if _, err := b.db.Exec(`ALTER TABLE active_jobs ADD COLUMN estimate_slots INTEGER NOT NULL DEFAULT 0`); err != nil &&
 		!strings.Contains(err.Error(), "duplicate column") {
 		return fmt.Errorf("failed to add estimate_slots column: %w", err)
+	}
+	if _, err := b.db.Exec(`ALTER TABLE active_jobs ADD COLUMN job_name TEXT NOT NULL DEFAULT ''`); err != nil &&
+		!strings.Contains(err.Error(), "duplicate column") {
+		return fmt.Errorf("failed to add job_name column: %w", err)
 	}
 
 	// History records what a position was called when the print ran, so old rows
@@ -2233,9 +2238,14 @@ func (b *FilamentBridge) monitorPrinter(printerID string, config PrinterConfig) 
 
 // activeJob is the persisted in-flight print for a single printer.
 type activeJob struct {
-	PrinterID    string
-	JobID        int
-	Filename     string
+	PrinterID string
+	JobID     int
+	Filename  string
+	// JobName is what the printer calls the job, for history and banners. Kept
+	// apart from Filename, which identifies the job and locates its file: on an
+	// X2D that path is an internal one shared by every print. Empty when the
+	// printer reports no name, in which case Filename stands in.
+	JobName      string
 	LastProgress float64         // highest progress fraction (0..1) seen while printing
 	StartedAt    time.Time       // when the job was first seen printing
 	Usage        map[int]float64 // full slicer filament estimate (g) per toolhead, from file.meta
@@ -2252,9 +2262,9 @@ func (b *FilamentBridge) getActiveJob(printerID string) (*activeJob, error) {
 		usageJSON string
 	)
 	err := b.db.QueryRow(
-		`SELECT printer_id, job_id, filename, last_progress, started_at, usage_json, estimate_slots FROM active_jobs WHERE printer_id = ?`,
+		`SELECT printer_id, job_id, filename, last_progress, started_at, usage_json, estimate_slots, job_name FROM active_jobs WHERE printer_id = ?`,
 		printerID,
-	).Scan(&aj.PrinterID, &aj.JobID, &aj.Filename, &aj.LastProgress, &aj.StartedAt, &usageJSON, &aj.EstimateSlots)
+	).Scan(&aj.PrinterID, &aj.JobID, &aj.Filename, &aj.LastProgress, &aj.StartedAt, &usageJSON, &aj.EstimateSlots, &aj.JobName)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -2290,13 +2300,13 @@ func (b *FilamentBridge) upsertActiveJob(aj *activeJob) error {
 		}
 	}
 	_, err := b.db.Exec(
-		`INSERT INTO active_jobs (printer_id, job_id, filename, last_progress, started_at, usage_json, estimate_slots, updated_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+		`INSERT INTO active_jobs (printer_id, job_id, filename, last_progress, started_at, usage_json, estimate_slots, job_name, updated_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
 		 ON CONFLICT(printer_id) DO UPDATE SET
 		     job_id=excluded.job_id, filename=excluded.filename, last_progress=excluded.last_progress,
 		     started_at=excluded.started_at, usage_json=excluded.usage_json,
-		     estimate_slots=excluded.estimate_slots, updated_at=excluded.updated_at`,
-		aj.PrinterID, aj.JobID, aj.Filename, aj.LastProgress, aj.StartedAt, usageJSON, aj.EstimateSlots, time.Now(),
+		     estimate_slots=excluded.estimate_slots, job_name=excluded.job_name, updated_at=excluded.updated_at`,
+		aj.PrinterID, aj.JobID, aj.Filename, aj.LastProgress, aj.StartedAt, usageJSON, aj.EstimateSlots, aj.JobName, time.Now(),
 	)
 	return err
 }
