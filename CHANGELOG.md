@@ -5,6 +5,15 @@ All notable changes to FilaBridge will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v1.4.2] - 2026-09-13
+
+### Other
+
+- ci fix
+- record Bambu prints under the job's name anytime the file path is generic
+- Merge branch 'main' of https://github.com/sargonas/filabridge
+- hide emptied absent positions, and delete positions with their printer when upgrading to new bambu methods
+
 ## [v1.4.1] - 2026-09-12
 
 ### Changed
