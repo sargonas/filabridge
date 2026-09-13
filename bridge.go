@@ -49,6 +49,9 @@ type FilamentBridge struct {
 	// the monitor just fetched instead of polling the printer again.
 	printerStatusCache map[string]cachedPrinterStatus
 	statusCacheMutex   sync.RWMutex // Guards printerStatusCache
+	// background tracks work started without waiting for it, such as webhook
+	// notifications, so Close can let it finish before the database goes away.
+	background sync.WaitGroup
 }
 
 // pooledPrusaClient is a cached client plus the fingerprint of the settings it
@@ -964,7 +967,7 @@ func (b *FilamentBridge) checkRunoutWarnings(printerID string, config PrinterCon
 			printerName, toolheadID, spoolID, spool.Name, spool.RemainingWeight, needed)
 
 		// Push an external notification (no-op unless a webhook is configured).
-		go b.sendNotification(lowFilamentPayload(warning, time.Now()))
+		b.notifyInBackground(lowFilamentPayload(warning, time.Now()))
 	}
 }
 
@@ -1052,7 +1055,7 @@ func (b *FilamentBridge) checkMappingWarnings(printerID string, config PrinterCo
 		log.Printf("Print on %s used a single filament, so its ~%.1fg is attributed to toolhead %d; confirm that is the toolhead it is printing from",
 			printerName, grams, toolheadID)
 
-		go b.sendNotification(mappingWarningPayload(printerName, aj.Filename, toolheadID, grams, time.Now()))
+		b.notifyInBackground(mappingWarningPayload(printerName, aj.Filename, toolheadID, grams, time.Now()))
 	}
 }
 
@@ -2373,7 +2376,7 @@ func (b *FilamentBridge) noteConnectivity(printerID, ipAddress, name string, err
 			// going offline while idle/finished is a normal power-off. The last
 			// observed state is held under this same lock by noteStateChange.
 			if isActivePrintState(b.printerStates[printerID]) {
-				go b.sendNotification(printerOfflinePayload(name, b.printerStates[printerID], time.Now()))
+				b.notifyInBackground(printerOfflinePayload(name, b.printerStates[printerID], time.Now()))
 			}
 		}
 		return
@@ -3129,6 +3132,10 @@ func (b *FilamentBridge) processFilamentUsage(printerName string, filamentUsage 
 
 // Close closes the database connection
 func (b *FilamentBridge) Close() error {
+	// Let background sends finish first: each reads its settings from the
+	// database, which is about to close. They are bounded by the webhook
+	// timeout, and return at once when no webhook is configured.
+	b.background.Wait()
 	// Hand the printers their sockets back before going away.
 	b.ClosePrusaClients()
 	b.CloseBambuClients()

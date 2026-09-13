@@ -131,10 +131,21 @@ func mappingWarningPayload(printerName, filename string, toolheadID int, grams f
 	}
 }
 
+// notifyInBackground sends a notification without holding up the caller, and
+// registers the send so Close waits for it. An untracked send can still be
+// reading the webhook setting from the database while it closes.
+func (b *FilamentBridge) notifyInBackground(p NotificationPayload) {
+	b.background.Add(1)
+	go func() {
+		defer b.background.Done()
+		b.sendNotification(p)
+	}()
+}
+
 // sendNotification POSTs the payload to the configured webhook URL. It no-ops
 // when no URL is configured, and is best-effort: delivery failures are logged,
-// never propagated. Callers invoke it from a goroutine so a slow endpoint never
-// blocks the monitoring loop.
+// never propagated. Callers go through notifyInBackground so a slow endpoint
+// never blocks the monitoring loop.
 func (b *FilamentBridge) sendNotification(p NotificationPayload) {
 	url, err := b.GetConfigValue(ConfigKeyNotifyWebhookURL)
 	if err != nil || strings.TrimSpace(url) == "" {
