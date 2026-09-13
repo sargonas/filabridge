@@ -3024,7 +3024,17 @@ func (b *FilamentBridge) GetStatus() (*PrinterStatus, error) {
 		if err != nil {
 			log.Printf("Warning: could not read positions for %s: %v", printerName, err)
 		}
-		status.Positions[printerID] = positions
+		// The dashboard shows a position the printer has, or one it no longer has
+		// that still holds a spool, so the spool can be unmapped. Once emptied, an
+		// absent position has nothing left to show and drops out of view. It stays
+		// in the database, since history and printed tags may still refer to it.
+		var visible []filamentPosition
+		for _, position := range positions {
+			if position.Present || mappings[position.ID].SpoolID != 0 {
+				visible = append(visible, position)
+			}
+		}
+		status.Positions[printerID] = visible
 		for _, position := range positions {
 			toolheadID := position.ID
 			// Get display name (custom, or the position's own label)

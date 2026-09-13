@@ -123,7 +123,7 @@
                     {{if $mappedSpool.DisplayName}}
                         {{$displayName = $mappedSpool.DisplayName}}
                     {{end}}
-                    <div class="toolhead-mapping-row" data-printer-id="{{$printerID}}" data-toolhead-id="{{$toolheadID}}">
+                    <div class="toolhead-mapping-row" data-printer-id="{{$printerID}}" data-toolhead-id="{{$toolheadID}}"{{if not $position.Present}} data-absent="true"{{end}}>
                         <div class="toolhead-label">{{$displayName}}{{if not $position.Present}} (not on the printer){{end}}:</div>
                         <div class="custom-dropdown toolhead-dropdown">
                             <div class="dropdown-button">

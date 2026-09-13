@@ -220,6 +220,70 @@ func TestDiscoveryIsSafeConcurrently(t *testing.T) {
 	}
 }
 
+// TestDashboardHidesEmptiedAbsentPositions: a position the printer no longer
+// has stays on the dashboard only while a spool is still mapped to it, so that
+// spool can be unmapped. Once emptied it has nothing left to show and drops out
+// of view, while staying in the database for history and printed tags.
+func TestDashboardHidesEmptiedAbsentPositions(t *testing.T) {
+	b, config, bc := bambuDiscoveryBridge(t)
+
+	// Two reserved positions from before discovery, one still holding a spool.
+	if err := b.migrateTx("seed legacy positions", func(tx *sql.Tx) error {
+		for _, id := range []int{0, 4} {
+			if _, err := tx.Exec(`INSERT INTO printer_positions (printer_id, position_id, position_key, label, present) VALUES (?, ?, ?, ?, 0)`,
+				"printer_bambu", id, fmt.Sprintf("legacy:%d", id), defaultToolheadLabel(id)); err != nil {
+				return err
+			}
+		}
+		_, err := tx.Exec(`INSERT INTO toolhead_mappings (printer_id, toolhead_id, spool_id) VALUES ('printer_bambu', 0, 18)`)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	bc.onMessage(nil, fakeMQTTMessage{[]byte(x2dLayoutReport(4, 1))})
+	if err := b.monitorBambu("printer_bambu", config); err != nil {
+		t.Fatal(err)
+	}
+
+	visibleKeys := func() []string {
+		t.Helper()
+		status, err := b.GetStatus()
+		if err != nil {
+			t.Fatal(err)
+		}
+		var keys []string
+		for _, p := range status.Positions["printer_bambu"] {
+			keys = append(keys, p.Key)
+		}
+		return keys
+	}
+
+	got := strings.Join(visibleKeys(), ",")
+	if !strings.Contains(got, "legacy:0") {
+		t.Errorf("the absent position still holding spool 18 is hidden, so it can't be unmapped: %s", got)
+	}
+	if strings.Contains(got, "legacy:4") {
+		t.Errorf("an absent, empty position is still shown: %s", got)
+	}
+	for _, key := range []string{"ams:0:0", "ams:0:3", "ext:254", "ext:255"} {
+		if !strings.Contains(got, key) {
+			t.Errorf("present position %s missing from the dashboard: %s", key, got)
+		}
+	}
+
+	// Emptying it takes it off the dashboard, but not out of the database.
+	if err := b.UnmapToolhead("X1C", 0); err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Join(visibleKeys(), ","); strings.Contains(got, "legacy:0") {
+		t.Errorf("an emptied absent position is still shown: %s", got)
+	}
+	if _, ok := b.position("printer_bambu", 0); !ok {
+		t.Error("hiding a position deleted it; history and tags may still refer to it")
+	}
+}
+
 // TestBambuLegacyPositionsReserved: a database from before the printer's layout
 // was read has numbered toolheads standing in for AMS slots. They are kept so
 // their mappings stay visible and undoable, but marked absent and re-keyed, and

@@ -263,7 +263,10 @@ function updateToolheadMappings(mappings) {
         if (toolheadLabel && mappings[printerId] && mappings[printerId][toolheadId]) {
             const mapping = mappings[printerId][toolheadId];
             if (mapping.display_name) {
-                toolheadLabel.textContent = mapping.display_name + ':';
+                // Keep the marker on a position the printer no longer has, which
+                // the server rendered and a plain rename would otherwise erase.
+                const absent = toolheadRow.getAttribute('data-absent') === 'true';
+                toolheadLabel.textContent = mapping.display_name + (absent ? ' (not on the printer)' : '') + ':';
             }
         }
         
